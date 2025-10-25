@@ -20,6 +20,8 @@ type Position = {
 export type TreeSitterAstNode = {
   type: string;
   named: boolean;
+  // When present, indicates this node's field name relative to its parent
+  fieldName?: string;
   startPosition: Position;
   endPosition: Position;
   // Absolute character indices within the full source string
@@ -99,14 +101,24 @@ const loadLanguage = async (config: LanguageConfig) => {
   return promise;
 };
 
-const serialiseNode = (node: TreeSitterNode): TreeSitterAstNode => {
+const serialiseNode = (
+  node: TreeSitterNode,
+  parent?: TreeSitterNode
+): TreeSitterAstNode => {
   // Only serialise named children to avoid duplicating the tree structure
   // (namedChildren is a subset of children). Rendering both massively inflates
   // the AST and can freeze the UI.
   const toSerializableNamedChildren = (items: (TreeSitterNode | null)[]) =>
     items
       .filter((item): item is TreeSitterNode => item !== null)
-      .map(serialiseNode);
+      .map((child, index) => {
+        // Attempt to retrieve the field name for each named child relative to this node
+        // Using fieldNameForNamedChild is O(1) and aligns with namedChildren iteration
+        const fieldName = node.fieldNameForNamedChild(index) ?? undefined;
+        const serialised = serialiseNode(child, node);
+        // Attach field name if available
+        return fieldName ? { ...serialised, fieldName } : serialised;
+      });
 
   const namedChildren = toSerializableNamedChildren(node.namedChildren);
 

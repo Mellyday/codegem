@@ -1,98 +1,139 @@
-<!-- ac1512bd-2ad3-4f7f-a2ff-f5a3f1c1a94e 6a453436-e9c0-474e-8271-ebecce17498b -->
-# AstChildrenSidebar language plugins + registry (extends JS/TS/TSX plan)
+<!-- ac1512bd-2ad3-4f7f-a2ff-f5a3f1c1a94e 1905f8e2-8124-4f74-9370-a7e307790ff2 -->
+# Add JS/TS/TSX via Tree-sitter (primary) + Babel fallback, with Language Plugins
 
-## What changes vs current plan
+## Goals
 
-- The plan already:
-  - Splits curation by language (`curation/python.ts`, `curation/jsts.ts`) and dispatches by `languageId`.
-  - Keeps `AstChildrenSidebar` generic for sections.
-- Missing pieces (now added):
-  - Formal `LanguagePlugin` interface for per-language curation, highlighting, badges, and inline hints.
-  - Small plugin registry keyed by `languageId`/`languageLabel`, with safe fallback.
-  - Move Python-specific UI heuristics (e.g., "yield from") out of `AstChildrenSidebar` into `pythonPlugin`.
+- Primary parser for .js/.jsx/.ts/.tsx is Tree-sitter; Babel is fallback.
+- Curated AST sidebar and Lesson flow support JS, TS (types/interfaces/enums/generics), and JSX/TSX.
+- Keep Python support intact; introduce language-specific curation and lesson modules.
+- Keep `AstChildrenSidebar` UI generic; move CST→sections, highlights, badges, and per-node inline hints into language plugins behind a small registry.
 
-## Files and changes
+## Install
 
-- src/lib/curation/plugins/types.ts (new)
-  - Define `SupportedLanguageId`, `CuratedSection`, `PluginContext`, and `LanguagePlugin` interface.
+- Dependencies:
+  - tree-sitter-javascript (JavaScript/JSX)
+  - tree-sitter-typescript (TypeScript & TSX)
+```bash
+npm i tree-sitter-javascript tree-sitter-typescript
+```
+
+
+## Architecture
+
+- Parse/config layer (Tree-sitter languages): registry maps file extension → Tree-sitter language + wasm urls.
+- Curation layer (new): language plugin registry maps `languageId` → `LanguagePlugin` providing curated sections, optional highlight/badge classes, and inline hints.
+- Lesson planning layer: per-language `generateLessonPlan` strategies.
+- Parse pipeline: for js/ts/tsx, try Tree-sitter first; on failure and if Babel supports ext, fall back to Babel. Always return `{ parser, languageId? }` in parse result so UI can pick plugins.
+
+## Project structure (new/updated files)
+
+- src/lib/
+  - languages/
+    - treeSitterConfigs.ts (new)
+      - Map of supported languages → wasm imports, extensions, display names, language IDs.
+      - Imports:
+        - tree-sitter-python.wasm (already present)
+        - tree-sitter-javascript.wasm
+        - tree-sitter-typescript.wasm
+        - tree-sitter-tsx.wasm
+  - curation/
+    - plugins/
+      - types.ts (new) — `LanguagePlugin`, `PluginContext`, `CuratedSection`.
+      - python.ts (new) — Python plugin; migrate current Python curation + "yield from" inline hint.
+      - javascript.ts (new) — JS plugin; imports/exports, decls, calls/member/subscript, control flow, return/await.
+      - typescript.ts (new) — TS plugin; adds interfaces/types/enums/type params/annotations.
+      - tsx.ts (new) — TSX/JSX nodes (jsx_element, self-closing, fragment), composes TS/JS where helpful.
+      - index.ts (new) — tiny plugin registry + safe default plugin.
+    - index.ts (new) — thin delegates calling resolved plugin: `buildCuratedSections`, `getNodeHighlight`, `getNodeBadgeColor`, `inlineHint`.
+  - lessons/
+    - plannerPython.ts (new) — moved/cleaned from existing logic.
+    - plannerJsTs.ts (new) — function/class headers, params/returns, control flow, imports/exports, TS types, JSX.
+    - index.ts (new) — `generateLessonPlan(node, languageId, options)` dispatcher.
+  - treeSitter.ts (update)
+    - Use `languages/treeSitterConfigs.ts` to instantiate parsers dynamically; export `SupportedLanguageId` including 'javascript' | 'typescript' | 'tsx' | 'python'.
+  - ast.ts (update)
+    - Prefer Tree-sitter by extension; on error fall back to Babel; include `{ parser: 'tree-sitter'|'babel', languageId? }` in success.
+- src/components/
+  - AstChildrenSidebar.tsx (update)
+    - Props: add `languageId?: string`, `parser?: 'tree-sitter'|'babel'`.
+    - Remove Python-specific logic; call curation delegates for sections, colors, and inline hints.
+  - LessonViewer.tsx (update)
+    - Accept `languageId?: string` and use `lessons/generateLessonPlan(languageId)`; preserve masking logic (JS: headers for if/loops/switch; TS: type/interface/enum names; JSX: opening tags).
+  - SandboxViewer.tsx (update)
+    - Pass `languageId` and `parser` from parse result down to `AstChildrenSidebar` and `LessonViewer`.
+
+## Key code touchpoints
+
+- WASM imports in registry:
 ```ts
-export type SupportedLanguageId = 'python' | 'javascript' | 'typescript' | 'tsx';
-export type CuratedSection = { key: string; items: TreeSitterAstNode[] };
-export type PluginContext = {
-  root: TreeSitterAstNode;
-  code?: string;
-  languageId: SupportedLanguageId;
-  parser: 'tree-sitter' | 'babel';
-};
+// src/lib/languages/treeSitterConfigs.ts
+import jsWasmUrl from 'tree-sitter-javascript/tree-sitter-javascript.wasm?url'
+import tsWasmUrl from 'tree-sitter-typescript/tree-sitter-typescript.wasm?url'
+import tsxWasmUrl from 'tree-sitter-typescript/tree-sitter-tsx.wasm?url'
+export const configs = [ /* python, javascript, typescript, tsx */ ]
+```
+
+- Language plugin interface:
+```ts
+// src/lib/curation/plugins/types.ts
 export interface LanguagePlugin {
-  id: SupportedLanguageId;
-  buildSections(node: TreeSitterAstNode, ctx: PluginContext): CuratedSection[];
-  getNodeHighlight?(type: string, node: TreeSitterAstNode, ctx: PluginContext): string; // tailwind classes
-  getNodeBadgeColor?(type: string, node: TreeSitterAstNode, ctx: PluginContext): string; // tailwind classes
-  inlineHint?(node: TreeSitterAstNode, ctx: PluginContext): string | undefined; // e.g., 'from' or 'async'
+  id: SupportedLanguageId
+  buildSections(node: TreeSitterAstNode, ctx: PluginContext): CuratedSection[]
+  getNodeHighlight?(type: string, node: TreeSitterAstNode, ctx: PluginContext): string
+  getNodeBadgeColor?(type: string, node: TreeSitterAstNode, ctx: PluginContext): string
+  inlineHint?(node: TreeSitterAstNode, ctx: PluginContext): string | undefined
 }
 ```
 
-- src/lib/curation/plugins/python.ts (new)
-  - Move current Python `buildCuratedSections` logic from `AstChildrenSidebar.tsx` into `pythonPlugin.buildSections`.
-  - Implement `inlineHint` with the previous `yield from` detection using `ctx.code`.
-  - Optionally provide `getNodeHighlight`/`getNodeBadgeColor` if Python needs custom colors.
-
-- src/lib/curation/plugins/javascript.ts (new)
-  - Provide curated sections for imports/exports, function/class decls, vars/consts, calls/member/subscript, control flow, return/await, and (if applicable) JSX elements via a shared adapter or separate TSX plugin.
-  - Provide lightweight `inlineHint` (e.g., 'async' for async functions) if desirable.
-
-- src/lib/curation/plugins/typescript.ts and src/lib/curation/plugins/tsx.ts (new)
-  - Extend `javascript` plugin or compose shared helpers; add TS constructs (interface/type_alias/enum/type_parameters/type_annotation) and JSX elements for TSX.
-
-- src/lib/curation/plugins/index.ts (new)
-  - Tiny registry: `{ pythonPlugin, javascriptPlugin, typescriptPlugin, tsxPlugin }`.
-  - `getPlugin(languageId?: string)` with graceful fallback to a `defaultPlugin` that exposes `{ key: 'children', items: node.namedChildren ?? [] }` and default colors.
-
-- src/lib/curation/index.ts (update)
-  - Export thin delegates: `buildCuratedSections(node, ctx)`, `getNodeHighlight(type, node, ctx)`, `getNodeBadgeColor(...)`, `inlineHint(node, ctx)` that call the resolved plugin or fallback.
-
-- src/components/AstChildrenSidebar.tsx (update)
-  - Props: add `languageId?: SupportedLanguageId` and `parser?: 'tree-sitter' | 'babel'`.
-  - Remove local `getNodeHighlight`, `getNodeBadgeColor`, and `isYieldFrom`; call plugin delegates from `src/lib/curation`.
-  - Where the header or rows previously rendered the Python hint ("from"), call `inlineHint(node, ctx)` and render returned text if present.
-  - Keep existing behavior: stable keys, hide empty sections.
-
-- src/lib/treeSitter.ts (confirm/update)
-  - Continue exporting `SupportedLanguageId` and mapping extensions to language ids.
-
-- src/lib/ast.ts (update)
-  - Ensure `ParseResult` includes `{ parser: 'tree-sitter' | 'babel', languageId?: SupportedLanguageId }` and plumb through to UI callers.
-
-- src/components/SandboxViewer.tsx (update)
-  - Pass `languageId` and `parser` from `parseResult` to `AstChildrenSidebar` (and `LessonViewer` as needed).
-
-## Small, critical snippets
-
-- AstChildrenSidebar usage change:
+- Sidebar delegates usage:
 ```tsx
-import { buildCuratedSections, getNodeHighlight, getNodeBadgeColor, inlineHint } from '@/lib/curation';
+// src/components/AstChildrenSidebar.tsx
+import { buildCuratedSections, getNodeHighlight, getNodeBadgeColor, inlineHint } from '@/lib/curation'
 // ...
-const ctx = { root: ast, code, languageId: languageId ?? 'python', parser: parser ?? 'tree-sitter' };
-const sections = buildCuratedSections(node, ctx).filter(s => s.items.length > 0);
-// header highlight
-const cardClasses = getNodeHighlight(node.type, node, ctx) ?? 'bg-slate-50 border-slate-200';
-// per-row right label hint
-const hint = inlineHint(node, ctx); // e.g., 'from' or 'async'
+const ctx = { root: ast, code, languageId, parser }
+const sections = buildCuratedSections(node, ctx).filter(s => s.items.length > 0)
+const cardClasses = getNodeHighlight(node.type, node, ctx) ?? 'bg-slate-50 border-slate-200'
+const badgeClasses = getNodeBadgeColor(node.type, node, ctx) ?? 'bg-slate-100 text-slate-700 border-slate-200'
+const hint = inlineHint(node, ctx) // e.g., 'from' for Python yield-from, or 'async'
 ```
 
 
-## Notes
+## UX/Behavior notes
 
-- Keeps UI generic and future-proof; adding languages means adding a plugin and editing the registry only.
-- Default/fallback plugin ensures safe behavior for unknown languages.
-- Mirrors the plan’s Tree-sitter registry; this registry is for curation/UX behavior.
+- “Teach Me” button appears for js/ts/tsx (Tree-sitter) just like Python.
+- Curated labels mirror existing style; highlight heuristics via plugin (imports green, classes purple, functions/keywords blue by default plugin or language customization).
+- Lesson masks per language (hide `if/for/while/switch` keywords on header questions; for TS, hide `interface`/`type`/`enum` accordingly; JSX: opening tags).
+- Preserve spec: stable section keys; hide empty sections entirely.
 
 ## Test plan
 
-- Verify Python behavior unchanged (sections, colors, and 'yield from' hint now via plugin).
-- Add simple JS/TS/TSX sandboxes and verify curated sections and hints (e.g., async hint) show.
-- Ensure empty sections are hidden and keys remain stable.
+- Add sample sandboxes under `code_sandbox/`:
+  - demo_javascript.js, demo_typescript.ts, demo_tsx.tsx.
+- Verify parsing order and Babel fallback.
+- Validate curated sidebar groups per language and per-node hints (Python: yield from; JS: async if desired).
+- Verify JSX/TSX elements render stably.
+- Verify lesson steps & masking.
+
+## Docs
+
+- Update `README.md` and `config-languages.txt` to list JS/TS/TSX support; note Tree-sitter as primary, Babel fallback; explain plugin architecture for curation.
+
+## To-dos
+
+- [ ] Install tree-sitter-javascript and tree-sitter-typescript
+- [ ] Add JS/TS/TSX wasm imports and registry config (languages/treeSitterConfigs.ts)
+- [ ] Refactor treeSitter.ts to use registry; add languageId to ParseResult
+- [ ] Prefer Tree-sitter for js/ts/tsx in ast.ts; fallback to Babel; return parser+languageId
+- [ ] Create curation plugin types and plugin registry with default fallback
+- [ ] Migrate Python curation and yield-from hint into pythonPlugin
+- [ ] Implement javascriptPlugin curated sections (and optional async hint)
+- [ ] Implement typescript and tsx plugins (TS constructs + JSX)
+- [ ] Add curation delegates (buildSections, highlight/badge, inlineHint)
+- [ ] Update AstChildrenSidebar to use delegates; add languageId/parser props
+- [ ] Update LessonViewer to accept languageId and use per-language planner
+- [ ] Pass parseResult.languageId/parser from SandboxViewer
+- [ ] Add demo JS/TS/TSX sandbox files
+- [ ] Update README and config-languages.txt
 
 ### To-dos
 

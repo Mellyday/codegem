@@ -68,6 +68,13 @@ const childrenOfType = (node: TreeSitterAstNode, type: string) =>
 const firstChildOfType = (node: TreeSitterAstNode, type: string) =>
   childrenOfType(node, type)[0];
 
+// Prefer field-aware access when available
+const childrenByField = (node: TreeSitterAstNode, field: string) =>
+  (node.namedChildren || []).filter((c) => c.fieldName === field);
+
+const childByField = (node: TreeSitterAstNode, field: string) =>
+  childrenByField(node, field)[0];
+
 // Helper: find first matching child among several possible type labels
 const firstChildOfTypes = (node: TreeSitterAstNode, types: string[]) =>
   (node.namedChildren || []).find((c) => types.includes(c.type));
@@ -449,8 +456,10 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
 
     case "with_item": {
       // open("f.txt") as f
-      const context = (node.namedChildren || [])[0];
-      const alias = (node.namedChildren || [])[1];
+      const context =
+        childByField(node, "value") || (node.namedChildren || [])[0];
+      const alias =
+        childByField(node, "alias") || (node.namedChildren || [])[1];
       return [
         { key: "context", items: context ? [context] : [] },
         { key: "alias", items: alias ? [alias] : [] },
@@ -459,9 +468,15 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
 
     case "binary_operator": {
       // left <op> right — operator token is not a navigable child
+      const leftField = childByField(node, "left");
+      const rightField = childByField(node, "right");
       const children = node.namedChildren || [];
-      const left = children[0] ? [children[0]] : [];
-      const right = children.length > 1 ? [children[children.length - 1]] : [];
+      const left = leftField ? [leftField] : children[0] ? [children[0]] : [];
+      const right = rightField
+        ? [rightField]
+        : children.length > 1
+        ? [children[children.length - 1]]
+        : [];
       return [
         { key: "left", items: left },
         { key: "right", items: right },
@@ -473,7 +488,10 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
     case "unary_expression":
     case "unary_operator":
     case "not_operator": {
-      const operand = (node.namedChildren || [])[0];
+      const operand =
+        childByField(node, "argument") ||
+        childByField(node, "operand") ||
+        (node.namedChildren || [])[0];
       return [
         { key: "op", items: [] },
         { key: "operand", items: operand ? [operand] : [] },
@@ -744,9 +762,17 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
     case "assignment": {
       // x = <value>, a, b = c, a = b = 1 (nested on the right)
       // Prefer explicit left/right semantics. Tree-sitter typically places LHS first and RHS last.
+      const leftField =
+        childByField(node, "left") || childByField(node, "target");
+      const rightField =
+        childByField(node, "right") || childByField(node, "value");
       const children = node.namedChildren || [];
-      const left = children[0] ? [children[0]] : [];
-      const right = children.length > 1 ? [children[children.length - 1]] : [];
+      const left = leftField ? [leftField] : children[0] ? [children[0]] : [];
+      const right = rightField
+        ? [rightField]
+        : children.length > 1
+        ? [children[children.length - 1]]
+        : [];
       return [
         { key: "target", items: left },
         { key: "value", items: right },
@@ -757,9 +783,17 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
       // e.g., x += <value>
       // Tree-sitter typically exposes two named children: left (target) and right (value).
       // The operator token is not a named child and is treated as an attribute.
+      const leftField =
+        childByField(node, "left") || childByField(node, "target");
+      const rightField =
+        childByField(node, "right") || childByField(node, "value");
       const children = node.namedChildren || [];
-      const target = children[0] ? [children[0]] : [];
-      const value = children.length > 1 ? [children[children.length - 1]] : [];
+      const target = leftField ? [leftField] : children[0] ? [children[0]] : [];
+      const value = rightField
+        ? [rightField]
+        : children.length > 1
+        ? [children[children.length - 1]]
+        : [];
       return [
         { key: "target", items: target },
         { key: "value", items: value },
@@ -777,14 +811,18 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
     }
 
     case "attribute": {
-      const valueNode = (node.namedChildren || [])[0];
+      const valueNode =
+        childByField(node, "object") || (node.namedChildren || [])[0];
       return [{ key: "value", items: valueNode ? [valueNode] : [] }];
     }
 
     case "call": {
-      const func = (node.namedChildren || [])[0];
-      // Arguments are in an argument_list node
-      const argsList = firstChildOfType(node, "argument_list");
+      const func =
+        childByField(node, "function") || (node.namedChildren || [])[0];
+      // Arguments are in an argument_list node; prefer field when provided
+      const argsList =
+        childByField(node, "arguments") ||
+        firstChildOfType(node, "argument_list");
       const args = argsList ? argsList.namedChildren || [] : [];
       const keywords = args.filter((c) => c.type === "keyword_argument");
       const starargs = args.filter(
@@ -810,8 +848,10 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
     }
 
     case "subscript": {
-      const valueNode = (node.namedChildren || [])[0];
-      const second = (node.namedChildren || [])[1];
+      const valueNode =
+        childByField(node, "value") || (node.namedChildren || [])[0];
+      const second =
+        childByField(node, "slice") || (node.namedChildren || [])[1];
       const keyLabel = second && second.type === "slice" ? "slice" : "index";
       return [
         { key: "value", items: valueNode ? [valueNode] : [] },
