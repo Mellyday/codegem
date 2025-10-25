@@ -6,8 +6,12 @@ type Params = {
   sandboxId: string;
 };
 
-export default async function SandboxPage({ params }: { params: Params }) {
-  const { sandboxId } = params;
+export default async function SandboxPage({
+  params,
+}: {
+  params: Promise<Params>;
+}) {
+  const { sandboxId } = await params;
   const data = readSandbox(sandboxId);
 
   if (!data) {
