@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { readSandbox } from "@/src/server/sandbox";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
 
@@ -7,8 +6,12 @@ type Params = {
   sandboxId: string;
 };
 
-export default async function SandboxPage({ params }: { params: Params }) {
-  const { sandboxId } = params;
+export default async function SandboxPage({
+  params,
+}: {
+  params: Promise<Params>;
+}) {
+  const { sandboxId } = await params;
   const data = readSandbox(sandboxId);
 
   if (!data) {

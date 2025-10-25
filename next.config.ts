@@ -2,6 +2,7 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   /* config options here */
+  allowedDevOrigins: ["http://localhost:3001", "http://192.168.100.55:3001"],
   webpack: (config, { isServer }) => {
     // Ensure client bundle doesn't try to resolve Node-only modules used by dependencies
     if (!isServer) {
