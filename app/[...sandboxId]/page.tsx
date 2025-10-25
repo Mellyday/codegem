@@ -3,7 +3,7 @@ import { readSandbox } from "@/src/server/sandbox";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
 
 type Params = {
-  sandboxId: string;
+  sandboxId: string | string[];
 };
 
 export default async function SandboxPage({
@@ -12,7 +12,10 @@ export default async function SandboxPage({
   params: Promise<Params>;
 }) {
   const { sandboxId } = await params;
-  const data = await readSandbox(sandboxId);
+  const routePath = Array.isArray(sandboxId)
+    ? sandboxId.join("/")
+    : sandboxId;
+  const data = await readSandbox(routePath);
 
   if (!data) {
     return (
@@ -23,7 +26,7 @@ export default async function SandboxPage({
               Route not found
             </h2>
             <p className="mt-2 text-sm text-slate-600">
-              We couldn't find a sandbox file for the route "{sandboxId}".
+              We couldn't find a sandbox file for the route "{routePath}".
             </p>
             <Link
               href="/"
@@ -39,7 +42,7 @@ export default async function SandboxPage({
 
   return (
     <SandboxViewer
-      sandboxId={sandboxId}
+      sandboxId={routePath}
       fileName={data.fileName}
       initialCode={data.code}
     />
