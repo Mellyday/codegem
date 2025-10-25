@@ -56,7 +56,7 @@ const isYieldType = (type: string) =>
 const isYieldFrom = (node: TreeSitterAstNode, code?: string) => {
   if (!code || !isYieldType(node.type)) return false;
   const start = node.startIndex;
-  const end = Math.min(code.length, node.endIndex, start + 64);
+  const end = Math.min(code.length, node.endIndex + 8, node.startIndex + 256);
   const snippet = code.slice(start, end);
   return /\byield\s+from\b/.test(snippet);
 };
@@ -99,6 +99,10 @@ const nodesEqual = (a?: TreeSitterAstNode, b?: TreeSitterAstNode) =>
   a.type === b.type &&
   a.startIndex === b.startIndex &&
   a.endIndex === b.endIndex;
+
+// Stable key for React lists
+const nodeKey = (n: TreeSitterAstNode) =>
+  `${n.type}:${n.startIndex}:${n.endIndex}`;
 
 // We display the raw CST node type as the label
 
@@ -171,11 +175,19 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
       const allArgs = argsNode ? argsNode.namedChildren || [] : [];
       const keywords = allArgs.filter((c) => c.type === "keyword_argument");
       const positionals = allArgs.filter((c) => c.type !== "keyword_argument");
-      // Surface captured names for learner clarity
-      const boundNames = collectDescendants(
+      // Only include actual bindings: identifiers from capture_pattern and as_pattern
+      const captureIds = collectDescendants(
         node,
-        (n) => n.type === "identifier"
-      );
+        (n) => n.type === "capture_pattern"
+      )
+        .map((n) => firstChildOfType(n, "identifier"))
+        .filter(Boolean) as TreeSitterAstNode[];
+      const asIds = collectDescendants(node, (n) => n.type === "as_pattern")
+        .map((n) =>
+          (n.namedChildren || []).find((c) => c.type === "identifier")
+        )
+        .filter(Boolean) as TreeSitterAstNode[];
+      const boundNames = [...captureIds, ...asIds];
       return [
         { key: "class", items: cls ? [cls] : [] },
         { key: "args", items: positionals },
@@ -377,13 +389,12 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
 
     case "dictionary_comprehension": {
       // {k: v for ... if ...}
-      const children = node.namedChildren || [];
-      // Heuristic: first two named children are key/value, remaining are generators
-      const key = children[0] ? [children[0]] : [];
-      const value = children.length > 1 ? [children[1]] : [];
-      const generators = children
-        .slice(2)
-        .filter((c) => c.type === "for_in_clause" || c.type === "if_clause");
+      const pair = firstChildOfType(node, "pair");
+      const key = pair?.namedChildren?.[0] ? [pair.namedChildren[0]] : [];
+      const value = pair?.namedChildren?.[1] ? [pair.namedChildren[1]] : [];
+      const generators = (node.namedChildren || []).filter(
+        (c) => c.type === "for_in_clause" || c.type === "if_clause"
+      );
       return [
         { key: "key", items: key },
         { key: "value", items: value },
@@ -498,6 +509,7 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
       ];
     }
 
+    case "comparison":
     case "comparison_operator": {
       // 0 < x <= 10 — not nested like binary operators
       const children = node.namedChildren || [];
@@ -912,8 +924,8 @@ const ItemRow = ({
   onSelectNode,
   onHoverNode,
 }: ItemRowProps) => {
-  const isSelected = selectedNode === item;
-  const isHovered = hoveredNode === item;
+  const isSelected = nodesEqual(selectedNode, item);
+  const isHovered = nodesEqual(hoveredNode, item);
   return (
     <li
       className={
@@ -975,11 +987,11 @@ export const AstChildrenSidebar = ({
               const flatGroups = sections.filter(
                 (s) => !inlineHints.includes(s)
               );
-              const isSelected = selectedNode === node;
-              const isHovered = hoveredNode === node;
+              const isSelected = nodesEqual(selectedNode, node);
+              const isHovered = nodesEqual(hoveredNode, node);
               return (
                 <li
-                  key={i}
+                  key={nodeKey(node)}
                   className={
                     `rounded-lg border shadow-sm ${getNodeHighlight(
                       node.type
@@ -1031,7 +1043,7 @@ export const AstChildrenSidebar = ({
                               : labelBase;
                           return (
                             <ItemRow
-                              key={`${gIdx}-${idx}`}
+                              key={`${nodeKey(item)}:${gIdx}:${idx}`}
                               item={item}
                               rightLabel={label}
                               selectedNode={selectedNode}
@@ -1082,11 +1094,11 @@ export const AstChildrenSidebar = ({
                 const flatGroups = sections.filter(
                   (s) => !inlineHints.includes(s)
                 );
-                const isSelected = selectedNode === node;
-                const isHovered = hoveredNode === node;
+                const isSelected = nodesEqual(selectedNode, node);
+                const isHovered = nodesEqual(hoveredNode, node);
                 return (
                   <li
-                    key={i}
+                    key={nodeKey(node)}
                     className={
                       `rounded-lg border shadow-sm ${getNodeHighlight(
                         node.type
@@ -1138,7 +1150,7 @@ export const AstChildrenSidebar = ({
                                 : labelBase;
                             return (
                               <ItemRow
-                                key={`${gIdx}-${idx}`}
+                                key={`${nodeKey(item)}:${gIdx}:${idx}`}
                                 item={item}
                                 rightLabel={label}
                                 selectedNode={selectedNode}
