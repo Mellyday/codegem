@@ -1,849 +1,852 @@
-import type { TreeSitterAstNode } from '../lib/treeSitter'
+import type { TreeSitterAstNode } from "../lib/treeSitter";
 
 type AstChildrenSidebarProps = {
-  ast: TreeSitterAstNode
-  languageLabel?: string
-  selectedNode?: TreeSitterAstNode
-  hoveredNode?: TreeSitterAstNode
-  onSelectNode?: (node: TreeSitterAstNode) => void
-  onHoverNode?: (node?: TreeSitterAstNode) => void
+  ast: TreeSitterAstNode;
+  languageLabel?: string;
+  selectedNode?: TreeSitterAstNode;
+  hoveredNode?: TreeSitterAstNode;
+  onSelectNode?: (node: TreeSitterAstNode) => void;
+  onHoverNode?: (node?: TreeSitterAstNode) => void;
   // When true, omit the singular root wrapper and start at its children
-  flattenRoot?: boolean
+  flattenRoot?: boolean;
   // Optional full source text to enable token-level hints (e.g., "yield from")
-  code?: string
-}
+  code?: string;
+};
 
 // Get highlight color based on node type
 const getNodeHighlight = (type: string): string => {
   // Green for imports
-  if (type.includes('import')) {
-    return 'bg-green-50 border-green-200'
+  if (type.includes("import")) {
+    return "bg-green-50 border-green-200";
   }
   // Purple for class definitions
-  if (type.includes('class')) {
-    return 'bg-purple-50 border-purple-200'
+  if (type.includes("class")) {
+    return "bg-purple-50 border-purple-200";
   }
   // Blue for keywords and function definitions
-  if (type.includes('keyword') || type.includes('function')) {
-    return 'bg-blue-50 border-blue-200'
+  if (type.includes("keyword") || type.includes("function")) {
+    return "bg-blue-50 border-blue-200";
   }
   // Default
-  return 'bg-slate-50 border-slate-200'
-}
+  return "bg-slate-50 border-slate-200";
+};
 
 const getNodeBadgeColor = (type: string): string => {
   // Green for imports
-  if (type.includes('import')) {
-    return 'bg-green-100 text-green-700 border-green-200'
+  if (type.includes("import")) {
+    return "bg-green-100 text-green-700 border-green-200";
   }
   // Purple for class definitions
-  if (type.includes('class')) {
-    return 'bg-purple-100 text-purple-700 border-purple-200'
+  if (type.includes("class")) {
+    return "bg-purple-100 text-purple-700 border-purple-200";
   }
   // Blue for keywords and function definitions
-  if (type.includes('keyword') || type.includes('function')) {
-    return 'bg-blue-100 text-blue-700 border-blue-200'
+  if (type.includes("keyword") || type.includes("function")) {
+    return "bg-blue-100 text-blue-700 border-blue-200";
   }
   // Default
-  return 'bg-slate-100 text-slate-700 border-slate-200'
-}
+  return "bg-slate-100 text-slate-700 border-slate-200";
+};
 
 const NodeType = ({ type }: { type: string }) => (
   <span
-    className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${getNodeBadgeColor(type)}`}
+    className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${getNodeBadgeColor(
+      type
+    )}`}
   >
     {type}
   </span>
-)
+);
 
 // Yield helpers
 const isYieldType = (type: string) =>
-  type === 'yield_expr' || type === 'yield_expression' || type === 'yield'
+  type === "yield_expr" || type === "yield_expression" || type === "yield";
 
 const isYieldFrom = (node: TreeSitterAstNode, code?: string) => {
-  if (!code || !isYieldType(node.type)) return false
-  const start = node.startIndex
-  const end = Math.min(code.length, node.endIndex, start + 64)
-  const snippet = code.slice(start, end)
-  return /\byield\s+from\b/.test(snippet)
-}
+  if (!code || !isYieldType(node.type)) return false;
+  const start = node.startIndex;
+  const end = Math.min(code.length, node.endIndex, start + 64);
+  const snippet = code.slice(start, end);
+  return /\byield\s+from\b/.test(snippet);
+};
 
 // Helpers over the serialised Tree-sitter node shape
 const childrenOfType = (node: TreeSitterAstNode, type: string) =>
-  (node.namedChildren || []).filter((c) => c.type === type)
+  (node.namedChildren || []).filter((c) => c.type === type);
 
 const firstChildOfType = (node: TreeSitterAstNode, type: string) =>
-  childrenOfType(node, type)[0]
+  childrenOfType(node, type)[0];
 
 // Helper: find first matching child among several possible type labels
 const firstChildOfTypes = (node: TreeSitterAstNode, types: string[]) =>
-  (node.namedChildren || []).find((c) => types.includes(c.type))
+  (node.namedChildren || []).find((c) => types.includes(c.type));
 
 // Helper: collect descendant nodes matching predicate (simple DFS over namedChildren)
 const collectDescendants = (
   node: TreeSitterAstNode,
   predicate: (n: TreeSitterAstNode) => boolean,
-  out: TreeSitterAstNode[] = [],
+  out: TreeSitterAstNode[] = []
 ): TreeSitterAstNode[] => {
   for (const child of node.namedChildren || []) {
-    if (predicate(child)) out.push(child)
-    collectDescendants(child, predicate, out)
+    if (predicate(child)) out.push(child);
+    collectDescendants(child, predicate, out);
   }
-  return out
-}
+  return out;
+};
 
 // We display the raw CST node type as the label
 
 // The curated, user-centric children lists per node type.
 // We keep keys stable even when empty to match the spec's consistency rule.
 type CuratedSection = {
-  key: string
-  items: TreeSitterAstNode[]
-}
+  key: string;
+  items: TreeSitterAstNode[];
+};
 
 const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
   switch (node.type) {
-    case 'match_stmt':
-    case 'match_statement': {
+    case "match_stmt":
+    case "match_statement": {
       // match <subject>: case ...
-      const children = node.namedChildren || []
+      const children = node.namedChildren || [];
       const cases = children.filter(
-        (c) => c.type === 'case_block' || c.type === 'case_clause',
-      )
+        (c) => c.type === "case_block" || c.type === "case_clause"
+      );
       const subject = children.find(
-        (c) => c.type !== 'case_block' && c.type !== 'case_clause',
-      )
+        (c) => c.type !== "case_block" && c.type !== "case_clause"
+      );
       return [
-        { key: 'subject', items: subject ? [subject] : [] },
-        { key: 'cases', items: cases },
-      ]
+        { key: "subject", items: subject ? [subject] : [] },
+        { key: "cases", items: cases },
+      ];
     }
 
-    case 'case_block':
-    case 'case_clause': {
+    case "case_block":
+    case "case_clause": {
       // case <pattern> [if guard]: <block>
       const pattern = (node.namedChildren || []).find(
-        (c) => c.type === 'pattern' || c.type === 'pattern_list',
-      )
+        (c) => c.type === "pattern" || c.type === "pattern_list"
+      );
       const guard =
-        firstChildOfType(node, 'guard') || firstChildOfType(node, 'if_clause')
-      const block = firstChildOfType(node, 'block')
+        firstChildOfType(node, "guard") || firstChildOfType(node, "if_clause");
+      const block = firstChildOfType(node, "block");
       return [
-        { key: 'pattern', items: pattern ? [pattern] : [] },
-        { key: 'guard', items: guard ? [guard] : [] },
-        { key: 'body', items: block ? [block] : [] },
-      ]
+        { key: "pattern", items: pattern ? [pattern] : [] },
+        { key: "guard", items: guard ? [guard] : [] },
+        { key: "body", items: block ? [block] : [] },
+      ];
     }
 
     // Pattern matching: curated views for common pattern node types
-    case 'or_pattern': {
+    case "or_pattern": {
       // p1 | p2 | ...
-      return [{ key: 'patterns', items: node.namedChildren || [] }]
+      return [{ key: "patterns", items: node.namedChildren || [] }];
     }
 
-    case 'as_pattern': {
+    case "as_pattern": {
       // <pattern> as name
       const name = (node.namedChildren || []).find(
-        (c) => c.type === 'identifier',
-      )
-      const inner = (node.namedChildren || []).find((c) => c !== name)
+        (c) => c.type === "identifier"
+      );
+      const inner = (node.namedChildren || []).find((c) => c !== name);
       return [
-        { key: 'pattern', items: inner ? [inner] : [] },
-        { key: 'name', items: name ? [name] : [] },
-      ]
+        { key: "pattern", items: inner ? [inner] : [] },
+        { key: "name", items: name ? [name] : [] },
+      ];
     }
 
-    case 'class_pattern': {
+    case "class_pattern": {
       // Point(x=..., y=...)
       const cls =
-        firstChildOfType(node, 'identifier') ||
-        firstChildOfType(node, 'dotted_name')
+        firstChildOfType(node, "identifier") ||
+        firstChildOfType(node, "dotted_name");
       // Normalize arg container label differences
-      const argsNode = firstChildOfTypes(node, ['argument_list', 'arguments'])
-      const allArgs = argsNode ? argsNode.namedChildren || [] : []
-      const keywords = allArgs.filter((c) => c.type === 'keyword_argument')
-      const positionals = allArgs.filter((c) => c.type !== 'keyword_argument')
+      const argsNode = firstChildOfTypes(node, ["argument_list", "arguments"]);
+      const allArgs = argsNode ? argsNode.namedChildren || [] : [];
+      const keywords = allArgs.filter((c) => c.type === "keyword_argument");
+      const positionals = allArgs.filter((c) => c.type !== "keyword_argument");
       // Surface captured names for learner clarity
       const boundNames = collectDescendants(
         node,
-        (n) => n.type === 'identifier',
-      )
+        (n) => n.type === "identifier"
+      );
       return [
-        { key: 'class', items: cls ? [cls] : [] },
-        { key: 'args', items: positionals },
-        { key: 'keywords', items: keywords },
-        { key: 'binds', items: boundNames },
-      ]
+        { key: "class", items: cls ? [cls] : [] },
+        { key: "args", items: positionals },
+        { key: "keywords", items: keywords },
+        { key: "binds", items: boundNames },
+      ];
     }
 
-    case 'sequence_pattern':
-    case 'list_pattern':
-    case 'tuple_pattern': {
-      return [{ key: 'elements', items: node.namedChildren || [] }]
+    case "sequence_pattern":
+    case "list_pattern":
+    case "tuple_pattern": {
+      return [{ key: "elements", items: node.namedChildren || [] }];
     }
 
-    case 'mapping_pattern': {
-      const keys: TreeSitterAstNode[] = []
-      const values: TreeSitterAstNode[] = []
-      let restNode: TreeSitterAstNode | undefined
+    case "mapping_pattern": {
+      const keys: TreeSitterAstNode[] = [];
+      const values: TreeSitterAstNode[] = [];
+      let restNode: TreeSitterAstNode | undefined;
       for (const c of node.namedChildren || []) {
-        if (c.type === 'pair' || c.type === 'key_value_pattern') {
-          const [k, v] = c.namedChildren || []
-          if (k) keys.push(k)
-          if (v) values.push(v)
+        if (c.type === "pair" || c.type === "key_value_pattern") {
+          const [k, v] = c.namedChildren || [];
+          if (k) keys.push(k);
+          if (v) values.push(v);
         } else if (
-          c.type === 'dictionary_splat' ||
-          c.type === 'rest_pattern' ||
-          c.type === 'double_star_pattern'
+          c.type === "dictionary_splat" ||
+          c.type === "rest_pattern" ||
+          c.type === "double_star_pattern"
         ) {
           // **rest in mapping patterns
-          restNode = (c.namedChildren || [])[0] || c
+          restNode = (c.namedChildren || [])[0] || c;
         }
       }
       return [
-        { key: 'keys', items: keys },
-        { key: 'values', items: values },
-        { key: 'rest', items: restNode ? [restNode] : [] },
-      ]
+        { key: "keys", items: keys },
+        { key: "values", items: values },
+        { key: "rest", items: restNode ? [restNode] : [] },
+      ];
     }
 
-    case 'pattern_list': {
-      return [{ key: 'patterns', items: node.namedChildren || [] }]
+    case "pattern_list": {
+      return [{ key: "patterns", items: node.namedChildren || [] }];
     }
 
-    case 'capture_pattern': {
+    case "capture_pattern": {
       const name = (node.namedChildren || []).find(
-        (c) => c.type === 'identifier',
-      )
-      return [{ key: 'name', items: name ? [name] : [] }]
+        (c) => c.type === "identifier"
+      );
+      return [{ key: "name", items: name ? [name] : [] }];
     }
 
-    case 'value_pattern':
-    case 'literal_pattern': {
-      return [{ key: 'value', items: node.namedChildren || [] }]
+    case "value_pattern":
+    case "literal_pattern": {
+      return [{ key: "value", items: node.namedChildren || [] }];
     }
 
-    case 'raise_stmt':
-    case 'raise_statement': {
+    case "raise_stmt":
+    case "raise_statement": {
       // raise <exc> [from <cause>]
-      const children = node.namedChildren || []
-      const exc = children[0] ? [children[0]] : []
-      const cause = children.length > 1 ? [children[children.length - 1]] : []
+      const children = node.namedChildren || [];
+      const exc = children[0] ? [children[0]] : [];
+      const cause = children.length > 1 ? [children[children.length - 1]] : [];
       return [
-        { key: 'exc', items: exc },
-        { key: 'cause', items: cause },
-      ]
+        { key: "exc", items: exc },
+        { key: "cause", items: cause },
+      ];
     }
 
-    case 'assert_stmt':
-    case 'assert_statement': {
+    case "assert_stmt":
+    case "assert_statement": {
       // assert <test>[, <msg>]
-      const children = node.namedChildren || []
-      const test = children[0] ? [children[0]] : []
-      const msg = children.length > 1 ? [children[1]] : []
+      const children = node.namedChildren || [];
+      const test = children[0] ? [children[0]] : [];
+      const msg = children.length > 1 ? [children[1]] : [];
       return [
-        { key: 'test', items: test },
-        { key: 'msg', items: msg },
-      ]
+        { key: "test", items: test },
+        { key: "msg", items: msg },
+      ];
     }
 
-    case 'del_stmt':
-    case 'del_statement': {
+    case "del_stmt":
+    case "del_statement": {
       // del a, b, c
-      return [{ key: 'targets', items: node.namedChildren || [] }]
+      return [{ key: "targets", items: node.namedChildren || [] }];
     }
 
-    case 'yield_expr':
-    case 'yield_expression':
-    case 'yield': {
+    case "yield_expr":
+    case "yield_expression":
+    case "yield": {
       // yield [value]
-      return [{ key: 'value', items: node.namedChildren || [] }]
+      return [{ key: "value", items: node.namedChildren || [] }];
     }
 
-    case 'type_alias':
-    case 'type_alias_statement': {
+    case "type_alias":
+    case "type_alias_statement": {
       // type Name[Params]? = Value
-      const children = node.namedChildren || []
+      const children = node.namedChildren || [];
       const nameNode = children.find(
-        (c) => c.type === 'identifier' || c.type === 'type_identifier',
-      )
+        (c) => c.type === "identifier" || c.type === "type_identifier"
+      );
       const typeParams = children.find(
         (c) =>
-          c.type === 'type_params' ||
-          c.type === 'type_parameters' ||
-          c.type === 'type_parameter_list',
-      )
+          c.type === "type_params" ||
+          c.type === "type_parameters" ||
+          c.type === "type_parameter_list"
+      );
       const value = children
         .filter((c) => c !== nameNode && c !== typeParams)
-        .slice(-1)[0]
+        .slice(-1)[0];
       return [
-        { key: 'name', items: nameNode ? [nameNode] : [] },
-        { key: 'type_params', items: typeParams ? [typeParams] : [] },
-        { key: 'value', items: value ? [value] : [] },
-      ]
+        { key: "name", items: nameNode ? [nameNode] : [] },
+        { key: "type_params", items: typeParams ? [typeParams] : [] },
+        { key: "value", items: value ? [value] : [] },
+      ];
     }
 
-    case 'global_stmt':
-    case 'global_statement': {
+    case "global_stmt":
+    case "global_statement": {
       const names = (node.namedChildren || []).filter(
-        (c) => c.type === 'identifier',
-      )
-      return [{ key: 'names', items: names }]
+        (c) => c.type === "identifier"
+      );
+      return [{ key: "names", items: names }];
     }
 
-    case 'nonlocal_stmt':
-    case 'nonlocal_statement': {
+    case "nonlocal_stmt":
+    case "nonlocal_statement": {
       const names = (node.namedChildren || []).filter(
-        (c) => c.type === 'identifier',
-      )
-      return [{ key: 'names', items: names }]
+        (c) => c.type === "identifier"
+      );
+      return [{ key: "names", items: names }];
     }
 
-    case 'conditional_expression':
-    case 'if_expression': {
+    case "conditional_expression":
+    case "if_expression": {
       // a if cond else b
-      const children = node.namedChildren || []
-      const body = children[0] ? [children[0]] : []
-      const test = children.length > 1 ? [children[1]] : []
-      const orelse = children.length > 2 ? [children[2]] : []
+      const children = node.namedChildren || [];
+      const body = children[0] ? [children[0]] : [];
+      const test = children.length > 1 ? [children[1]] : [];
+      const orelse = children.length > 2 ? [children[2]] : [];
       return [
-        { key: 'body', items: body },
-        { key: 'test', items: test },
-        { key: 'orelse', items: orelse },
-      ]
+        { key: "body", items: body },
+        { key: "test", items: test },
+        { key: "orelse", items: orelse },
+      ];
     }
 
-    case 'lambda': {
+    case "lambda": {
       // lambda [params]: expr
       const paramsNode =
-        firstChildOfType(node, 'lambda_parameters') ||
-        firstChildOfType(node, 'parameters')
-      const args = paramsNode ? paramsNode.namedChildren || [] : []
-      const children = node.namedChildren || []
-      const body = children.length > 0 ? [children[children.length - 1]] : []
+        firstChildOfType(node, "lambda_parameters") ||
+        firstChildOfType(node, "parameters");
+      const args = paramsNode ? paramsNode.namedChildren || [] : [];
+      const children = node.namedChildren || [];
+      const body = children.length > 0 ? [children[children.length - 1]] : [];
       return [
-        { key: 'args', items: args },
-        { key: 'body', items: body },
-      ]
+        { key: "args", items: args },
+        { key: "body", items: body },
+      ];
     }
 
-    case 'assignment_expression': {
+    case "assignment_expression": {
       // NAME := value
-      const children = node.namedChildren || []
-      const target = children[0] ? [children[0]] : []
-      const value = children.length > 1 ? [children[children.length - 1]] : []
+      const children = node.namedChildren || [];
+      const target = children[0] ? [children[0]] : [];
+      const value = children.length > 1 ? [children[children.length - 1]] : [];
       return [
-        { key: 'target', items: target },
-        { key: 'value', items: value },
-      ]
+        { key: "target", items: target },
+        { key: "value", items: value },
+      ];
     }
 
-    case 'dictionary':
-    case 'dict': {
+    case "dictionary":
+    case "dict": {
       // {k: v, **d}
-      const keys: TreeSitterAstNode[] = []
-      const values: TreeSitterAstNode[] = []
+      const keys: TreeSitterAstNode[] = [];
+      const values: TreeSitterAstNode[] = [];
       for (const c of node.namedChildren || []) {
-        if (c.type === 'pair') {
-          const [k, v] = c.namedChildren || []
-          if (k) keys.push(k)
-          if (v) values.push(v)
-        } else if (c.type === 'dictionary_splat') {
+        if (c.type === "pair") {
+          const [k, v] = c.namedChildren || [];
+          if (k) keys.push(k);
+          if (v) values.push(v);
+        } else if (c.type === "dictionary_splat") {
           // **expr has only a value
-          const inner = (c.namedChildren || [])[0]
-          if (inner) values.push(inner)
+          const inner = (c.namedChildren || [])[0];
+          if (inner) values.push(inner);
         }
       }
       return [
-        { key: 'keys', items: keys },
-        { key: 'values', items: values },
-      ]
+        { key: "keys", items: keys },
+        { key: "values", items: values },
+      ];
     }
 
-    case 'list':
-    case 'tuple':
-    case 'set': {
+    case "list":
+    case "tuple":
+    case "set": {
       // [elts], (elts), {elts}
-      return [{ key: 'elts', items: node.namedChildren || [] }]
+      return [{ key: "elts", items: node.namedChildren || [] }];
     }
 
-    case 'dictionary_comprehension': {
+    case "dictionary_comprehension": {
       // {k: v for ... if ...}
-      const children = node.namedChildren || []
+      const children = node.namedChildren || [];
       // Heuristic: first two named children are key/value, remaining are generators
-      const key = children[0] ? [children[0]] : []
-      const value = children.length > 1 ? [children[1]] : []
+      const key = children[0] ? [children[0]] : [];
+      const value = children.length > 1 ? [children[1]] : [];
       const generators = children
         .slice(2)
-        .filter((c) => c.type === 'for_in_clause' || c.type === 'if_clause')
+        .filter((c) => c.type === "for_in_clause" || c.type === "if_clause");
       return [
-        { key: 'key', items: key },
-        { key: 'value', items: value },
-        { key: 'generators', items: generators },
-      ]
+        { key: "key", items: key },
+        { key: "value", items: value },
+        { key: "generators", items: generators },
+      ];
     }
 
-    case 'set_comprehension':
-    case 'generator_expression': {
+    case "set_comprehension":
+    case "generator_expression": {
       // {elt for ... if ...} / (elt for ... if ...)
-      const children = node.namedChildren || []
-      const elt = children[0] ? [children[0]] : []
+      const children = node.namedChildren || [];
+      const elt = children[0] ? [children[0]] : [];
       const generators = children
         .slice(1)
-        .filter((c) => c.type === 'for_in_clause' || c.type === 'if_clause')
+        .filter((c) => c.type === "for_in_clause" || c.type === "if_clause");
       return [
-        { key: 'elt', items: elt },
-        { key: 'generators', items: generators },
-      ]
+        { key: "elt", items: elt },
+        { key: "generators", items: generators },
+      ];
     }
-    case 'import_statement': {
+    case "import_statement": {
       // import os, sys.path as p
       // Expose the list of imported names/modules (aliased_import or dotted_name)
       const names = (node.namedChildren || []).filter(
         (c) =>
-          c.type === 'aliased_import' ||
-          c.type === 'dotted_name' ||
-          c.type === 'identifier',
-      )
-      return [{ key: 'names', items: names }]
+          c.type === "aliased_import" ||
+          c.type === "dotted_name" ||
+          c.type === "identifier"
+      );
+      return [{ key: "names", items: names }];
     }
 
-    case 'import_from_statement': {
+    case "import_from_statement": {
       // from typing import List, Dict
       // Children: source module and the imported names
-      const children = node.namedChildren || []
+      const children = node.namedChildren || [];
       const moduleNode = children.find(
-        (c) => c.type === 'dotted_name' || c.type === 'relative_import',
-      )
+        (c) => c.type === "dotted_name" || c.type === "relative_import"
+      );
       // Exclude the module node from names to avoid duplication
       const names = children.filter(
         (c) =>
           c !== moduleNode &&
-          (c.type === 'aliased_import' ||
-            c.type === 'dotted_name' ||
-            c.type === 'wildcard_import' ||
-            c.type === 'identifier'),
-      )
+          (c.type === "aliased_import" ||
+            c.type === "dotted_name" ||
+            c.type === "wildcard_import" ||
+            c.type === "identifier")
+      );
       return [
-        { key: 'module', items: moduleNode ? [moduleNode] : [] },
-        { key: 'names', items: names },
-      ]
+        { key: "module", items: moduleNode ? [moduleNode] : [] },
+        { key: "names", items: names },
+      ];
     }
 
-    case 'with_statement': {
+    case "with_statement": {
       // with open("f.txt") as f, manager() as m: <block>
-      const block = firstChildOfType(node, 'block')
-      const body = block ? [block] : []
+      const block = firstChildOfType(node, "block");
+      const body = block ? [block] : [];
       // Items: list of context managers (with_item nodes in tree-sitter)
-      const items = (node.namedChildren || []).filter((c) => c.type !== 'block')
+      const items = (node.namedChildren || []).filter(
+        (c) => c.type !== "block"
+      );
       return [
-        { key: 'items', items },
-        { key: 'body', items: body },
-      ]
+        { key: "items", items },
+        { key: "body", items: body },
+      ];
     }
 
-    case 'with_item': {
+    case "with_item": {
       // open("f.txt") as f
-      const context = (node.namedChildren || [])[0]
-      const alias = (node.namedChildren || [])[1]
+      const context = (node.namedChildren || [])[0];
+      const alias = (node.namedChildren || [])[1];
       return [
-        { key: 'context', items: context ? [context] : [] },
-        { key: 'alias', items: alias ? [alias] : [] },
-      ]
+        { key: "context", items: context ? [context] : [] },
+        { key: "alias", items: alias ? [alias] : [] },
+      ];
     }
 
-    case 'binary_operator': {
+    case "binary_operator": {
       // left <op> right — operator token is not a navigable child
-      const children = node.namedChildren || []
-      const left = children[0] ? [children[0]] : []
-      const right = children.length > 1 ? [children[children.length - 1]] : []
+      const children = node.namedChildren || [];
+      const left = children[0] ? [children[0]] : [];
+      const right = children.length > 1 ? [children[children.length - 1]] : [];
       return [
-        { key: 'left', items: left },
-        { key: 'right', items: right },
-      ]
+        { key: "left", items: left },
+        { key: "right", items: right },
+      ];
     }
 
     // Unary operators: +x, -x, ~x, not x
     // Tree-sitter typically exposes only the operand as a named child; the operator token is unnamed.
-    case 'unary_expression':
-    case 'unary_operator':
-    case 'not_operator': {
-      const operand = (node.namedChildren || [])[0]
+    case "unary_expression":
+    case "unary_operator":
+    case "not_operator": {
+      const operand = (node.namedChildren || [])[0];
       return [
-        { key: 'op', items: [] },
-        { key: 'operand', items: operand ? [operand] : [] },
-      ]
+        { key: "op", items: [] },
+        { key: "operand", items: operand ? [operand] : [] },
+      ];
     }
 
-    case 'comparison_operator': {
+    case "comparison_operator": {
       // 0 < x <= 10 — not nested like binary operators
-      const children = node.namedChildren || []
-      const left = children[0] ? [children[0]] : []
-      const comparators = children.slice(1)
+      const children = node.namedChildren || [];
+      const left = children[0] ? [children[0]] : [];
+      const comparators = children.slice(1);
       return [
-        { key: 'left', items: left },
-        { key: 'comparators', items: comparators },
-      ]
+        { key: "left", items: left },
+        { key: "comparators", items: comparators },
+      ];
     }
 
-    case 'list_comprehension': {
+    case "list_comprehension": {
       // [x*x for x in xs if cond]
-      const children = node.namedChildren || []
-      const fors = children.filter((c) => c.type === 'for_in_clause')
-      const ifs = children.filter((c) => c.type === 'if_clause')
+      const children = node.namedChildren || [];
+      const fors = children.filter((c) => c.type === "for_in_clause");
+      const ifs = children.filter((c) => c.type === "if_clause");
       const output = children.find(
-        (c) => c.type !== 'for_in_clause' && c.type !== 'if_clause',
-      )
+        (c) => c.type !== "for_in_clause" && c.type !== "if_clause"
+      );
       return [
-        { key: 'output', items: output ? [output] : [] },
-        { key: 'fors', items: fors },
-        { key: 'ifs', items: ifs },
-      ]
+        { key: "output", items: output ? [output] : [] },
+        { key: "fors", items: fors },
+        { key: "ifs", items: ifs },
+      ];
     }
-    case 'decorated_definition': {
+    case "decorated_definition": {
       // A decorated definition wraps a function or class definition with one or more decorators
-      const decorators = childrenOfType(node, 'decorator')
+      const decorators = childrenOfType(node, "decorator");
       const definition = (node.namedChildren || []).find(
-        (c) =>
-          c.type === 'class_definition' || c.type === 'function_definition',
-      )
+        (c) => c.type === "class_definition" || c.type === "function_definition"
+      );
 
       // Alternative approach: present an explicit wrapper structure
       // rather than mutating the inner definition's sections.
       return [
-        { key: 'decorators', items: decorators },
-        { key: 'definition', items: definition ? [definition] : [] },
-      ]
+        { key: "decorators", items: decorators },
+        { key: "definition", items: definition ? [definition] : [] },
+      ];
     }
 
-    case 'class_definition': {
+    case "class_definition": {
       // class NAME [(bases...)] : block
-      const argList = firstChildOfType(node, 'argument_list')
-      const block = firstChildOfType(node, 'block')
+      const argList = firstChildOfType(node, "argument_list");
+      const block = firstChildOfType(node, "block");
       const typeParams = firstChildOfTypes(node, [
-        'type_params',
-        'type_parameters',
-        'type_parameter_list',
-      ])
+        "type_params",
+        "type_parameters",
+        "type_parameter_list",
+      ]);
 
       const keywordArgs = argList
         ? (argList.namedChildren || []).filter(
-            (c) => c.type === 'keyword_argument',
+            (c) => c.type === "keyword_argument"
           )
-        : []
+        : [];
 
       const bases = argList
         ? (argList.namedChildren || []).filter(
-            (c) => c.type !== 'keyword_argument',
+            (c) => c.type !== "keyword_argument"
           )
-        : []
+        : [];
 
-      const body = block ? [block] : []
+      const body = block ? [block] : [];
 
       return [
-        { key: 'type_params', items: typeParams ? [typeParams] : [] },
-        { key: 'bases', items: bases },
-        { key: 'body', items: body },
-        { key: 'decorator_list', items: [] },
-        { key: 'keywords', items: keywordArgs },
-      ]
+        { key: "type_params", items: typeParams ? [typeParams] : [] },
+        { key: "bases", items: bases },
+        { key: "body", items: body },
+        { key: "decorator_list", items: [] },
+        { key: "keywords", items: keywordArgs },
+      ];
     }
 
-    case 'function_definition': {
+    case "function_definition": {
       // def NAME(parameters): block
-      const params = firstChildOfType(node, 'parameters')
-      const args = params ? params.namedChildren || [] : []
-      const block = firstChildOfType(node, 'block')
-      const body = block ? [block] : []
+      const params = firstChildOfType(node, "parameters");
+      const args = params ? params.namedChildren || [] : [];
+      const block = firstChildOfType(node, "block");
+      const body = block ? [block] : [];
       const typeParams = firstChildOfTypes(node, [
-        'type_params',
-        'type_parameters',
-        'type_parameter_list',
-      ])
+        "type_params",
+        "type_parameters",
+        "type_parameter_list",
+      ]);
       // Return annotation can appear as a child of type 'type' or 'return_type' depending on grammar
       const returnType =
-        firstChildOfType(node, 'type') || firstChildOfType(node, 'return_type')
+        firstChildOfType(node, "type") || firstChildOfType(node, "return_type");
 
       return [
-        { key: 'type_params', items: typeParams ? [typeParams] : [] },
-        { key: 'args', items: args },
-        { key: 'body', items: body },
-        { key: 'decorator_list', items: [] },
-        { key: 'returns', items: returnType ? [returnType] : [] },
-      ]
+        { key: "type_params", items: typeParams ? [typeParams] : [] },
+        { key: "args", items: args },
+        { key: "body", items: body },
+        { key: "decorator_list", items: [] },
+        { key: "returns", items: returnType ? [returnType] : [] },
+      ];
     }
 
-    case 'if_statement': {
+    case "if_statement": {
       // if <test>: <body> (elif ...)* (else ...)?
-      const blocks = childrenOfType(node, 'block')
-      const elifs = childrenOfType(node, 'elif_clause')
-      const elseClause = firstChildOfType(node, 'else_clause')
+      const blocks = childrenOfType(node, "block");
+      const elifs = childrenOfType(node, "elif_clause");
+      const elseClause = firstChildOfType(node, "else_clause");
 
       // Heuristic for test: first non-block/elif/else child
       const test = (node.namedChildren || []).find(
-        (c) => !['block', 'elif_clause', 'else_clause'].includes(c.type),
-      )
+        (c) => !["block", "elif_clause", "else_clause"].includes(c.type)
+      );
 
-      const body = blocks[0] ? [blocks[0]] : []
-      const orelseItems: TreeSitterAstNode[] = []
+      const body = blocks[0] ? [blocks[0]] : [];
+      const orelseItems: TreeSitterAstNode[] = [];
       if (elifs.length) {
-        orelseItems.push(...elifs)
+        orelseItems.push(...elifs);
       }
       if (elseClause) {
-        const elseBlock = firstChildOfType(elseClause, 'block')
-        if (elseBlock) orelseItems.push(elseBlock)
+        const elseBlock = firstChildOfType(elseClause, "block");
+        if (elseBlock) orelseItems.push(elseBlock);
       }
 
       return [
-        { key: 'test', items: test ? [test] : [] },
-        { key: 'body', items: body },
-        { key: 'orelse', items: orelseItems },
-      ]
+        { key: "test", items: test ? [test] : [] },
+        { key: "body", items: body },
+        { key: "orelse", items: orelseItems },
+      ];
     }
 
-    case 'while_statement': {
-      const blocks = childrenOfType(node, 'block')
-      const elseClause = firstChildOfType(node, 'else_clause')
+    case "while_statement": {
+      const blocks = childrenOfType(node, "block");
+      const elseClause = firstChildOfType(node, "else_clause");
       const test = (node.namedChildren || []).find(
-        (c) => c.type !== 'block' && c.type !== 'else_clause',
-      )
-      const body = blocks[0] ? [blocks[0]] : []
+        (c) => c.type !== "block" && c.type !== "else_clause"
+      );
+      const body = blocks[0] ? [blocks[0]] : [];
       return [
-        { key: 'test', items: test ? [test] : [] },
-        { key: 'body', items: body },
+        { key: "test", items: test ? [test] : [] },
+        { key: "body", items: body },
         {
-          key: 'orelse',
+          key: "orelse",
           items: (() => {
-            if (!elseClause) return []
-            const elseBlock = firstChildOfType(elseClause, 'block')
-            return elseBlock ? [elseBlock] : []
+            if (!elseClause) return [];
+            const elseBlock = firstChildOfType(elseClause, "block");
+            return elseBlock ? [elseBlock] : [];
           })(),
         },
-      ]
+      ];
     }
 
-    case 'for_statement': {
-      const blocks = childrenOfType(node, 'block')
-      const elseClause = firstChildOfType(node, 'else_clause')
+    case "for_statement": {
+      const blocks = childrenOfType(node, "block");
+      const elseClause = firstChildOfType(node, "else_clause");
 
       // Prefer a structured clause if the grammar provides it (some languages)
-      const inClause = firstChildOfType(node, 'for_in_clause')
+      const inClause = firstChildOfType(node, "for_in_clause");
 
-      let targetItems: TreeSitterAstNode[] = []
-      let iterItem: TreeSitterAstNode | undefined
+      let targetItems: TreeSitterAstNode[] = [];
+      let iterItem: TreeSitterAstNode | undefined;
 
       if (inClause) {
-        const clauseChildren = inClause.namedChildren || []
+        const clauseChildren = inClause.namedChildren || [];
         if (clauseChildren.length >= 2) {
           // Treat everything before the last item as target (supports unpacking)
-          targetItems = clauseChildren.slice(0, -1)
-          iterItem = clauseChildren[clauseChildren.length - 1]
+          targetItems = clauseChildren.slice(0, -1);
+          iterItem = clauseChildren[clauseChildren.length - 1];
         }
       } else {
         // Python: for <target> in <iter>: <block> [else ...]
         // Grab all named children before the body/else, then split: [..targets, iter]
         const head = (node.namedChildren || []).filter(
-          (c) => c.type !== 'block' && c.type !== 'else_clause',
-        )
+          (c) => c.type !== "block" && c.type !== "else_clause"
+        );
         if (head.length >= 1) {
           if (head.length === 1) {
             // Only an iter or target detected; leave as iter for visibility
-            iterItem = head[0]
+            iterItem = head[0];
           } else {
-            targetItems = head.slice(0, -1)
-            iterItem = head[head.length - 1]
+            targetItems = head.slice(0, -1);
+            iterItem = head[head.length - 1];
           }
         }
       }
 
-      const body = blocks[0] ? [blocks[0]] : []
+      const body = blocks[0] ? [blocks[0]] : [];
       return [
-        { key: 'target', items: targetItems },
-        { key: 'iter', items: iterItem ? [iterItem] : [] },
-        { key: 'body', items: body },
+        { key: "target", items: targetItems },
+        { key: "iter", items: iterItem ? [iterItem] : [] },
+        { key: "body", items: body },
         {
-          key: 'orelse',
+          key: "orelse",
           items: (() => {
-            if (!elseClause) return []
-            const elseBlock = firstChildOfType(elseClause, 'block')
-            return elseBlock ? [elseBlock] : []
+            if (!elseClause) return [];
+            const elseBlock = firstChildOfType(elseClause, "block");
+            return elseBlock ? [elseBlock] : [];
           })(),
         },
-      ]
+      ];
     }
 
-    case 'try_statement': {
-      const bodyBlock = firstChildOfType(node, 'block')
+    case "try_statement": {
+      const bodyBlock = firstChildOfType(node, "block");
       const handlers = (node.namedChildren || []).filter((c) =>
         [
-          'except_clause',
-          'except_star_clause',
-          'except_star',
-          'except_star_block',
-        ].includes(c.type),
-      )
-      const elseClause = firstChildOfType(node, 'else_clause')
-      const finallyClause = firstChildOfType(node, 'finally_clause')
-      const body = bodyBlock ? [bodyBlock] : []
+          "except_clause",
+          "except_star_clause",
+          "except_star",
+          "except_star_block",
+        ].includes(c.type)
+      );
+      const elseClause = firstChildOfType(node, "else_clause");
+      const finallyClause = firstChildOfType(node, "finally_clause");
+      const body = bodyBlock ? [bodyBlock] : [];
       const finalBody = (() => {
-        if (!finallyClause) return [] as TreeSitterAstNode[]
-        const block = firstChildOfType(finallyClause, 'block')
-        return block ? [block] : []
-      })()
+        if (!finallyClause) return [] as TreeSitterAstNode[];
+        const block = firstChildOfType(finallyClause, "block");
+        return block ? [block] : [];
+      })();
       return [
-        { key: 'body', items: body },
-        { key: 'handlers', items: handlers },
+        { key: "body", items: body },
+        { key: "handlers", items: handlers },
         {
-          key: 'orelse',
+          key: "orelse",
           items: (() => {
-            if (!elseClause) return [] as TreeSitterAstNode[]
-            const elseBlock = firstChildOfType(elseClause, 'block')
-            return elseBlock ? [elseBlock] : []
+            if (!elseClause) return [] as TreeSitterAstNode[];
+            const elseBlock = firstChildOfType(elseClause, "block");
+            return elseBlock ? [elseBlock] : [];
           })(),
         },
-        { key: 'finalbody', items: finalBody },
-      ]
+        { key: "finalbody", items: finalBody },
+      ];
     }
 
-    case 'except_clause': {
+    case "except_clause": {
       // except <type> [as name]: <block>
-      const block = firstChildOfType(node, 'block')
+      const block = firstChildOfType(node, "block");
       const name = (node.namedChildren || []).find(
-        (c) => c.type === 'identifier',
-      )
+        (c) => c.type === "identifier"
+      );
       const typeNode = (node.namedChildren || []).find(
-        (c) => c !== block && c !== name,
-      )
+        (c) => c !== block && c !== name
+      );
       return [
-        { key: 'type', items: typeNode ? [typeNode] : [] },
-        { key: 'name', items: name ? [name] : [] },
-        { key: 'body', items: block ? [block] : [] },
-      ]
+        { key: "type", items: typeNode ? [typeNode] : [] },
+        { key: "name", items: name ? [name] : [] },
+        { key: "body", items: block ? [block] : [] },
+      ];
     }
 
-    case 'except_star_clause': {
+    case "except_star_clause": {
       // except* <type> [as name]: <block>
-      const block = firstChildOfType(node, 'block')
+      const block = firstChildOfType(node, "block");
       const name = (node.namedChildren || []).find(
-        (c) => c.type === 'identifier',
-      )
+        (c) => c.type === "identifier"
+      );
       const typeNode = (node.namedChildren || []).find(
-        (c) => c !== block && c !== name,
-      )
+        (c) => c !== block && c !== name
+      );
       return [
-        { key: 'type', items: typeNode ? [typeNode] : [] },
-        { key: 'name', items: name ? [name] : [] },
-        { key: 'body', items: block ? [block] : [] },
-      ]
+        { key: "type", items: typeNode ? [typeNode] : [] },
+        { key: "name", items: name ? [name] : [] },
+        { key: "body", items: block ? [block] : [] },
+      ];
     }
 
-    case 'assignment': {
+    case "assignment": {
       // x = <value>, a, b = c, a = b = 1 (nested on the right)
       // Prefer explicit left/right semantics. Tree-sitter typically places LHS first and RHS last.
-      const children = node.namedChildren || []
-      const left = children[0] ? [children[0]] : []
-      const right = children.length > 1 ? [children[children.length - 1]] : []
+      const children = node.namedChildren || [];
+      const left = children[0] ? [children[0]] : [];
+      const right = children.length > 1 ? [children[children.length - 1]] : [];
       return [
-        { key: 'target', items: left },
-        { key: 'value', items: right },
-      ]
+        { key: "target", items: left },
+        { key: "value", items: right },
+      ];
     }
 
-    case 'augmented_assignment': {
+    case "augmented_assignment": {
       // e.g., x += <value>
       // Tree-sitter typically exposes two named children: left (target) and right (value).
       // The operator token is not a named child and is treated as an attribute.
-      const children = node.namedChildren || []
-      const target = children[0] ? [children[0]] : []
-      const value = children.length > 1 ? [children[children.length - 1]] : []
+      const children = node.namedChildren || [];
+      const target = children[0] ? [children[0]] : [];
+      const value = children.length > 1 ? [children[children.length - 1]] : [];
       return [
-        { key: 'target', items: target },
-        { key: 'value', items: value },
-      ]
+        { key: "target", items: target },
+        { key: "value", items: value },
+      ];
     }
 
-    case 'return_statement': {
-      return [{ key: 'value', items: node.namedChildren || [] }]
+    case "return_statement": {
+      return [{ key: "value", items: node.namedChildren || [] }];
     }
 
-    case 'await_expression':
-    case 'await': {
+    case "await_expression":
+    case "await": {
       // await <value>
-      return [{ key: 'value', items: node.namedChildren || [] }]
+      return [{ key: "value", items: node.namedChildren || [] }];
     }
 
-    case 'attribute': {
-      const valueNode = (node.namedChildren || [])[0]
-      return [{ key: 'value', items: valueNode ? [valueNode] : [] }]
+    case "attribute": {
+      const valueNode = (node.namedChildren || [])[0];
+      return [{ key: "value", items: valueNode ? [valueNode] : [] }];
     }
 
-    case 'call': {
-      const func = (node.namedChildren || [])[0]
+    case "call": {
+      const func = (node.namedChildren || [])[0];
       // Arguments are in an argument_list node
-      const argsList = firstChildOfType(node, 'argument_list')
-      const args = argsList ? argsList.namedChildren || [] : []
-      const keywords = args.filter((c) => c.type === 'keyword_argument')
-      const positionals = args.filter((c) => c.type !== 'keyword_argument')
+      const argsList = firstChildOfType(node, "argument_list");
+      const args = argsList ? argsList.namedChildren || [] : [];
+      const keywords = args.filter((c) => c.type === "keyword_argument");
+      const positionals = args.filter((c) => c.type !== "keyword_argument");
       return [
-        { key: 'func', items: func ? [func] : [] },
-        { key: 'args', items: positionals },
-        { key: 'keywords', items: keywords },
-      ]
+        { key: "func", items: func ? [func] : [] },
+        { key: "args", items: positionals },
+        { key: "keywords", items: keywords },
+      ];
     }
 
-    case 'subscript': {
-      const valueNode = (node.namedChildren || [])[0]
-      const second = (node.namedChildren || [])[1]
-      const keyLabel = second && second.type === 'slice' ? 'slice' : 'index'
+    case "subscript": {
+      const valueNode = (node.namedChildren || [])[0];
+      const second = (node.namedChildren || [])[1];
+      const keyLabel = second && second.type === "slice" ? "slice" : "index";
       return [
-        { key: 'value', items: valueNode ? [valueNode] : [] },
+        { key: "value", items: valueNode ? [valueNode] : [] },
         { key: keyLabel, items: second ? [second] : [] },
-      ]
+      ];
     }
 
-    case 'slice': {
-      const parts = node.namedChildren || []
+    case "slice": {
+      const parts = node.namedChildren || [];
       if (parts.length === 1) {
-        return [{ key: 'value', items: [parts[0]] }]
+        return [{ key: "value", items: [parts[0]] }];
       }
       if (parts.length === 2) {
         return [
-          { key: 'start', items: [parts[0]] },
-          { key: 'stop', items: [parts[1]] },
-        ]
+          { key: "start", items: [parts[0]] },
+          { key: "stop", items: [parts[1]] },
+        ];
       }
       if (parts.length >= 3) {
         return [
-          { key: 'start', items: [parts[0]] },
-          { key: 'stop', items: [parts[1]] },
-          { key: 'step', items: [parts[2]] },
-        ]
+          { key: "start", items: [parts[0]] },
+          { key: "stop", items: [parts[1]] },
+          { key: "step", items: [parts[2]] },
+        ];
       }
-      return [{ key: 'children', items: parts }]
+      return [{ key: "children", items: parts }];
     }
 
-    case 'starred_expression': {
+    case "starred_expression": {
       // *expr — expose the underlying value
-      const valueNode = (node.namedChildren || [])[0]
-      return [{ key: 'value', items: valueNode ? [valueNode] : [] }]
+      const valueNode = (node.namedChildren || [])[0];
+      return [{ key: "value", items: valueNode ? [valueNode] : [] }];
     }
 
     default: {
       // Generic: expose named children under a single group for basic navigation
-      return [{ key: 'children', items: node.namedChildren || [] }]
+      return [{ key: "children", items: node.namedChildren || [] }];
     }
   }
-}
+};
 
 // FIX: Extracted ItemRowProps to resolve potential TS inference issues with inline props.
 type ItemRowProps = {
-  item: TreeSitterAstNode
-  rightLabel?: string
-  selectedNode?: TreeSitterAstNode
-  hoveredNode?: TreeSitterAstNode
-  onSelectNode?: (node: TreeSitterAstNode) => void
-  onHoverNode?: (node?: TreeSitterAstNode) => void
-}
+  item: TreeSitterAstNode;
+  rightLabel?: string;
+  selectedNode?: TreeSitterAstNode;
+  hoveredNode?: TreeSitterAstNode;
+  onSelectNode?: (node: TreeSitterAstNode) => void;
+  onHoverNode?: (node?: TreeSitterAstNode) => void;
+};
 
 // Compact row for a child item with an optional group label
 const ItemRow = ({
@@ -854,17 +857,17 @@ const ItemRow = ({
   onSelectNode,
   onHoverNode,
 }: ItemRowProps) => {
-  const isSelected = selectedNode === item
-  const isHovered = hoveredNode === item
+  const isSelected = selectedNode === item;
+  const isHovered = hoveredNode === item;
   return (
     <li
       className={
-        'flex items-center gap-2 rounded px-2 py-1 pl-4 cursor-pointer ' +
+        "flex items-center gap-2 rounded px-2 py-1 pl-4 cursor-pointer " +
         (isSelected
-          ? 'ring-2 ring-amber-400 bg-amber-100/60'
+          ? "ring-2 ring-amber-400 bg-amber-100/60"
           : isHovered
-            ? 'bg-amber-50'
-            : 'hover:bg-slate-50')
+          ? "bg-amber-50"
+          : "hover:bg-slate-50")
       }
       onClick={() => onSelectNode?.(item)}
       onMouseEnter={() => onHoverNode?.(item)}
@@ -877,8 +880,8 @@ const ItemRow = ({
         </span>
       )}
     </li>
-  )
-}
+  );
+};
 
 export const AstChildrenSidebar = ({
   ast,
@@ -890,7 +893,7 @@ export const AstChildrenSidebar = ({
   code,
 }: AstChildrenSidebarProps) => {
   // Typically the root is a `module` node; render it and its top-level children.
-  const topLevel = ast.namedChildren || []
+  const topLevel = ast.namedChildren || [];
 
   return (
     <aside className="space-y-3">
@@ -905,31 +908,32 @@ export const AstChildrenSidebar = ({
             {topLevel.map((node, i) => {
               const sections = buildCuratedSections(node)
                 // Hide empty sections entirely (e.g. empty decorator_list)
-                .filter((s) => s.items.length > 0)
+                .filter((s) => s.items.length > 0);
 
               // Inline hint sections: only show label once, no rows (e.g., body -> block)
               const inlineHints = sections.filter(
                 (s) =>
-                  s.key === 'body' ||
-                  s.items.every((it) => it.type === 'block'),
-              )
+                  s.key === "body" || s.items.every((it) => it.type === "block")
+              );
 
               // Groups we actually list rows for
               const flatGroups = sections.filter(
-                (s) => !inlineHints.includes(s),
-              )
-              const isSelected = selectedNode === node
-              const isHovered = hoveredNode === node
+                (s) => !inlineHints.includes(s)
+              );
+              const isSelected = selectedNode === node;
+              const isHovered = hoveredNode === node;
               return (
                 <li
                   key={i}
                   className={
-                    `rounded-lg border shadow-sm ${getNodeHighlight(node.type)} ` +
+                    `rounded-lg border shadow-sm ${getNodeHighlight(
+                      node.type
+                    )} ` +
                     (isSelected
-                      ? 'ring-2 ring-amber-400 bg-amber-100/70'
+                      ? "ring-2 ring-amber-400 bg-amber-100/70"
                       : isHovered
-                        ? 'bg-amber-50'
-                        : '')
+                      ? "bg-amber-50"
+                      : "")
                   }
                 >
                   <div
@@ -941,8 +945,8 @@ export const AstChildrenSidebar = ({
                       type="button"
                       className="inline-flex items-center"
                       onClick={(e) => {
-                        e.preventDefault()
-                        onSelectNode?.(node)
+                        e.preventDefault();
+                        onSelectNode?.(node);
                       }}
                     >
                       <NodeType type={node.type} />
@@ -961,15 +965,15 @@ export const AstChildrenSidebar = ({
                           const labelBase =
                             idx === 0
                               ? gIdx === 0 && inlineHints.length > 0
-                                ? inlineHints.map((s) => s.key).join(' · ')
+                                ? inlineHints.map((s) => s.key).join(" · ")
                                 : group.key
-                              : undefined
+                              : undefined;
                           const label =
                             labelBase &&
-                            group.key === 'value' &&
+                            group.key === "value" &&
                             isYieldFrom(node, code)
                               ? `${labelBase} · from`
-                              : labelBase
+                              : labelBase;
                           return (
                             <ItemRow
                               key={`${gIdx}-${idx}`}
@@ -980,8 +984,8 @@ export const AstChildrenSidebar = ({
                               onSelectNode={onSelectNode}
                               onHoverNode={onHoverNode}
                             />
-                          )
-                        }),
+                          );
+                        })
                       )}
                     </ul>
                   )}
@@ -989,7 +993,7 @@ export const AstChildrenSidebar = ({
                     <div className="mx-3 mb-2 border-t border-slate-200" />
                   )}
                 </li>
-              )
+              );
             })}
           </ul>
         )
@@ -1012,29 +1016,31 @@ export const AstChildrenSidebar = ({
             <ul className="space-y-3 bg-white/50 px-3 py-3">
               {topLevel.map((node, i) => {
                 const sections = buildCuratedSections(node).filter(
-                  (s) => s.items.length > 0,
-                )
+                  (s) => s.items.length > 0
+                );
 
                 const inlineHints = sections.filter(
                   (s) =>
-                    s.key === 'body' ||
-                    s.items.every((it) => it.type === 'block'),
-                )
+                    s.key === "body" ||
+                    s.items.every((it) => it.type === "block")
+                );
                 const flatGroups = sections.filter(
-                  (s) => !inlineHints.includes(s),
-                )
-                const isSelected = selectedNode === node
-                const isHovered = hoveredNode === node
+                  (s) => !inlineHints.includes(s)
+                );
+                const isSelected = selectedNode === node;
+                const isHovered = hoveredNode === node;
                 return (
                   <li
                     key={i}
                     className={
-                      `rounded-lg border shadow-sm ${getNodeHighlight(node.type)} ` +
+                      `rounded-lg border shadow-sm ${getNodeHighlight(
+                        node.type
+                      )} ` +
                       (isSelected
-                        ? 'ring-2 ring-amber-400 bg-amber-100/70'
+                        ? "ring-2 ring-amber-400 bg-amber-100/70"
                         : isHovered
-                          ? 'bg-amber-50'
-                          : '')
+                        ? "bg-amber-50"
+                        : "")
                     }
                   >
                     <div
@@ -1046,8 +1052,8 @@ export const AstChildrenSidebar = ({
                         type="button"
                         className="inline-flex items-center"
                         onClick={(e) => {
-                          e.preventDefault()
-                          onSelectNode?.(node)
+                          e.preventDefault();
+                          onSelectNode?.(node);
                         }}
                       >
                         <NodeType type={node.type} />
@@ -1066,15 +1072,15 @@ export const AstChildrenSidebar = ({
                             const labelBase =
                               idx === 0
                                 ? gIdx === 0 && inlineHints.length > 0
-                                  ? inlineHints.map((s) => s.key).join(' · ')
+                                  ? inlineHints.map((s) => s.key).join(" · ")
                                   : group.key
-                                : undefined
+                                : undefined;
                             const label =
                               labelBase &&
-                              group.key === 'value' &&
+                              group.key === "value" &&
                               isYieldFrom(node, code)
                                 ? `${labelBase} · from`
-                                : labelBase
+                                : labelBase;
                             return (
                               <ItemRow
                                 key={`${gIdx}-${idx}`}
@@ -1085,8 +1091,8 @@ export const AstChildrenSidebar = ({
                                 onSelectNode={onSelectNode}
                                 onHoverNode={onHoverNode}
                               />
-                            )
-                          }),
+                            );
+                          })
                         )}
                       </ul>
                     )}
@@ -1094,12 +1100,12 @@ export const AstChildrenSidebar = ({
                       <div className="mx-3 mb-2 border-t border-slate-200" />
                     )}
                   </li>
-                )
+                );
               })}
             </ul>
           )}
         </div>
       )}
     </aside>
-  )
-}
+  );
+};
