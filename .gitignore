@@ -8,3 +8,5 @@ count.txt
 .nitro
 .tanstack
 .next/
+# clerk configuration (can include secrets)
+/.clerk/
