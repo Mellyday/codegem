@@ -13,37 +13,28 @@ type AstChildrenSidebarProps = {
   code?: string;
 };
 
-// Get highlight color based on node type
+// Get highlight color based on node type (exact, intentional matches)
 const getNodeHighlight = (type: string): string => {
-  // Green for imports
-  if (type.includes("import")) {
-    return "bg-green-50 border-green-200";
-  }
-  // Purple for class definitions
-  if (type.includes("class")) {
-    return "bg-purple-50 border-purple-200";
-  }
-  // Blue for keywords and function definitions
-  if (type.includes("keyword") || type.includes("function")) {
-    return "bg-blue-50 border-blue-200";
-  }
+  // Green for import statements
+  if (type.startsWith("import")) return "bg-green-50 border-green-200";
+  // Purple for classes
+  if (type === "class_definition") return "bg-purple-50 border-purple-200";
+  // Blue for functions
+  if (type === "function_definition") return "bg-blue-50 border-blue-200";
   // Default
   return "bg-slate-50 border-slate-200";
 };
 
 const getNodeBadgeColor = (type: string): string => {
-  // Green for imports
-  if (type.includes("import")) {
+  // Green for import statements
+  if (type.startsWith("import"))
     return "bg-green-100 text-green-700 border-green-200";
-  }
-  // Purple for class definitions
-  if (type.includes("class")) {
+  // Purple for classes
+  if (type === "class_definition")
     return "bg-purple-100 text-purple-700 border-purple-200";
-  }
-  // Blue for keywords and function definitions
-  if (type.includes("keyword") || type.includes("function")) {
+  // Blue for functions
+  if (type === "function_definition")
     return "bg-blue-100 text-blue-700 border-blue-200";
-  }
   // Default
   return "bg-slate-100 text-slate-700 border-slate-200";
 };
@@ -93,6 +84,14 @@ const collectDescendants = (
   }
   return out;
 };
+
+// Stable node identity comparison to avoid reference-based flicker
+const nodesEqual = (a?: TreeSitterAstNode, b?: TreeSitterAstNode) =>
+  !!a &&
+  !!b &&
+  a.type === b.type &&
+  a.startIndex === b.startIndex &&
+  a.endIndex === b.endIndex;
 
 // We display the raw CST node type as the label
 
@@ -417,17 +416,19 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
       const moduleNode = children.find(
         (c) => c.type === "dotted_name" || c.type === "relative_import"
       );
-      // Exclude the module node from names to avoid duplication
-      const names = children.filter(
+      const rest = children.filter((c) => c !== moduleNode);
+      const wildcard = rest.find((c) => c.type === "wildcard_import");
+      const names = rest.filter(
         (c) =>
-          c !== moduleNode &&
-          (c.type === "aliased_import" ||
-            c.type === "dotted_name" ||
-            c.type === "wildcard_import" ||
-            c.type === "identifier")
+          c.type === "aliased_import" ||
+          c.type === "dotted_name" ||
+          c.type === "identifier"
       );
       return [
         { key: "module", items: moduleNode ? [moduleNode] : [] },
+        ...(wildcard
+          ? [{ key: "wildcard", items: [wildcard] as TreeSitterAstNode[] }]
+          : []),
         { key: "names", items: names },
       ];
     }
@@ -547,7 +548,7 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
         { key: "type_params", items: typeParams ? [typeParams] : [] },
         { key: "bases", items: bases },
         { key: "body", items: body },
-        { key: "decorator_list", items: [] },
+        { key: "decorators", items: childrenOfType(node, "decorator") },
         { key: "keywords", items: keywordArgs },
       ];
     }
@@ -571,7 +572,7 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
         { key: "type_params", items: typeParams ? [typeParams] : [] },
         { key: "args", items: args },
         { key: "body", items: body },
-        { key: "decorator_list", items: [] },
+        { key: "decorators", items: childrenOfType(node, "decorator") },
         { key: "returns", items: returnType ? [returnType] : [] },
       ];
     }
@@ -786,11 +787,25 @@ const buildCuratedSections = (node: TreeSitterAstNode): CuratedSection[] => {
       const argsList = firstChildOfType(node, "argument_list");
       const args = argsList ? argsList.namedChildren || [] : [];
       const keywords = args.filter((c) => c.type === "keyword_argument");
-      const positionals = args.filter((c) => c.type !== "keyword_argument");
+      const starargs = args.filter(
+        (c) => c.type === "starred_expression" || c.type === "list_splat"
+      );
+      const kwargs_splat = args.filter((c) => c.type === "dictionary_splat");
+      const positionals = args.filter(
+        (c) =>
+          c.type !== "keyword_argument" &&
+          c.type !== "starred_expression" &&
+          c.type !== "list_splat" &&
+          c.type !== "dictionary_splat"
+      );
       return [
         { key: "func", items: func ? [func] : [] },
         { key: "args", items: positionals },
+        ...(starargs.length ? [{ key: "starargs", items: starargs }] : []),
         { key: "keywords", items: keywords },
+        ...(kwargs_splat.length
+          ? [{ key: "kwargs_splat", items: kwargs_splat }]
+          : []),
       ];
     }
 
