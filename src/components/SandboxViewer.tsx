@@ -350,43 +350,52 @@ export const SandboxViewer = ({
                               )}
                             </div>
                             <div className="flex gap-2">
-                              {zoomStackTs.length > 0 && (
-                                <button
-                                  type="button"
-                                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm hover:bg-slate-50"
-                                  onClick={() => {
-                                    setZoomRootTs(() => {
-                                      if (zoomStackTs.length === 0)
-                                        return undefined;
-                                      const next =
-                                        zoomStackTs[zoomStackTs.length - 1];
-                                      setZoomStackTs((stack) =>
-                                        stack.slice(0, -1)
-                                      );
-                                      // Clear selection on zoom out
-                                      setSelectedTsNode(undefined);
-                                      setHoveredTsNode(undefined);
-                                      return next;
-                                    });
-                                  }}
-                                >
-                                  Back
-                                </button>
-                              )}
-                              {zoomStackTs.length > 0 && (
-                                <button
-                                  type="button"
-                                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm hover:bg-slate-50"
-                                  onClick={() => {
-                                    setZoomRootTs(undefined);
-                                    setZoomStackTs([]);
+                              <button
+                                type="button"
+                                className={
+                                  "rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm " +
+                                  (zoomStackTs.length === 0
+                                    ? "opacity-50 cursor-not-allowed"
+                                    : "hover:bg-slate-50")
+                                }
+                                disabled={zoomStackTs.length === 0}
+                                onClick={() => {
+                                  setZoomRootTs(() => {
+                                    if (zoomStackTs.length === 0)
+                                      return undefined;
+                                    const next =
+                                      zoomStackTs[zoomStackTs.length - 1];
+                                    setZoomStackTs((stack) =>
+                                      stack.slice(0, -1)
+                                    );
+                                    // Clear selection on zoom out
                                     setSelectedTsNode(undefined);
                                     setHoveredTsNode(undefined);
-                                  }}
-                                >
-                                  Return to Top
-                                </button>
-                              )}
+                                    return next;
+                                  });
+                                }}
+                              >
+                                Back
+                              </button>
+                              <button
+                                type="button"
+                                className={
+                                  "rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm " +
+                                  (!zoomRootTs
+                                    ? "opacity-50 cursor-not-allowed"
+                                    : "hover:bg-slate-50")
+                                }
+                                disabled={!zoomRootTs}
+                                onClick={() => {
+                                  if (!zoomRootTs) return;
+                                  setZoomRootTs(undefined);
+                                  setZoomStackTs([]);
+                                  setSelectedTsNode(undefined);
+                                  setHoveredTsNode(undefined);
+                                }}
+                              >
+                                Return to Top
+                              </button>
                             </div>
                           </div>
                           <AstChildrenSidebar
