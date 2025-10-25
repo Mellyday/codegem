@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 
 import { canParseWithBabel } from "../lib/ast";
-import { canParseWithTreeSitter } from "../lib/treeSitter";
+import { canParseWithTreeSitter } from "../lib/astSupport";
 
 export type SandboxRoute = {
   fileName: string;
