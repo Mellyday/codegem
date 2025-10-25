@@ -2,7 +2,7 @@ import Link from "next/link";
 import { listSandboxes } from "@/src/server/sandbox";
 
 export default async function HomePage() {
-  const sandboxRoutes = listSandboxes();
+  const sandboxRoutes = await listSandboxes();
 
   return (
     <main className="min-h-screen bg-rose-50 text-slate-900">
@@ -27,9 +27,7 @@ export default async function HomePage() {
                 >
                   <span>{label}</span>
                   <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">
-                    {astSupport === "babel"
-                      ? "AST via Babel"
-                      : astSupport === "tree-sitter"
+                    {astSupport === "tree-sitter"
                       ? "AST via Tree-sitter"
                       : "AST unsupported"}
                   </span>

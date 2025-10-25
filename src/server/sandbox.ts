@@ -1,44 +1,27 @@
-import fs from "fs";
-import path from "path";
-
-import { canParseWithBabel } from "../lib/ast";
-import { canParseWithTreeSitter } from "../lib/astSupport";
+import { getDb } from "../lib/mongodb";
 
 export type SandboxRoute = {
   fileName: string;
   routePath: string;
   label: string;
-  astSupport: "babel" | "tree-sitter" | "none";
+  astSupport: "tree-sitter" | "none";
 };
 
-const CODE_SANDBOX_DIR = path.join(process.cwd(), "code_sandbox");
+export async function listSandboxes(): Promise<SandboxRoute[]> {
+  const db = await getDb();
+  const files = db.collection("files");
+  const docs = await files
+    .find({}, { projection: { path: 1, extension: 1 } })
+    .toArray();
 
-const stripExtension = (fileName: string) => fileName.replace(/\.[^/.]+$/, "");
-const getExtension = (fileName: string) => fileName.split(".").pop() ?? "";
-
-export function listSandboxes(): SandboxRoute[] {
-  if (!fs.existsSync(CODE_SANDBOX_DIR)) {
-    return [];
-  }
-
-  const entries = fs
-    .readdirSync(CODE_SANDBOX_DIR, { withFileTypes: true })
-    .filter((ent) => ent.isFile())
-    .map((ent) => ent.name);
-
-  const routes: SandboxRoute[] = entries
-    .map((fileName) => {
-      const routePath = stripExtension(fileName);
-      const extension = getExtension(fileName);
-
-      const astSupport = canParseWithBabel(fileName)
-        ? "babel"
-        : canParseWithTreeSitter(extension)
-        ? "tree-sitter"
-        : "none";
-
+  const routes: SandboxRoute[] = docs
+    .map((doc: any) => {
+      const routePath = (doc.path as string).replace(/\.[^/.]+$/, "");
+      const extension = (doc.extension as string) || "";
+      const astSupport: "tree-sitter" | "none" =
+        extension === "py" ? "tree-sitter" : "none";
       return {
-        fileName,
+        fileName: doc.path as string,
         routePath,
         label: routePath,
         astSupport,
@@ -49,28 +32,16 @@ export function listSandboxes(): SandboxRoute[] {
   return routes;
 }
 
-export function readSandbox(
+export async function readSandbox(
   routePath: string
-): { fileName: string; code: string } | null {
-  if (!fs.existsSync(CODE_SANDBOX_DIR)) {
-    return null;
-  }
-
-  const entries = fs
-    .readdirSync(CODE_SANDBOX_DIR, { withFileTypes: true })
-    .filter((ent) => ent.isFile())
-    .map((ent) => ent.name);
-
-  const matching = entries.find(
-    (fileName) => stripExtension(fileName) === routePath
-  );
-  if (!matching) return null;
-
-  const absPath = path.join(CODE_SANDBOX_DIR, matching);
-  try {
-    const code = fs.readFileSync(absPath, "utf8");
-    return { fileName: matching, code };
-  } catch {
-    return null;
-  }
+): Promise<{ fileName: string; code: string } | null> {
+  const db = await getDb();
+  const files = db.collection("files");
+  const path = `${routePath}.py`;
+  const doc = await files.findOne({ path });
+  if (!doc || typeof (doc as any).sourceCode !== "string") return null;
+  return {
+    fileName: doc.path as string,
+    code: (doc as any).sourceCode as string,
+  };
 }

@@ -12,7 +12,7 @@ export default async function SandboxPage({
   params: Promise<Params>;
 }) {
   const { sandboxId } = await params;
-  const data = readSandbox(sandboxId);
+  const data = await readSandbox(sandboxId);
 
   if (!data) {
     return (
