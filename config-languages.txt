@@ -1,0 +1,18 @@
+Must-have first
+YAML: .yml, .yaml — tree-sitter-yaml
+JSON: .json — tree-sitter-json (optionally JSON with comments: tree-sitter-jsonc)
+TOML: .toml — tree-sitter-toml
+INI/Properties: .ini, .cfg, .conf, .properties — tree-sitter-ini and/or tree-sitter-properties
+Bash/SH: .sh, .bash, .ksh, also parse plain KEY=VALUE in many .env files — tree-sitter-bash
+High-impact next
+Dockerfile: Dockerfile, .Dockerfile — tree-sitter-dockerfile
+Makefile: Makefile, .mk — tree-sitter-make
+Terraform/HCL: .tf, .tfvars, .hcl — tree-sitter-hcl
+XML: .xml — tree-sitter-xml
+Nice-to-have (after the above)
+PowerShell: .ps1, .psm1 — tree-sitter-powershell
+CMake: CMakeLists.txt, .cmake — tree-sitter-cmake
+Fish shell: .fish — tree-sitter-fish
+Zsh: .zsh — tree-sitter-zsh
+Nginx: nginx.conf — tree-sitter-nginx
+EditorConfig: .editorconfig — tree-sitter-editorconfig

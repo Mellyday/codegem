@@ -1,0 +1,146 @@
+Relevant to:
+SandboxViewer, LessonViewer
+Context:
+https://apps.abacus.ai/chatllm/?appId=7efa5c07a&convoId=d82f282a0
+
+Short answer
+Yes — this is a solid implementation. It addresses the three problems you described:
+
+It anchors answers to the statement header (“while left <= right”) instead of just the condition.
+It prevents the “while” token from showing in the code viewer via masking.
+It clamps reveal so you don’t leak the first token of the current step.
+It’s also reasonably efficient and keeps the slicing/masking logic correctly aligned with absolute indices, so it works when zoomed and with nested structures.
+
+Below are a few targeted refinements to make it even more robust.
+
+What you did well
+Safe reveal clamp: min(prev.endIndex, curr.startIndex) prevents “while” from leaking — nice.
+Masking pipeline is applied after clipping and preserves layout by replacing with spaces (and not newlines).
+Statement-anchored answers: returning “header without colon” yields exactly the behavior you want.
+Cleanup: you clear masks on unmount and when returning to AST.
+Recommended refinements
+Always mask the header keyword for any step inside that header
+Right now you only mask for loop_condition, if_condition, or header nodes. If you “dig” into sub-expressions under the same header (e.g., a name inside the condition), the “while” keyword can reappear.
+Suggestion: compute the nearest header ancestor for every step and always mask the header keyword; still use statement-anchored answers only for header/condition-type steps.
+Minimal changes:
+
+ts
+Copy
+// Keep this helper:
+const headerTypes = ['if_statement', 'elif_clause', 'while_statement', 'for_statement']
+
+function maskRangesForContext(
+  step: LessonStep,
+  root: TreeSitterAstNode,
+  code: string
+): MaskRange[] {
+  const stmt = findEnclosingByTypes(root, step.node, headerTypes)
+  return stmt ? headerMaskAndAnswer(stmt, code).masks : []
+}
+
+function answerTextForStep(
+  step: LessonStep,
+  root: TreeSitterAstNode,
+  code: string
+): string {
+  const isHeaderNode = headerTypes.includes(step.node.type)
+  if (isHeaderNode || step.semanticRole === 'if_condition' || step.semanticRole === 'loop_condition') {
+    const stmt = isHeaderNode ? step.node : findEnclosingByTypes(root, step.node, headerTypes)
+    if (stmt) return headerMaskAndAnswer(stmt, code).answerText
+  }
+  return textForNode(step.node, code)
+}
+
+// In useEffect that updates masks/answer:
+const curr = lessonQueue[currentStep]
+if (curr) {
+  onMaskRangesChange(maskRangesForContext(curr, root, code))
+} else {
+  onMaskRangesChange([])
+}
+
+// When saving custom quiz:
+const answerText = answerTextForStep(step, root, code)
+Optional: mask the trailing colon too
+If you think the colon itself hints it’s a header, you can mask it as well.
+ts
+Copy
+function headerMaskAndAnswer(stmt: TreeSitterAstNode, code: string) {
+  // ... existing code to compute firstNamed and colonIdx
+  const colonIdx = full.indexOf(':')
+  const answerText = (colonIdx >= 0 ? full.slice(0, colonIdx) : full.split('\n')[0]).trimEnd()
+
+  const masks: MaskRange[] = []
+  if (maskEnd > maskStart) masks.push({ start: maskStart, end: maskEnd })
+  if (colonIdx >= 0) {
+    const absColon = stmt.startIndex + colonIdx
+    masks.push({ start: absColon, end: absColon + 1 }) // hide ':'
+  }
+  return { masks, answerText }
+}
+Early-return in findEnclosingByTypes for clarity and a tiny performance win
+Your DFS works and returns the deepest match in practice. You can make that intent explicit:
+ts
+Copy
+function findEnclosingByTypes(
+  root: TreeSitterAstNode,
+  target: TreeSitterAstNode,
+  types: string[],
+): TreeSitterAstNode | undefined {
+  let result: TreeSitterAstNode | undefined
+
+  const walk = (n: TreeSitterAstNode): boolean => {
+    for (const c of n.namedChildren || []) {
+      if (c.startIndex <= target.startIndex && c.endIndex >= target.endIndex) {
+        if (types.includes(c.type)) result = c
+        // Descend into the unique containing child; return early afterward
+        if (walk(c)) return true
+        return true
+      }
+    }
+    return false
+  }
+
+  walk(root)
+  return result
+}
+Skip the char-array allocation when no masks overlap the visible slice
+Micro-optimization for large files.
+ts
+Copy
+// SandboxViewer codeSlice
+if (viewMode !== 'ast' && maskRanges.length) {
+  const visibleStart = sliceStart
+  const visibleEnd = sliceStart + visible.length
+  const applicable = maskRanges.filter(r => r.end > visibleStart && r.start < visibleEnd)
+  if (applicable.length) {
+    const chars = Array.from(visible)
+    for (const { start, end } of applicable) {
+      const s = Math.max(0, start - sliceStart)
+      const e = Math.min(visible.length, end - sliceStart)
+      for (let i = s; i < e; i++) if (chars[i] !== '\n') chars[i] = ' '
+    }
+    visible = chars.join('')
+  }
+}
+Multiline header normalization (optional, helps grading)
+Some Python headers can span lines inside parentheses. If you grade answers, normalize internal whitespace:
+ts
+Copy
+function normalizeHeaderForEval(s: string) {
+  return s.replace(/\s+/g, ' ').trim()
+}
+// Use in your quiz grading logic (likely in QuizViewer)
+Port these improvements to QuizViewer for consistency
+You fixed LessonViewer. If your quiz still asks only for the condition and still shows “while” in the viewer, mirror:
+The safe-reveal clamp.
+The onMaskRangesChange pipeline.
+Statement-anchored expected answers for header steps.
+Cross-language note (if you expand beyond Python)
+Your header slicing is Python-specific (colon). For JS/TS/C-like languages, you may want to derive the header without the block (up to ) and before {). You can generalize later by:
+Using the start of the block node (block/statement_block) to infer header end.
+Or token-aware slicing if you expose punctuation tokens.
+Verdict
+Your implementation is correct and clean for the Python case you’re targeting.
+With the two behavioral refinements (always mask for descendant steps, optional colon masking) and minor polish (early-return DFS, mask intersection check), it will be robust for nested/mixed constructs and scale nicely.
+If you’d like, I can sketch the corresponding changes for QuizViewer next so both views behave identically.
