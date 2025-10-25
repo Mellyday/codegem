@@ -56,7 +56,8 @@ const parserOptions: ParserOptions = {
   ],
 };
 
-const getExtension = (fileName: string) => {
+const getExtension = (fileName?: string) => {
+  if (!fileName) return "";
   const parts = fileName.split(".");
   return parts.length > 1 ? parts.pop()!.toLowerCase() : "";
 };
