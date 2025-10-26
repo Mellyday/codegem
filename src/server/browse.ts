@@ -105,7 +105,7 @@ export async function listPathChildren(
   const cursor = files.find({ ...match, ...(or.length ? { $or: or } : {}) }, {
     projection: { path: 1, extension: 1, language: 1, size: 1 },
   });
-  const docs = (await cursor.toArray()) as Array<{
+  const docs = (await cursor.toArray()) as unknown as Array<{
     path: string;
     extension?: string;
     language?: string;

@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
+import { SandboxViewer } from "@/src/components/SandboxViewer";
 
 type Params = { id: string; path?: string[] };
 
@@ -15,22 +16,12 @@ export default async function RepoBrowsePage({
     : null;
 
   if (file) {
-    // Simple file viewer
     return (
-      <main className="min-h-screen bg-rose-50 text-slate-900">
-        <section className="mx-auto max-w-4xl px-6 py-8">
-          <Breadcrumb kind="repo" id={id} prefix={prefix} />
-          <article className="mt-4 rounded-lg border border-rose-200 bg-white p-4">
-            <header className="mb-3 flex items-center justify-between">
-              <h1 className="text-lg font-semibold text-rose-700">{file.name}</h1>
-              <span className="text-xs text-rose-400">{file.language || file.extension || ""}</span>
-            </header>
-            <pre className="overflow-auto rounded bg-rose-50 p-3 text-sm text-slate-800">
-              <code>{file.sourceCode}</code>
-            </pre>
-          </article>
-        </section>
-      </main>
+      <SandboxViewer
+        sandboxId={`repo/${id}/${file.path}`}
+        fileName={file.path}
+        initialCode={file.sourceCode}
+      />
     );
   }
 
@@ -105,4 +96,3 @@ function Breadcrumb({
     </nav>
   );
 }
-
