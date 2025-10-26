@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
 import { getDb } from "../../../src/lib/mongodb";
+import { auth, clerkClient } from "@clerk/nextjs/server";
 
 type FilePayload = {
-  userId?: string; // TODO: integrate Clerk later
+  userId?: string; // Ignored; server enforces Clerk user
   repoId?: string | null;
   projectId?: string | null;
   path: string;
@@ -20,9 +21,22 @@ export async function POST(request: Request) {
     const db = await getDb();
     const files = db.collection("files");
     const now = new Date();
+    const { userId: clerkUserId } = await auth();
+
+    if (!clerkUserId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    // Validate user exists in Clerk (optional safety)
+    try {
+      const client = await clerkClient();
+      await client.users.getUser(clerkUserId);
+    } catch (e) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
     const doc = {
-      userId: body.userId ?? null,
+      // Enforce server-side Clerk userId
+      userId: clerkUserId,
       repoId: body.repoId ?? null,
       projectId: body.projectId ?? null,
       path: body.path,
