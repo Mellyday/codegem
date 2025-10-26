@@ -8,5 +8,6 @@ count.txt
 .nitro
 .tanstack
 .next/
+.tsbuildcache/
 # clerk configuration (can include secrets)
 /.clerk/

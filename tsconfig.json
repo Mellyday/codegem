@@ -11,6 +11,7 @@
     "moduleResolution": "bundler",
     "resolveJsonModule": true,
     "isolatedModules": true,
+    "tsBuildInfoFile": ".tsbuildcache/tsconfig.tsbuildinfo",
     "jsx": "react-jsx",
     "incremental": true,
     "plugins": [
