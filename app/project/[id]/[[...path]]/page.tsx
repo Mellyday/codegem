@@ -37,9 +37,12 @@ export default async function ProjectBrowsePage({
           {listing.dirs.map((d) => (
             <li key={`dir:${d}`} className="flex items-center justify-between px-4 py-3">
               <Link
-                href={`/project/${encodeURIComponent(id)}/${encodeURIComponent(
-                  [listing.prefix, d].filter(Boolean).join("/")
-                )}`}
+                href={`/project/${encodeURIComponent(id)}/${[listing.prefix, d]
+                  .filter(Boolean)
+                  .join("/")
+                  .split("/")
+                  .map(encodeURIComponent)
+                  .join("/")}`}
                 className="font-medium text-rose-700 hover:underline"
               >
                 {d}/
@@ -50,7 +53,10 @@ export default async function ProjectBrowsePage({
           {listing.files.map((f) => (
             <li key={`file:${f.path}`} className="flex items-center justify-between px-4 py-3">
               <Link
-                href={`/project/${encodeURIComponent(id)}/${encodeURIComponent(f.path)}`}
+                href={`/project/${encodeURIComponent(id)}/${f.path
+                  .split("/")
+                  .map(encodeURIComponent)
+                  .join("/")}`}
                 className="text-slate-800 hover:underline"
               >
                 {f.name}
