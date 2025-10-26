@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
+import { ExplorerActions } from "@/src/components/ExplorerActions";
 
 type Params = { id: string; path?: string[] };
 
@@ -31,6 +32,7 @@ export default async function ProjectBrowsePage({
     <main className="min-h-screen bg-rose-50 text-slate-900">
       <section className="mx-auto max-w-4xl px-6 py-8">
         <Breadcrumb kind="project" id={id} prefix={listing.prefix} />
+        <ExplorerActions kind="project" id={id} prefix={listing.prefix} />
         <ul className="mt-4 divide-y divide-rose-100 rounded-lg border border-rose-200 bg-white">
           {listing.dirs.map((d) => (
             <li key={`dir:${d}`} className="flex items-center justify-between px-4 py-3">

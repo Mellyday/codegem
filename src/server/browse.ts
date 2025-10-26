@@ -103,13 +103,14 @@ export async function listPathChildren(
   }
 
   const cursor = files.find({ ...match, ...(or.length ? { $or: or } : {}) }, {
-    projection: { path: 1, extension: 1, language: 1, size: 1 },
+    projection: { path: 1, extension: 1, language: 1, size: 1, isDir: 1 },
   });
   const docs = (await cursor.toArray()) as unknown as Array<{
     path: string;
     extension?: string;
     language?: string;
     size?: number;
+    isDir?: boolean;
   }>;
 
   // Build immediate children at this level
@@ -123,33 +124,24 @@ export async function listPathChildren(
     const parts = rel.split("/").filter((p) => p.length > 0);
     if (parts.length === 0) continue;
 
-    if (!prefix) {
-      // At root, doc.path like "a/b/c" => dir "a", or like "file.py" => file
-      if (parts.length === 1) {
-        filesOut.push({
-          name: parts[0],
-          path: doc.path,
-          extension: doc.extension,
-          language: doc.language,
-          size: doc.size,
-        });
-      } else {
-        dirSet.add(parts[0]);
-      }
+    const immediate = parts.length === 1;
+    if (doc.isDir) {
+      // Explicit folder marker: always contributes a directory at this level
+      dirSet.add(parts[0]);
+      continue;
+    }
+
+    if (immediate) {
+      // Immediate file in this directory
+      filesOut.push({
+        name: parts[0],
+        path: doc.path,
+        extension: doc.extension,
+        language: doc.language,
+        size: doc.size,
+      });
     } else {
-      // Under a prefix, rel is path without the prefix
-      if (parts.length === 1) {
-        // immediate file in this directory
-        filesOut.push({
-          name: parts[0],
-          path: doc.path,
-          extension: doc.extension,
-          language: doc.language,
-          size: doc.size,
-        });
-      } else {
-        dirSet.add(parts[0]);
-      }
+      dirSet.add(parts[0]);
     }
   }
 
@@ -183,6 +175,7 @@ export async function getFileAtPath(input: {
   }
   const doc = (await files.findOne(match)) as any;
   if (!doc) return null;
+  if ((doc as any).isDir) return null; // Do not treat folders as files
   const segments = doc.path.split("/");
   return {
     name: segments[segments.length - 1],
