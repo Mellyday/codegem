@@ -1,86 +1,97 @@
-import React, { useState, useEffect } from 'react'
-import { type TreeSitterAstNode } from '../lib/treeSitter'
-import { BookOpen, ChevronsRight, FileJson } from 'lucide-react'
-import { generateLessonPlan, type LessonStep } from '../lib/lessonPlanner'
+import React, { useState, useEffect } from "react";
+import { type TreeSitterAstNode } from "../lib/treeSitter";
+import { BookOpen, ChevronsRight, FileJson } from "lucide-react";
+import { generateLessonPlan, type LessonStep } from "../lib/lessonPlanner";
 
 export type LessonViewerProps = {
-  root: TreeSitterAstNode
-  code: string
-  fileKey?: { kind: 'repo' | 'project'; id: string; path: string }
-  onReturnToAst: () => void
-  onRevealEndIndexChange: (endIndex: number | undefined) => void
-  onMaskRangesChange: (ranges: { start: number; end: number }[]) => void
-}
+  root: TreeSitterAstNode;
+  code: string;
+  fileKey?: { kind: "repo" | "project"; id: string; path: string };
+  onReturnToAst: () => void;
+  onRevealEndIndexChange: (endIndex: number | undefined) => void;
+  onMaskRangesChange: (ranges: { start: number; end: number }[]) => void;
+};
 
 const textForNode = (node: TreeSitterAstNode, code: string): string => {
-  return code.substring(node.startIndex, node.endIndex)
-}
+  return code.substring(node.startIndex, node.endIndex);
+};
 
-type LessonHistoryItem = (LessonStep & { action?: 'next' | 'dig' })
+type LessonHistoryItem = LessonStep & { action?: "next" | "dig" };
 
-type MaskRange = { start: number; end: number }
+type MaskRange = { start: number; end: number };
 
 // Find nearest ancestor statement among the given types by walking down from root
 function findEnclosingByTypes(
   root: TreeSitterAstNode,
   target: TreeSitterAstNode,
-  types: string[],
+  types: string[]
 ): TreeSitterAstNode | undefined {
-  let found: TreeSitterAstNode | undefined
+  let found: TreeSitterAstNode | undefined;
   const walk = (n: TreeSitterAstNode) => {
-    const kids = n.namedChildren || []
+    const kids = n.namedChildren || [];
     for (const c of kids) {
       if (c.startIndex <= target.startIndex && c.endIndex >= target.endIndex) {
-        if (types.includes(c.type)) found = c
-        walk(c)
+        if (types.includes(c.type)) found = c;
+        walk(c);
       }
     }
-  }
-  walk(root)
-  return found
+  };
+  walk(root);
+  return found;
 }
 
 // Build mask for the leading keyword and compute answer text (header without trailing colon)
 function headerMaskAndAnswer(
   stmt: TreeSitterAstNode,
-  code: string,
+  code: string
 ): { masks: MaskRange[]; answerText: string } {
   const nonStructural = new Set([
-    'block',
-    'else_clause',
-    'elif_clause',
-    'finally_clause',
-    'except_clause',
-  ])
-  const firstNamed = (stmt.namedChildren || []).find((c) => !nonStructural.has(c.type))
-  const maskStart = stmt.startIndex
-  const maskEnd = firstNamed ? firstNamed.startIndex : stmt.startIndex
+    "block",
+    "else_clause",
+    "elif_clause",
+    "finally_clause",
+    "except_clause",
+  ]);
+  const firstNamed = (stmt.namedChildren || []).find(
+    (c) => !nonStructural.has(c.type)
+  );
+  const maskStart = stmt.startIndex;
+  const maskEnd = firstNamed ? firstNamed.startIndex : stmt.startIndex;
 
-  const full = code.substring(stmt.startIndex, stmt.endIndex)
-  const colonIdx = full.indexOf(':')
-  const answerText = (colonIdx >= 0 ? full.slice(0, colonIdx) : full.split('\n')[0]).trimEnd()
+  const full = code.substring(stmt.startIndex, stmt.endIndex);
+  const colonIdx = full.indexOf(":");
+  const answerText = (
+    colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
+  ).trimEnd();
 
-  const masks = maskEnd > maskStart ? [{ start: maskStart, end: maskEnd }] : []
-  return { masks, answerText }
+  const masks = maskEnd > maskStart ? [{ start: maskStart, end: maskEnd }] : [];
+  return { masks, answerText };
 }
 
 // Compute mask and statement-anchored answer for a step
 function maskAndAnswerForStep(
   step: LessonStep,
   root: TreeSitterAstNode,
-  code: string,
+  code: string
 ): { masks: MaskRange[]; answerText: string } {
-  const headerTypes = ['if_statement', 'elif_clause', 'while_statement', 'for_statement']
-  const role = step.semanticRole
-  const isHeaderNode = headerTypes.includes(step.node.type)
+  const headerTypes = [
+    "if_statement",
+    "elif_clause",
+    "while_statement",
+    "for_statement",
+  ];
+  const role = step.semanticRole;
+  const isHeaderNode = headerTypes.includes(step.node.type);
 
-  if (role === 'if_condition' || role === 'loop_condition' || isHeaderNode) {
-    const stmt = isHeaderNode ? step.node : findEnclosingByTypes(root, step.node, headerTypes)
+  if (role === "if_condition" || role === "loop_condition" || isHeaderNode) {
+    const stmt = isHeaderNode
+      ? step.node
+      : findEnclosingByTypes(root, step.node, headerTypes);
     if (stmt) {
-      return headerMaskAndAnswer(stmt, code)
+      return headerMaskAndAnswer(stmt, code);
     }
   }
-  return { masks: [], answerText: textForNode(step.node, code) }
+  return { masks: [], answerText: textForNode(step.node, code) };
 }
 
 export const LessonViewer: React.FC<LessonViewerProps> = ({
@@ -91,74 +102,86 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   onRevealEndIndexChange,
   onMaskRangesChange,
 }) => {
-  const [lessonQueue, setLessonQueue] = useState<LessonStep[]>([])
-  const [currentStep, setCurrentStep] = useState(0)
-  const [history, setHistory] = useState<LessonHistoryItem[]>([])
+  const [lessonQueue, setLessonQueue] = useState<LessonStep[]>([]);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [history, setHistory] = useState<LessonHistoryItem[]>([]);
 
   useEffect(() => {
     if (root) {
       // Prefer semantic steps over raw namedChildren
       // Hide function/class names by default for more useful prompts
-      const plan = generateLessonPlan(root, { includeNames: false })
-      setLessonQueue(plan)
-      setCurrentStep(0)
-      setHistory([])
+      const plan = generateLessonPlan(root, { includeNames: false });
+      setLessonQueue(plan);
+      setCurrentStep(0);
+      setHistory([]);
     }
-  }, [root])
+  }, [root]);
 
   useEffect(() => {
-    if (!lessonQueue.length) return
+    if (!lessonQueue.length) return;
 
     if (currentStep === 0) {
-      onRevealEndIndexChange(root.startIndex)
+      onRevealEndIndexChange(root.startIndex);
     } else {
-      const prevStep = lessonQueue[currentStep - 1]
-      const currStep = lessonQueue[currentStep]
+      const prevStep = lessonQueue[currentStep - 1];
+      const currStep = lessonQueue[currentStep];
       if (prevStep) {
-        const safeReveal = Math.min(prevStep.node.endIndex, currStep?.node.startIndex ?? prevStep.node.endIndex)
-        onRevealEndIndexChange(safeReveal)
+        const safeReveal = Math.min(
+          prevStep.node.endIndex,
+          currStep?.node.startIndex ?? prevStep.node.endIndex
+        );
+        onRevealEndIndexChange(safeReveal);
       }
     }
 
-    const curr = lessonQueue[currentStep]
+    const curr = lessonQueue[currentStep];
     if (curr) {
-      const { masks } = maskAndAnswerForStep(curr, root, code)
-      onMaskRangesChange(masks)
+      const { masks } = maskAndAnswerForStep(curr, root, code);
+      onMaskRangesChange(masks);
     } else {
-      onMaskRangesChange([])
+      onMaskRangesChange([]);
     }
-  }, [currentStep, lessonQueue, root, code, onRevealEndIndexChange, onMaskRangesChange])
+  }, [
+    currentStep,
+    lessonQueue,
+    root,
+    code,
+    onRevealEndIndexChange,
+    onMaskRangesChange,
+  ]);
 
   useEffect(() => {
     return () => {
-      onRevealEndIndexChange(undefined)
-      onMaskRangesChange([])
-    }
-  }, [onRevealEndIndexChange, onMaskRangesChange])
+      onRevealEndIndexChange(undefined);
+      onMaskRangesChange([]);
+    };
+  }, [onRevealEndIndexChange, onMaskRangesChange]);
 
   const handleNext = () => {
     if (currentStep < lessonQueue.length) {
-      const currentStepObject = lessonQueue[currentStep]
-      setHistory((prev) => [...prev, { ...currentStepObject, action: 'next' }])
-      setCurrentStep((prev) => prev + 1)
+      const currentStepObject = lessonQueue[currentStep];
+      setHistory((prev) => [...prev, { ...currentStepObject, action: "next" }]);
+      setCurrentStep((prev) => prev + 1);
     }
-  }
+  };
 
   const handleDigDeeper = () => {
     if (currentStep < lessonQueue.length) {
-      const stepToExpand = lessonQueue[currentStep]
-      const childrenSteps = generateLessonPlan(stepToExpand.node, { includeNames: false })
+      const stepToExpand = lessonQueue[currentStep];
+      const childrenSteps = generateLessonPlan(stepToExpand.node, {
+        includeNames: false,
+      });
 
       if (childrenSteps.length > 0) {
-        setHistory((prev) => [...prev, { ...stepToExpand, action: 'dig' }])
+        setHistory((prev) => [...prev, { ...stepToExpand, action: "dig" }]);
         setLessonQueue((prev) => {
-          const newQueue = [...prev]
-          newQueue.splice(currentStep, 1, ...childrenSteps)
-          return newQueue
-        })
+          const newQueue = [...prev];
+          newQueue.splice(currentStep, 1, ...childrenSteps);
+          return newQueue;
+        });
       }
     }
-  }
+  };
 
   const handleSaveCustomQuiz = async () => {
     try {
@@ -166,21 +189,21 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       const stepToCard = (
         step: LessonStep,
         order: number,
-        source: 'visited' | 'pending',
-        action: 'next' | 'dig' = 'next',
+        source: "visited" | "pending",
+        action: "next" | "dig" = "next"
       ) => {
-        let question = `What is this ${step.node.type}?`
+        let question = `What is this ${step.node.type}?`;
         switch (step.semanticRole) {
-          case 'return_type':
-            question = 'What is the return type of this function?'
-            break
-          case 'loop_condition':
-          case 'if_condition':
+          case "return_type":
+            question = "What is the return type of this function?";
+            break;
+          case "loop_condition":
+          case "if_condition":
             // Prefer full header instead of just the condition
-            question = 'Write the full header line'
-            break
+            question = "Write the full header line";
+            break;
         }
-        const { answerText } = maskAndAnswerForStep(step, root, code)
+        const { answerText } = maskAndAnswerForStep(step, root, code);
         return {
           order,
           type: step.node.type,
@@ -190,45 +213,52 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
           // extra metadata for smarter custom quizzes
           semanticRole: step.semanticRole,
           question,
-        }
-      }
+        };
+      };
 
       // Exclude any cards where we "dug deeper" to avoid duplicates
-      const filteredHistory = history.filter((h) => h.action !== 'dig')
+      const filteredHistory = history.filter((h) => h.action !== "dig");
       const visitedCards = filteredHistory.map((step, idx) =>
-        stepToCard(step, idx, 'visited', step.action ?? 'next'),
-      )
+        stepToCard(step, idx, "visited", step.action ?? "next")
+      );
       const pendingCards = lessonQueue
         .slice(currentStep)
-        .map((step, i) => stepToCard(step, filteredHistory.length + i, 'pending'))
+        .map((step, i) =>
+          stepToCard(step, filteredHistory.length + i, "pending")
+        );
 
-      const cards = [...visitedCards, ...pendingCards]
+      const cards = [...visitedCards, ...pendingCards];
 
       // Persist to server (MongoDB) via API
       const payload = {
         fileKey,
         name: `Custom quiz ${new Date().toLocaleString()}`,
-        type: 'CustomQuizV1',
+        type: "CustomQuizV1",
         rootNode: { type: root.type, text: textForNode(root, code) },
-        cards: cards.map((c) => ({ order: c.order, type: c.type, text: c.text, action: c.action })),
-      }
+        cards: cards.map((c) => ({
+          order: c.order,
+          type: c.type,
+          text: c.text,
+          action: c.action,
+        })),
+      };
 
-      const res = await fetch('/api/quizzes', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+      const res = await fetch("/api/quizzes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      alert('Custom quiz saved!')
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      alert("Custom quiz saved!");
     } catch (err) {
-      console.error('Failed to save custom quiz:', err)
-      alert('Failed to save custom quiz.')
+      console.error("Failed to save custom quiz:", err);
+      alert("Failed to save custom quiz.");
     }
-  }
+  };
 
-  const isComplete = currentStep >= lessonQueue.length
-  const nextStep = !isComplete ? lessonQueue[currentStep] : null
-  const nextNode = nextStep?.node
+  const isComplete = currentStep >= lessonQueue.length;
+  const nextStep = !isComplete ? lessonQueue[currentStep] : null;
+  const nextNode = nextStep?.node;
 
   if (isComplete) {
     return (
@@ -262,7 +292,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
           </button>
         </div>
       </div>
-    )
+    );
   }
 
   return (
@@ -276,14 +306,14 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         </div>
       </div>
 
-      <div className="flex-grow rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+      <div className="grow rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
         <div className="rounded-md bg-white p-3 border border-slate-200">
           <p className="text-xs text-slate-500 font-mono mb-1">
             {nextNode?.type}
           </p>
           <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto">
-            <code>{nextNode ? textForNode(nextNode, code) : ''}</code>
+            <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
           </pre>
         </div>
       </div>
@@ -316,5 +346,5 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         </button>
       </div>
     </div>
-  )
-}
+  );
+};

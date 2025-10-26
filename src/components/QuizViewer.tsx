@@ -424,10 +424,11 @@ export const QuizViewer = ({
                     <button
                       type="button"
                       className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
-                      onClick={() => {
-                        const next = savedCustoms.filter((x) => x.id !== q.id)
-                        setSavedCustoms(next)
-                        saveCustomQuizzes(next)
+                      onClick={async () => {
+                        try {
+                          await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, { method: 'DELETE' })
+                        } catch {}
+                        setSavedCustoms(await loadSavedCustomQuizzesFromApi(fileKey))
                       }}
                     >
                       Delete

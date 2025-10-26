@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "../../../src/lib/mongodb";
+import { ObjectId } from "mongodb";
 import { auth, clerkClient } from "@clerk/nextjs/server";
 
 type QuizCard = {
@@ -133,6 +134,36 @@ export async function GET(request: Request) {
       }));
     const list = await cursor.toArray();
     return NextResponse.json({ quizzes: list });
+  } catch (error) {
+    return NextResponse.json({ error: String(error) }, { status: 500 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const id = url.searchParams.get("id");
+    const { userId: clerkUserId } = await auth();
+    if (!clerkUserId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (!id) {
+      return NextResponse.json({ error: "Missing id" }, { status: 400 });
+    }
+    const db = await getDb();
+    const quizzes = db.collection("quizzes");
+    const _id = (() => {
+      try {
+        return new ObjectId(id);
+      } catch {
+        return id as any; // fallback in case ids were stored as strings
+      }
+    })();
+    const res = await quizzes.deleteOne({ _id, userId: clerkUserId } as any);
+    if (res.deletedCount === 0) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+    return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
