@@ -42,6 +42,8 @@ export async function POST(request: Request) {
 
     // Resolve fileId if only fileKey is provided
     let fileId: any = body.fileId;
+    // Capture origin metadata (repo/project and full path)
+    let origin: { kind: "repo" | "project"; id: any; path: string } | undefined;
     if (!fileId && body.fileKey) {
       const match: any = { userId: clerkUserId, path: body.fileKey.path };
       if (body.fileKey.kind === "repo") {
@@ -58,6 +60,11 @@ export async function POST(request: Request) {
         );
       }
       fileId = (fileDoc as any)._id;
+      origin = {
+        kind: body.fileKey.kind,
+        id: body.fileKey.id as any,
+        path: body.fileKey.path,
+      };
     }
     if (!fileId) {
       return NextResponse.json(
@@ -66,10 +73,29 @@ export async function POST(request: Request) {
       );
     }
 
+    // If origin wasn't provided via fileKey but we have fileId, try to infer from files collection
+    if (!origin) {
+      try {
+        const fileDoc = await files.findOne({ _id: fileId as any }, {
+          projection: { repoId: 1, projectId: 1, path: 1 },
+        });
+        if (fileDoc) {
+          const kind = (fileDoc as any).repoId ? "repo" : "project";
+          const id = (fileDoc as any).repoId ?? (fileDoc as any).projectId;
+          if (id && (fileDoc as any).path) {
+            origin = { kind, id, path: (fileDoc as any).path };
+          }
+        }
+      } catch {
+        // ignore; origin remains undefined if lookup fails
+      }
+    }
+
     const now = new Date();
     const doc = {
       userId: clerkUserId,
       fileId,
+      ...(origin ? { origin } : {}),
       name: body.name,
       type: body.type,
       rootNode: { type: body.rootNode.type, text: body.rootNode.text },
@@ -130,6 +156,7 @@ export async function GET(request: Request) {
         type: (q as any).type,
         rootNode: (q as any).rootNode,
         cards: (q as any).cards,
+        origin: (q as any).origin,
         createdAt: (q as any).createdAt,
       }));
     const list = await cursor.toArray();
