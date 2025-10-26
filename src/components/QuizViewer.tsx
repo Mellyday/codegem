@@ -8,6 +8,8 @@ export type QuizViewerProps = {
   root: TreeSitterAstNode
   // Full source code for computing exact text of nodes
   code?: string
+  // File context to load saved custom quizzes
+  fileKey?: { kind: 'repo' | 'project'; id: string; path: string }
   mode: QuizMode
   onStart: () => void
   onCancel: () => void
@@ -128,31 +130,39 @@ type SavedCustomQuiz = {
   cards: SavedCustomQuizCard[]
 }
 
-const STORAGE_KEY = 'codegem:custom-quizzes'
-
-const loadSavedCustomQuizzes = (): SavedCustomQuiz[] => {
+async function loadSavedCustomQuizzesFromApi(fileKey?: {
+  kind: 'repo' | 'project'
+  id: string
+  path: string
+}): Promise<SavedCustomQuiz[]> {
   try {
-    const raw =
-      typeof window !== 'undefined'
-        ? window.localStorage.getItem(STORAGE_KEY)
-        : null
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (Array.isArray(parsed))
-      return parsed.filter((q) => q && q.kind === 'custom-quiz')
-    return []
+    if (!fileKey) return []
+    const qs = new URLSearchParams({
+      kind: fileKey.kind,
+      id: fileKey.id,
+      path: fileKey.path,
+    })
+    const res = await fetch(`/api/quizzes?${qs.toString()}`, { method: 'GET' })
+    if (!res.ok) return []
+    const data = await res.json()
+    const list = Array.isArray(data.quizzes) ? data.quizzes : []
+    const out: SavedCustomQuiz[] = list.map((q: any) => ({
+      id: String(q.id || ''),
+      kind: 'custom-quiz',
+      createdAt: q.createdAt ? new Date(q.createdAt).toISOString() : new Date().toISOString(),
+      root: { type: q.rootNode?.type || 'unknown', text: q.rootNode?.text || '' },
+      totalCards: Array.isArray(q.cards) ? q.cards.length : 0,
+      cards: (q.cards || []).map((c: any) => ({
+        order: c.order,
+        type: c.type,
+        text: c.text,
+        source: 'visited' as const,
+        action: c.action === 'dig' ? 'dig' : 'next',
+      })),
+    }))
+    return out
   } catch {
     return []
-  }
-}
-
-const saveCustomQuizzes = (quizzes: SavedCustomQuiz[]) => {
-  try {
-    if (typeof window !== 'undefined') {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(quizzes))
-    }
-  } catch {
-    // ignore
   }
 }
 
@@ -219,6 +229,7 @@ const generateQuestionsFromCustom = (
 export const QuizViewer = ({
   root,
   code,
+  fileKey,
   mode,
   onStart,
   onCancel,
@@ -242,8 +253,14 @@ export const QuizViewer = ({
   >(undefined)
 
   useEffect(() => {
-    setSavedCustoms(loadSavedCustomQuizzes())
-  }, [mode])
+    let cancelled = false
+    loadSavedCustomQuizzesFromApi(fileKey).then((list) => {
+      if (!cancelled) setSavedCustoms(list)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, fileKey])
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([])
@@ -366,7 +383,7 @@ export const QuizViewer = ({
             <button
               type="button"
               className="text-xs text-slate-500 underline decoration-dotted"
-              onClick={() => setSavedCustoms(loadSavedCustomQuizzes())}
+              onClick={async () => setSavedCustoms(await loadSavedCustomQuizzesFromApi(fileKey))}
             >
               Refresh
             </button>

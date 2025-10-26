@@ -28,6 +28,19 @@ export const SandboxViewer = ({
   fileName,
   initialCode,
 }: SandboxViewerProps) => {
+  // Derive fileKey from sandboxId: format "repo/<id>/<path>" or "project/<id>/<path>"
+  const fileKey = useMemo(() => {
+    try {
+      const parts = sandboxId.split("/");
+      const kind = parts[0] as "repo" | "project";
+      const id = parts[1];
+      const path = parts.slice(2).join("/");
+      if ((kind === "repo" || kind === "project") && id && path) {
+        return { kind, id, path } as const;
+      }
+    } catch {}
+    return undefined;
+  }, [sandboxId]);
   const [state, setState] = useState<LoadingState>({ status: "idle" });
   const [parseResult, setParseResult] = useState<ParseResult | undefined>(
     undefined
@@ -442,6 +455,7 @@ export const SandboxViewer = ({
                       (parseResult.ast as TreeSitterAstNode)
                     }
                     code={state.code}
+                    fileKey={fileKey}
                     mode={
                       viewMode.replace("quiz_", "") as
                         | "setup"
@@ -465,6 +479,7 @@ export const SandboxViewer = ({
                       (parseResult.ast as TreeSitterAstNode)
                     }
                     code={state.code}
+                    fileKey={fileKey}
                     onReturnToAst={() => setViewMode("ast")}
                     onRevealEndIndexChange={setRevealEndIndex}
                     onMaskRangesChange={setMaskRanges}

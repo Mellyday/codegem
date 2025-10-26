@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { type TreeSitterAstNode } from '../lib/treeSitter'
 import { BookOpen, ChevronsRight, FileJson } from 'lucide-react'
-import { randomString } from '../lib/utils'
 import { generateLessonPlan, type LessonStep } from '../lib/lessonPlanner'
 
 export type LessonViewerProps = {
   root: TreeSitterAstNode
   code: string
+  fileKey?: { kind: 'repo' | 'project'; id: string; path: string }
   onReturnToAst: () => void
   onRevealEndIndexChange: (endIndex: number | undefined) => void
   onMaskRangesChange: (ranges: { start: number; end: number }[]) => void
@@ -86,6 +86,7 @@ function maskAndAnswerForStep(
 export const LessonViewer: React.FC<LessonViewerProps> = ({
   root,
   code,
+  fileKey,
   onReturnToAst,
   onRevealEndIndexChange,
   onMaskRangesChange,
@@ -159,7 +160,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     }
   }
 
-  const handleSaveCustomQuiz = () => {
+  const handleSaveCustomQuiz = async () => {
     try {
       // Helper to convert a LessonStep into a quiz card with semantic context
       const stepToCard = (
@@ -203,24 +204,21 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
       const cards = [...visitedCards, ...pendingCards]
 
-      const quiz = {
-        id: `${Date.now().toString(36)}_${randomString(6)}`,
-        kind: 'custom-quiz' as const,
-        createdAt: new Date().toISOString(),
-        root: { type: root.type, text: textForNode(root, code) },
-        totalCards: cards.length,
-        cards,
+      // Persist to server (MongoDB) via API
+      const payload = {
+        fileKey,
+        name: `Custom quiz ${new Date().toLocaleString()}`,
+        type: 'CustomQuizV1',
+        rootNode: { type: root.type, text: textForNode(root, code) },
+        cards: cards.map((c) => ({ order: c.order, type: c.type, text: c.text, action: c.action })),
       }
 
-      const STORAGE_KEY = 'codegem:custom-quizzes'
-      const existingRaw = (typeof window !== 'undefined')
-        ? window.localStorage.getItem(STORAGE_KEY)
-        : null
-      const existing: any[] = existingRaw ? JSON.parse(existingRaw) : []
-      existing.push(quiz)
-      if (typeof window !== 'undefined') {
-        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(existing))
-      }
+      const res = await fetch('/api/quizzes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
       alert('Custom quiz saved!')
     } catch (err) {
       console.error('Failed to save custom quiz:', err)
