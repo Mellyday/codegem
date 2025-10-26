@@ -56,6 +56,11 @@ export const SandboxViewer = ({
   const [viewMode, setViewMode] = useState<
     "ast" | "quiz_setup" | "quiz_active" | "quiz_complete" | "lesson"
   >("ast");
+  // Persist view mode across remounts per file to avoid unexpected resets
+  const storageKey = useMemo(
+    () => (fileName ? `sandbox-viewer:${sandboxId}:${fileName}` : undefined),
+    [sandboxId, fileName]
+  );
   // Unified reveal state used by both Quiz and Lesson: absolute end index in file
   const [revealEndIndex, setRevealEndIndex] = useState<number | undefined>(
     undefined
@@ -139,6 +144,64 @@ export const SandboxViewer = ({
       setMaskRanges([]);
     }
   }, [zoomRootTs, viewMode]);
+
+  // Restore persisted view mode on mount/prop change
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      if (raw) {
+        const data = JSON.parse(raw);
+        if (
+          data &&
+          typeof data.viewMode === "string" &&
+          [
+            "ast",
+            "quiz_setup",
+            "quiz_active",
+            "quiz_complete",
+            "lesson",
+          ].includes(data.viewMode)
+        ) {
+          setViewMode(data.viewMode as typeof viewMode);
+        }
+        if (
+          data &&
+          (typeof data.revealEndIndex === "number" ||
+            typeof data.revealEndIndex === "undefined")
+        ) {
+          setRevealEndIndex(data.revealEndIndex);
+        }
+        if (data && Array.isArray(data.maskRanges)) {
+          setMaskRanges(
+            data.maskRanges.filter(
+              (r: any) =>
+                r && typeof r.start === "number" && typeof r.end === "number"
+            )
+          );
+        }
+      }
+    } catch {
+      // ignore restore errors
+    }
+    // We only want to run on storageKey changes
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [storageKey]);
+
+  // Persist view mode and reveal/mask state so accidental remounts don't reset context
+  useEffect(() => {
+    if (!storageKey) return;
+    try {
+      const payload = {
+        viewMode,
+        revealEndIndex,
+        maskRanges,
+      };
+      sessionStorage.setItem(storageKey, JSON.stringify(payload));
+    } catch {
+      // ignore persist errors
+    }
+  }, [storageKey, viewMode, revealEndIndex, maskRanges]);
 
   // Helper: check if a Tree-sitter node covers a given row
   const nodeCoversRow = (node: TreeSitterAstNode, row: number): boolean =>
