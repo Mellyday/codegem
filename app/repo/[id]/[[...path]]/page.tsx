@@ -1,4 +1,5 @@
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";

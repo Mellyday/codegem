@@ -1,4 +1,5 @@
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 import Link from "next/link";
 import { listReposAndProjects } from "@/src/server/browse";
 
