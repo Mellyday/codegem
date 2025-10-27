@@ -1,14 +1,23 @@
-import { clerkMiddleware } from "@clerk/nextjs/server";
+import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
+import { NextResponse } from "next/server";
 
-export default clerkMiddleware(async (_auth, req) => {
-  // Always allow the unauthorized page to render to avoid redirect loops
-  const pathname = req.nextUrl?.pathname || new URL(req.url).pathname;
-  if (pathname.startsWith("/unauthorized")) return;
+const isPublicRoute = createRouteMatcher([
+  "/",
+  "/unauthorized(.*)",
+  "/sign-in(.*)",
+  "/sign-up(.*)",
+]);
+
+export default clerkMiddleware((auth, req) => {
+  if (!isPublicRoute(req)) {
+    auth().protect();
+  }
+  return NextResponse.next();
 });
 
 export const config = {
   matcher: [
-    "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
+    "/((?!_next|.*\\..*|favicon.ico).*)",
     "/(api|trpc)(.*)",
   ],
 };

@@ -34,8 +34,7 @@ export async function POST(request: Request) {
     }
     // Optional: validate user exists in Clerk to harden
     try {
-      const client = await clerkClient();
-      await client.users.getUser(clerkUserId);
+      await clerkClient.users.getUser(clerkUserId);
     } catch {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
