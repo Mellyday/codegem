@@ -308,14 +308,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
       <div className="grow rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
-        <div className="rounded-md bg-white p-3 border border-slate-200">
-          <p className="text-xs text-slate-500 font-mono mb-1">
-            {nextNode?.type}
-          </p>
-          <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto">
-            <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
-          </pre>
-        </div>
+        <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
       </div>
 
       <div className="flex justify-end gap-2">
