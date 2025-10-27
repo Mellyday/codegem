@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { ChevronsLeft, ChevronsRight } from 'lucide-react'
 import type { TreeSitterAstNode } from '../lib/treeSitter'
 import { randomString, shuffleArray } from '../lib/utils'
 
@@ -480,6 +481,52 @@ export const QuizViewer = ({
       }
     }
 
+    const prev = () => {
+      if (current > 0) {
+        const idx = current - 1
+        setCurrent(idx)
+        setSelected(undefined)
+        const q = questions[idx]
+        if (q && typeof q.revealEndBeforeChild === 'number') {
+          onRevealChange?.(q.revealEndBeforeChild)
+        } else {
+          onRevealChange?.(undefined)
+        }
+      }
+    }
+
+    const jumpTo = (idx: number) => {
+      if (!Number.isFinite(idx)) return
+      const clamped = Math.min(Math.max(0, Math.floor(idx)), Math.max(0, total - 1))
+      setCurrent(clamped)
+      setSelected(undefined)
+      const q = questions[clamped]
+      if (q && typeof q.revealEndBeforeChild === 'number') {
+        onRevealChange?.(q.revealEndBeforeChild)
+      } else {
+        onRevealChange?.(undefined)
+      }
+    }
+
+    const stepNavItems = (() => {
+      const n = total
+      const cur = current
+      if (n <= 1) return [0]
+      const items: Array<number | '…'> = []
+      const add = (x: number | '…') => items.push(x)
+      const windowRadius = 2
+      const left = Math.max(0, cur - windowRadius)
+      const right = Math.min(n - 1, cur + windowRadius)
+      add(0)
+      if (left > 1) add('…')
+      for (let i = left; i <= right; i++) {
+        if (i !== 0 && i !== n - 1) add(i)
+      }
+      if (right < n - 2) add('…')
+      if (n - 1 !== 0) add(n - 1)
+      return items
+    })()
+
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -495,6 +542,102 @@ export const QuizViewer = ({
           </div>
           <div className="text-xs text-slate-500">
             Q {current + 1} / {total} · Score {score}
+          </div>
+        </div>
+
+        {/* Progress bar */}
+        <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200">
+          <div
+            className="h-full bg-amber-500 transition-all"
+            style={{ width: `${total ? ((current + 1) / total) * 100 : 0}%` }}
+          />
+        </div>
+
+        {/* Step navigator: chips + slider + go-to */}
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1 -mx-2 px-2">
+              {stepNavItems.map((it, idx) => (
+                typeof it === 'number' ? (
+                  <button
+                    key={`s-${idx}-${it}`}
+                    type="button"
+                    onClick={() => jumpTo(it)}
+                    className={
+                      it === current
+                        ? 'min-w-9 px-2 py-1 rounded-md bg-amber-500 text-white text-xs font-medium shadow'
+                        : 'min-w-9 px-2 py-1 rounded-md border border-slate-200 bg-white text-slate-700 text-xs shadow-sm hover:bg-slate-50'
+                    }
+                  >
+                    {it + 1}
+                  </button>
+                ) : (
+                  <span key={`e-${idx}`} className="px-1 text-slate-400">{it}</span>
+                )
+              ))}
+            </div>
+            <div className="hidden sm:flex items-center gap-2">
+              <label htmlFor="q-range" className="text-xs text-slate-500 whitespace-nowrap">Jump</label>
+              <input
+                id="q-range"
+                type="range"
+                min={0}
+                max={Math.max(0, total - 1)}
+                value={current}
+                onChange={(e) => jumpTo(Number(e.target.value))}
+                className="h-1.5 w-40 cursor-pointer appearance-none rounded bg-slate-200 accent-amber-500"
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              onClick={prev}
+              disabled={current <= 0}
+            >
+              <ChevronsLeft className="h-4 w-4" />
+              Prev
+            </button>
+            <div className="flex items-center gap-2">
+              <label htmlFor="q-input" className="text-xs text-slate-500">Go to</label>
+              <input
+                id="q-input"
+                type="number"
+                min={1}
+                max={Math.max(1, total)}
+                defaultValue={current + 1}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    const v = (e.target as HTMLInputElement).valueAsNumber
+                    if (Number.isFinite(v)) jumpTo(v - 1)
+                  }
+                }}
+                className="w-20 rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
+              />
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+                onClick={(e) => {
+                  const input = (e.currentTarget.previousElementSibling as HTMLInputElement) ?? null
+                  if (input) {
+                    const v = input.valueAsNumber
+                    if (Number.isFinite(v)) jumpTo(v - 1)
+                  }
+                }}
+              >
+                Go
+              </button>
+            </div>
+            <button
+              type="button"
+              className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50"
+              onClick={next}
+              disabled={!answered}
+            >
+              {current + 1 >= total ? 'Finish' : 'Next'}
+              <ChevronsRight className="h-4 w-4" />
+            </button>
           </div>
         </div>
 
@@ -542,16 +685,7 @@ export const QuizViewer = ({
             </div>
           )}
 
-          <div className="mt-4 flex justify-end">
-            <button
-              type="button"
-              className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50"
-              onClick={next}
-              disabled={!answered}
-            >
-              {current + 1 >= total ? 'Finish' : 'Next'}
-            </button>
-          </div>
+          {/* Bottom actions now handled in the header nav above */}
         </div>
       </div>
     )

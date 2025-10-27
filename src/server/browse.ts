@@ -45,8 +45,15 @@ async function getOptionalUserId(): Promise<string | null> {
 export async function listReposAndProjects(): Promise<TopLevelListing> {
   const userId = await getOptionalUserId();
   if (!userId) return { repos: [], projects: [] };
-  const db = await getDb();
-  const files = db.collection("files");
+  // Be resilient when MongoDB is unavailable (e.g., offline or DNS SRV blocked)
+  // If DB connection fails, return empty lists instead of erroring the page.
+  let files: any | null = null;
+  try {
+    const db = await getDb();
+    files = db.collection("files");
+  } catch {
+    return { repos: [], projects: [] };
+  }
 
   // Distinct repoIds (excluding null)
   const repoIds = (await files
