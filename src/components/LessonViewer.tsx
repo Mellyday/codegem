@@ -308,7 +308,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
       <div className="grow rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
-        <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
+        <code className="block whitespace-pre-wrap break-words">{nextNode ? textForNode(nextNode, code) : ""}</code>
       </div>
 
       <div className="flex justify-end gap-2">
