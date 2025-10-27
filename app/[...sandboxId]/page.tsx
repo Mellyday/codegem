@@ -1,3 +1,4 @@
+export const runtime = 'nodejs';
 import Link from "next/link";
 import { readSandbox } from "@/src/server/sandbox";
 import { SandboxViewer } from "@/src/components/SandboxViewer";

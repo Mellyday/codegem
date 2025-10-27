@@ -1,3 +1,4 @@
+export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { getDb } from "@/src/lib/mongodb";
 import { auth } from "@clerk/nextjs/server";

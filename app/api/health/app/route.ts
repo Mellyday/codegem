@@ -1,3 +1,4 @@
+export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getDb } from "@/src/lib/mongodb";
@@ -40,4 +41,3 @@ export async function GET() {
 
   return NextResponse.json({ env, authUserId, db: dbStatus });
 }
-

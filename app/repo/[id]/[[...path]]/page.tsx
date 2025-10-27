@@ -1,3 +1,4 @@
+export const runtime = 'nodejs';
 import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
