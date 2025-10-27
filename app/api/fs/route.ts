@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/src/lib/mongodb";
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 
 type FsAction =
   | {
@@ -37,12 +37,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Optionally confirm user exists in Clerk
-    try {
-      await clerkClient.users.getUser(userId);
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    // Session is already validated by Clerk via auth(); no extra lookup needed
 
     if (!body || (body.action !== "create_folder" && body.action !== "create_snippet")) {
       return NextResponse.json({ error: "Invalid action" }, { status: 400 });

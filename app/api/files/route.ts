@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getDb } from "../../../src/lib/mongodb";
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 
 type FilePayload = {
   userId?: string; // Ignored; server enforces Clerk user
@@ -26,12 +26,7 @@ export async function POST(request: Request) {
     if (!clerkUserId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    // Validate user exists in Clerk (optional safety)
-    try {
-      await clerkClient.users.getUser(clerkUserId);
-    } catch (e) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    // Session is already validated by Clerk via auth(); no extra lookup needed
 
     const doc = {
       // Enforce server-side Clerk userId

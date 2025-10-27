@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getDb } from "../../../src/lib/mongodb";
 import { ObjectId } from "mongodb";
-import { auth, clerkClient } from "@clerk/nextjs/server";
+import { auth } from "@clerk/nextjs/server";
 
 type QuizCard = {
   order: number;
@@ -32,12 +32,7 @@ export async function POST(request: Request) {
     if (!clerkUserId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    // Optional: validate user exists in Clerk to harden
-    try {
-      await clerkClient.users.getUser(clerkUserId);
-    } catch {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    }
+    // Session is already validated by Clerk via auth(); no extra lookup needed
 
     // Resolve fileId if only fileKey is provided
     let fileId: any = body.fileId;
