@@ -347,17 +347,23 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200">
           <div
             className="h-full bg-amber-500 transition-all"
-            style={{ width: `${totalSteps ? ((currentStep + 1) / totalSteps) * 100 : 0}%` }}
+            style={{
+              width: `${
+                totalSteps ? ((currentStep + 1) / totalSteps) * 100 : 0
+              }%`,
+            }}
           />
         </div>
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
-        <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
+        <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto">
+          <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
+        </pre>
       </div>
 
       <div className="flex flex-col gap-3">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1 -mx-2 px-2">
-            {stepNavItems.map((it, idx) => (
+            {stepNavItems.map((it, idx) =>
               typeof it === "number" ? (
                 <button
                   key={`s-${idx}-${it}`}
@@ -372,12 +378,19 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
                   {it + 1}
                 </button>
               ) : (
-                <span key={`e-${idx}`} className="px-1 text-slate-400">{it}</span>
+                <span key={`e-${idx}`} className="px-1 text-slate-400">
+                  {it}
+                </span>
               )
-            ))}
+            )}
           </div>
           <div className="hidden sm:flex items-center gap-2">
-            <label htmlFor="step-range" className="text-xs text-slate-500 whitespace-nowrap">Jump</label>
+            <label
+              htmlFor="step-range"
+              className="text-xs text-slate-500 whitespace-nowrap"
+            >
+              Jump
+            </label>
             <input
               id="step-range"
               type="range"
@@ -402,7 +415,9 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
               Prev
             </button>
             <div className="flex items-center gap-2">
-              <label htmlFor="step-input" className="text-xs text-slate-500">Go to</label>
+              <label htmlFor="step-input" className="text-xs text-slate-500">
+                Go to
+              </label>
               <input
                 id="step-input"
                 type="number"
@@ -421,7 +436,9 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
                 type="button"
                 className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
                 onClick={(e) => {
-                  const input = (e.currentTarget.previousElementSibling as HTMLInputElement) ?? null;
+                  const input =
+                    (e.currentTarget
+                      .previousElementSibling as HTMLInputElement) ?? null;
                   if (input) {
                     const v = input.valueAsNumber;
                     if (Number.isFinite(v)) jumpToStep(v - 1);
