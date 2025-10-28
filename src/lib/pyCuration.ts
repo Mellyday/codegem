@@ -839,6 +839,23 @@ export const buildCuratedSections = (
   }
 };
 
+// Utility: find the deepest named node that covers a given character span
+export function findDeepestNodeCoveringSpan(
+  root: TreeSitterAstNode,
+  start: number,
+  end: number
+): TreeSitterAstNode | undefined {
+  let best: TreeSitterAstNode | undefined;
+  const dfs = (n: TreeSitterAstNode) => {
+    if (n.startIndex <= start && n.endIndex >= end) {
+      best = n;
+      for (const c of n.namedChildren || []) dfs(c);
+    }
+  };
+  dfs(root);
+  return best;
+}
+
 // Utility: find a node by its exact character span
 export function findNodeBySpan(
   root: TreeSitterAstNode,

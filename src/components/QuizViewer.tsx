@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
-import { findNodeBySpan, cardsFromCuratedSections } from "../lib/pyCuration";
+import {
+  cardsFromCuratedSections,
+  findDeepestNodeCoveringSpan,
+} from "../lib/pyCuration";
 
 type QuizMode = "setup" | "active" | "complete";
 
@@ -1183,6 +1186,9 @@ export const QuizViewer = ({
           </div>
           <div className="text-xs text-slate-500">
             Q {current + 1} / {total} · Score {score}
+            {marked.size > 0 && (
+              <span className="ml-2 text-amber-600">· Marked {marked.size}</span>
+            )}
           </div>
         </div>
 
@@ -1408,19 +1414,33 @@ export const QuizViewer = ({
     code?: string
   ): TreeSitterAstNode | undefined {
     if (!root) return undefined;
-    const start = q.revealEndBeforeChild;
-    const end = q.revealEndAfterChild;
-    if (typeof start === "number" && typeof end === "number") {
-      const exact = findNodeBySpan(root, start, end);
-      if (exact) return exact;
+
+    // Prefer explicit reveal spans (child range)
+    if (
+      typeof q.revealEndBeforeChild === "number" &&
+      typeof q.revealEndAfterChild === "number"
+    ) {
+      const n = findDeepestNodeCoveringSpan(
+        root,
+        q.revealEndBeforeChild,
+        q.revealEndAfterChild
+      );
+      if (n) return n;
     }
+
+    // Fallback: locate answer text and resolve deepest covering node
     if (code && q.answerLabel) {
-      const pos = code.indexOf(q.answerLabel);
-      if (pos >= 0) {
-        const exact = findNodeBySpan(root, pos, pos + q.answerLabel.length);
-        if (exact) return exact;
+      const idx = code.indexOf(q.answerLabel);
+      if (idx >= 0) {
+        const n = findDeepestNodeCoveringSpan(
+          root,
+          idx,
+          idx + q.answerLabel.length
+        );
+        if (n) return n;
       }
     }
+
     return undefined;
   }
 
@@ -1495,95 +1515,51 @@ export const QuizViewer = ({
       </div>
       <div className="flex justify-end gap-2">
         {code && (
-          <>
-            <button
-              type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={async () => {
-                try {
-                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
-                  const base = baseCardsFromQuestions(questions, code);
-                  const derived = derivedCardsFromMarks(markedIdxs, questions, root, code);
-                  const cards = [...base, ...derived].map((c, i) => ({ ...c, order: i }));
-
-                  const payload = {
-                    fileKey,
-                    name: `Custom quiz (merged) ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1",
-                    rootNode: {
-                      type: root.type,
-                      text: code.substring(root.startIndex, root.endIndex),
-                    },
-                    cards: cards.map(({ order, type, text, action, question }) => ({
-                      order,
-                      type,
-                      text,
-                      action,
-                      question,
-                    })),
-                  } as any;
-
-                  const res = await fetch("/api/quizzes", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                  });
-                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  alert("Derived quiz (merged) saved!");
-                } catch (err) {
-                  console.error(err);
-                  alert("Failed to save derived quiz.");
+          <button
+            type="button"
+            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+            disabled={marked.size === 0}
+            onClick={async () => {
+              try {
+                const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
+                const derived = derivedCardsFromMarks(markedIdxs, questions, root, code);
+                if (derived.length === 0) {
+                  alert("No derived questions could be generated from the marked items.");
+                  return;
                 }
-              }}
-            >
-              Save derived quiz (merge with current)
-            </button>
+                const cards = derived.map((c, i) => ({ ...c, order: i }));
+                const payload = {
+                  fileKey,
+                  name: `Custom drill ${new Date().toLocaleString()}`,
+                  type: "CustomQuizV1",
+                  rootNode: {
+                    type: root.type,
+                    text: code.substring(root.startIndex, root.endIndex),
+                  },
+                  cards: cards.map(({ order, type, text, action, question }) => ({
+                    order,
+                    type,
+                    text,
+                    action,
+                    question,
+                  })),
+                } as any;
 
-            <button
-              type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={async () => {
-                try {
-                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
-                  const derived = derivedCardsFromMarks(markedIdxs, questions, root, code);
-                  if (derived.length === 0) {
-                    alert("No marked items produced derived questions.");
-                    return;
-                  }
-                  const cards = derived.map((c, i) => ({ ...c, order: i }));
-                  const payload = {
-                    fileKey,
-                    name: `Custom quiz (drill only) ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1",
-                    rootNode: {
-                      type: root.type,
-                      text: code.substring(root.startIndex, root.endIndex),
-                    },
-                    cards: cards.map(({ order, type, text, action, question }) => ({
-                      order,
-                      type,
-                      text,
-                      action,
-                      question,
-                    })),
-                  } as any;
-
-                  const res = await fetch("/api/quizzes", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                  });
-                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  alert("Drill-only quiz saved!");
-                } catch (err) {
-                  console.error(err);
-                  alert("Failed to save drill-only quiz.");
-                }
-              }}
-            >
-              Save drill-only quiz
-            </button>
-          </>
+                const res = await fetch("/api/quizzes", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify(payload),
+                });
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                alert("Drill-only custom quiz saved!");
+              } catch (err) {
+                console.error(err);
+                alert("Failed to save drill-only quiz.");
+              }
+            }}
+          >
+            Save marked as new custom quiz
+          </button>
         )}
         {!selectedCustom && (
           <button
