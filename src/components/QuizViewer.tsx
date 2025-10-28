@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { BookOpen, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
 import {
@@ -10,7 +10,7 @@ import {
 } from "../lib/pyCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
-import { buildHeuristicQuiz } from "../lib/pyQuiz";
+import { computeAstPath, buildHeuristicQuiz } from "../lib/pyQuiz";
 
 // Treat Python blocks/suites as body-owning containers
 const BLOCK_TYPES = new Set(["block", "suite"]);
@@ -63,6 +63,13 @@ type Question = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   sourceRefs?: SourceRef[];
+  // AST linkage for inline breakdown
+  parentNode?: TreeSitterAstNode;
+  node?: TreeSitterAstNode;
+  // Track origin for save filtering
+  source?: "base" | "expanded";
+  // Whether we can break this into smaller questions
+  isDigable?: boolean;
   // For controlling how much of the parent's code to reveal while this question is active
   // Absolute indices within the source file. Only set for AST-sourced questions
   revealStart?: number;
@@ -101,7 +108,8 @@ const textForNode = (
 const generateQuestions = (
   node: TreeSitterAstNode,
   breakdownTypes: Set<string>,
-  code?: string
+  code?: string,
+  opts?: { source?: "base" | "expanded" }
 ): Question[] => {
   const questions: Question[] = [];
   const children = node.namedChildren || [];
@@ -110,7 +118,9 @@ const generateQuestions = (
       breakdownTypes.has(child.type) &&
       (child.namedChildren || []).length > 0
     ) {
-      questions.push(...generateQuestions(child, breakdownTypes, code));
+      questions.push(
+        ...generateQuestions(child, breakdownTypes, code, opts)
+      );
     } else {
       const childType = child.type;
       // Prefer the actual source text where available (identifier, parameters, etc.)
@@ -131,6 +141,10 @@ const generateQuestions = (
         parentType: node.type,
         index: idx,
         childType,
+        parentNode: node,
+        node: child,
+        source: opts?.source ?? "base",
+        isDigable: (child.namedChildren || []).length > 0,
         revealStart,
         revealEndBeforeChild,
         revealEndAfterChild,
@@ -285,23 +299,16 @@ export const QuizViewer = ({
   const [expandedOptions, setExpandedOptions] = useState<
     Record<string, boolean>
   >({});
-  // Marked questions
-  const [marked, setMarked] = useState<Set<number>>(new Set());
-
-  const toggleMark = (idx: number) => {
-    setMarked((prev) => {
-      const next = new Set(prev);
-      if (next.has(idx)) next.delete(idx);
-      else next.add(idx);
-      return next;
-    });
-  };
+  const hasExpanded = useMemo(
+    () => questions.some((q) => q.source === "expanded"),
+    [questions]
+  );
 
   useEffect(() => {
     if (mode === "active") {
       const qs = selectedCustom
         ? generateQuestionsFromCustom(selectedCustom, code, root)
-        : generateQuestions(root, breakdownTypes, code);
+        : generateQuestions(root, breakdownTypes, code, { source: "base" });
       setQuestions(qs);
       setCurrent(0);
       setSelected(undefined);
@@ -339,6 +346,7 @@ export const QuizViewer = ({
   const renderSetup = () => {
     // Show unique container-like types available for breakdown selection
     const preview = generateQuestions(root, breakdownTypes);
+
     return (
       <div className="space-y-4">
         <div className="mb-2">
@@ -545,6 +553,28 @@ export const QuizViewer = ({
       return items;
     })();
 
+    const handleDigDeeper = () => {
+      if (selectedCustom) return; // Only supported for AST-sourced questions
+      const q = questions[current];
+      const childNode = q?.node;
+      if (!childNode || !childNode.namedChildren || childNode.namedChildren.length === 0) return;
+      const deeper = generateQuestions(childNode, breakdownTypes, code, { source: "expanded" });
+      if (!deeper.length) return;
+      const before = questions.slice(0, current);
+      const after = questions.slice(current + 1);
+      const nextQs = [...before, ...deeper, ...after];
+      setQuestions(nextQs);
+      setAnswers(new Array(nextQs.length).fill(undefined));
+      setSelected(undefined);
+      setCurrent(before.length);
+      const first = deeper[0];
+      if (first && typeof first.revealEndBeforeChild === "number") {
+        onRevealChange?.(first.revealEndBeforeChild);
+      } else {
+        onRevealChange?.(undefined);
+      }
+    };
+
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
@@ -560,8 +590,8 @@ export const QuizViewer = ({
           </div>
           <div className="text-xs text-slate-500">
             Q {current + 1} / {total} · Score {score}
-            {marked.size > 0 && (
-              <span className="ml-2 text-amber-600">· Marked {marked.size}</span>
+            {hasExpanded && (
+              <span className="ml-2 text-amber-600">· Expanded</span>
             )}
           </div>
         </div>
@@ -646,6 +676,17 @@ export const QuizViewer = ({
               <ChevronsLeft className="h-4 w-4" />
               Prev
             </button>
+            {!selectedCustom && (
+              <button
+                type="button"
+                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
+                onClick={handleDigDeeper}
+                disabled={!currentQ?.node || !currentQ?.isDigable}
+              >
+                <BookOpen className="h-4 w-4" />
+                Dig Deeper
+              </button>
+            )}
             <div className="flex items-center gap-2">
               <label htmlFor="q-input" className="text-xs text-slate-500">
                 Go to
@@ -680,17 +721,6 @@ export const QuizViewer = ({
                 Go
               </button>
             </div>
-            <button
-              type="button"
-              className={
-                marked.has(current)
-                  ? "rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-700 shadow-sm"
-                  : "rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              }
-              onClick={() => toggleMark(current)}
-            >
-              {marked.has(current) ? "Unmark" : "Mark this"}
-            </button>
             <button
               type="button"
               className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0"
@@ -977,6 +1007,47 @@ export const QuizViewer = ({
     return out;
   }
 
+  // Build v1.1 custom quiz cards from current questions (AST-backed where possible)
+  function buildV11Cards(
+    qs: Question[],
+    code?: string
+  ): SavedCustomQuizCardV11[] {
+    const out: SavedCustomQuizCardV11[] = [];
+    let order = 0;
+    for (const q of qs) {
+      const node = q.node;
+      const text = node
+        ? (code ?? "").substring(node.startIndex, node.endIndex)
+        : typeof q.revealEndBeforeChild === "number" &&
+          typeof q.revealEndAfterChild === "number" &&
+          typeof code === "string"
+        ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
+        : q.answerLabel;
+      const card: SavedCustomQuizCardV11 = {
+        order: order++,
+        type: q.childType || q.kind || "unknown",
+        text: String(text ?? ""),
+        action: "next",
+        question: q.stem,
+        semanticRole: q.parentType,
+        sourceRef: node
+          ? {
+              nodeType: node.type,
+              start: node.startIndex,
+              end: node.endIndex,
+              path: computeAstPath(root, node),
+              preview:
+                typeof code === "string"
+                  ? code.substring(node.startIndex, node.endIndex).slice(0, 120)
+                  : undefined,
+            }
+          : undefined,
+      };
+      out.push(card);
+    }
+    return out;
+  }
+
   const renderComplete = () => (
     <div className="space-y-4">
       <div>
@@ -993,126 +1064,78 @@ export const QuizViewer = ({
           <>
             <button
               type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
-              disabled={marked.size === 0}
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={async () => {
                 try {
-                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
-                  const toSaveQs = markedIdxs.map((i) => questions[i]).filter(Boolean);
-                  const only = baseCardsFromQuestions(toSaveQs, code).map((c, i) => ({
-                    ...c,
-                    order: i,
-                  }));
-                  if (only.length === 0) {
-                    alert("Could not extract the marked card.");
-                    return;
-                  }
+                  const cards = buildV11Cards(questions, code);
                   const payload = {
                     fileKey,
-                    name: `Selected cards ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1",
+                    name: `Custom quiz ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1.1" as const,
+                    profile: "normal" as const,
                     rootNode: {
                       type: root.type,
                       text: code.substring(root.startIndex, root.endIndex),
+                      start: root.startIndex,
+                      end: root.endIndex,
                     },
-                    cards: only.map(({ order, type, text, action, question }) => ({
-                      order,
-                      type,
-                      text,
-                      action,
-                      question,
-                    })),
-                  } as any;
-
+                    cards,
+                  };
                   const res = await fetch("/api/quizzes", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                   });
                   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  alert("Saved quiz with only the marked cards.");
+                  alert("Custom quiz saved (all cards).");
                 } catch (err) {
                   console.error(err);
-                  alert("Failed to save single-card quiz.");
+                  alert("Failed to save custom quiz.");
                 }
               }}
             >
-              Save: Only Marked
+              Save Quiz: All Cards
             </button>
 
             <button
               type="button"
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
-              disabled={marked.size === 0}
+              disabled={!questions.some((q) => q.source === "expanded")}
               onClick={async () => {
                 try {
-                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
-                  const base = baseCardsFromQuestions(questions, code);
-                  const markedSet = new Set(markedIdxs);
-                  // Precompute derived pieces per marked index
-                  const derivedByIndex = new Map<number, ReturnType<typeof baseCardsFromQuestions>>();
-                  for (const idx of markedIdxs) {
-                    const anchorQ = questions[idx];
-                    const anchorNode = nodeFromQuestion(anchorQ, root, code);
-                    if (!anchorNode) continue;
-                    const pieces = deriveCardsEnsuringBody(anchorNode, code).map((c) => ({
-                      ...c,
-                      source: "visited" as const,
-                      action: "next" as const,
-                    }));
-                    // If nothing derived, fall back to the original base card
-                    derivedByIndex.set(idx, pieces.length ? pieces : [base[idx]]);
-                  }
-
-                  // Build combined by replacing each marked card with its derived pieces, in-place
-                  const combined: typeof base = [] as any;
-                  for (let i = 0; i < base.length; i++) {
-                    if (markedSet.has(i)) {
-                      const parts = derivedByIndex.get(i) || [];
-                      combined.push(...parts);
-                    } else {
-                      combined.push(base[i]);
-                    }
-                  }
-                  // Normalize order
-                  for (let i = 0; i < combined.length; i++) combined[i].order = i;
-
-                  if (combined.length === 0) {
-                    alert("Nothing to save.");
+                  const onlyNew = questions.filter((q) => q.source === "expanded");
+                  if (onlyNew.length === 0) {
+                    alert("No new cards to save.");
                     return;
                   }
-
+                  const cards = buildV11Cards(onlyNew, code);
                   const payload = {
                     fileKey,
-                    name: `Mixed drill ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1",
+                    name: `New cards ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1.1" as const,
+                    profile: "normal" as const,
                     rootNode: {
                       type: root.type,
                       text: code.substring(root.startIndex, root.endIndex),
+                      start: root.startIndex,
+                      end: root.endIndex,
                     },
-                    cards: combined.map(({ order, type, text, action, question }) => ({
-                      order,
-                      type,
-                      text,
-                      action,
-                      question,
-                    })),
-                  } as any;
-
+                    cards,
+                  };
                   const res = await fetch("/api/quizzes", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload),
                   });
                   if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  alert("Saved quiz with breakdown inserted at each marked position.");
+                  alert("Custom quiz saved (new cards only).");
                 } catch (err) {
                   console.error(err);
-                  alert("Failed to save mixed quiz.");
+                  alert("Failed to save new-cards quiz.");
                 }
               }}
             >
-              Save: Insert Breakdown
+              Save Quiz: New Only
             </button>
           </>
         )}
