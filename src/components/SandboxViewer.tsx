@@ -339,7 +339,7 @@ export const SandboxViewer = ({
         {state.status === "loaded" && (
           <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* Left Column - AST / Quiz / Lesson */}
-            <div className="rounded-xl bg-white p-6 shadow-sm flex flex-col">
+            <div className="order-2 lg:order-1 rounded-xl bg-white p-6 shadow-sm flex flex-col">
               {viewMode === "ast" && (
                 <>
                   <div className="mb-4 space-y-1">
@@ -551,7 +551,7 @@ export const SandboxViewer = ({
             </div>
 
             {/* Right Column - Source Code */}
-            <div className="rounded-xl bg-white p-6 shadow-sm">
+            <div className="order-1 lg:order-2 rounded-xl bg-white p-6 shadow-sm">
               <h2 className="mb-4 text-lg font-semibold text-slate-800">
                 SOURCE CODE
               </h2>
