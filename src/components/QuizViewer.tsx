@@ -7,6 +7,17 @@ import {
   findDeepestNodeCoveringSpan,
 } from "../lib/pyCuration";
 
+const CURATABLE_ANCHORS = new Set([
+  "function_definition",
+  "class_definition",
+  "assignment",
+  "expression_statement",
+  "call",
+  "if_statement",
+  "for_statement",
+  "while_statement",
+  "with_statement",
+]);
 type QuizMode = "setup" | "active" | "complete";
 
 export type QuizViewerProps = {
@@ -1415,13 +1426,27 @@ export const QuizViewer = ({
   ): TreeSitterAstNode | undefined {
     if (!root) return undefined;
 
+    const bubbleToCuratableAnchor = (n?: TreeSitterAstNode) => {
+      if (!n) return n;
+      let cur: TreeSitterAstNode | undefined = n;
+      while (cur?.parent) {
+        if (CURATABLE_ANCHORS.has(cur.type)) return cur;
+        cur = cur.parent;
+      }
+      return n;
+    };
+
+    const resolveDeepest = (s: number, e: number) => {
+      const n = findDeepestNodeCoveringSpan(root, s, e);
+      return bubbleToCuratableAnchor(n);
+    };
+
     // Prefer explicit reveal spans (child range)
     if (
       typeof q.revealEndBeforeChild === "number" &&
       typeof q.revealEndAfterChild === "number"
     ) {
-      const n = findDeepestNodeCoveringSpan(
-        root,
+      const n = resolveDeepest(
         q.revealEndBeforeChild,
         q.revealEndAfterChild
       );
@@ -1432,16 +1457,54 @@ export const QuizViewer = ({
     if (code && q.answerLabel) {
       const idx = code.indexOf(q.answerLabel);
       if (idx >= 0) {
-        const n = findDeepestNodeCoveringSpan(
-          root,
-          idx,
-          idx + q.answerLabel.length
-        );
+        const n = resolveDeepest(idx, idx + q.answerLabel.length);
         if (n) return n;
       }
     }
 
     return undefined;
+  }
+
+  // Helpers to ensure we include a single body card for function definitions
+  const BLOCK_TYPES = new Set(["block", "suite"]);
+  function findBlockChild(n?: TreeSitterAstNode) {
+    if (!n?.namedChildren) return undefined;
+    return n.namedChildren.find((c) => BLOCK_TYPES.has(c.type));
+  }
+  function hasBodyPiece(pieces: any[]) {
+    return pieces.some(
+      (p) =>
+        p?.semanticRole === "body" ||
+        p?.semanticRole === "block" ||
+        p?.type === "body" ||
+        p?.type === "block"
+    );
+  }
+
+  function deriveCardsEnsuringBody(
+    anchor: TreeSitterAstNode,
+    code: string
+  ): any[] {
+    let pieces = cardsFromCuratedSections(anchor, code, { includeBody: true }) || [];
+
+    if (anchor.type === "function_definition" && !hasBodyPiece(pieces)) {
+      const body = findBlockChild(anchor);
+      if (body) {
+        const bodyPieces = cardsFromCuratedSections(body, code, { includeBody: true }) || [];
+        const preferred =
+          bodyPieces.find(
+            (bp: any) =>
+              bp?.semanticRole === "body" ||
+              bp?.semanticRole === "block" ||
+              bp?.type === "body" ||
+              bp?.type === "block"
+          ) ?? bodyPieces[0];
+        if (preferred) {
+          pieces = [...pieces, preferred];
+        }
+      }
+    }
+    return pieces;
   }
 
   // Types and builders for saving derived quizzes
@@ -1491,7 +1554,7 @@ export const QuizViewer = ({
       if (!q) continue;
       const node = nodeFromQuestion(q, root, code);
       if (!node) continue;
-      const cards = cardsFromCuratedSections(node, code).map((c) => ({
+      const cards = deriveCardsEnsuringBody(node, code).map((c) => ({
         ...c,
         order: order++,
         source: "visited" as const,

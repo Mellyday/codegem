@@ -881,7 +881,8 @@ export function findNodeBySpan(
 // Turn curated sections into simple quiz cards
 export function cardsFromCuratedSections(
   node: TreeSitterAstNode,
-  code: string
+  code: string,
+  opts: { includeBody?: boolean } = {}
 ): Array<{
   order: number;
   type: string;
@@ -891,9 +892,14 @@ export function cardsFromCuratedSections(
   question?: string;
 }> {
   const sections = buildCuratedSections(node).filter((s) => s.items.length > 0);
-  const inlineHints = sections.filter(
-    (s) => s.key === "body" || s.items.every((it) => it.type === "block")
-  );
+  const includeBody = opts.includeBody ?? false;
+  // Hide raw blocks as inline context by default. If includeBody is true and the group
+  // is the main "body", surface it as a real card (useful for derived drills).
+  const inlineHints = sections.filter((s) => {
+    if (s.items.length === 0) return false;
+    if (s.key === "body") return !includeBody;
+    return s.items.every((it) => it.type === "block");
+  });
   const flatGroups = sections.filter((s) => !inlineHints.includes(s));
 
   let order = 0;
@@ -909,6 +915,7 @@ export function cardsFromCuratedSections(
   const qFor = (nodeType: string, key: string, idx: number) => {
     if (nodeType === "function_definition" && key === "args")
       return `What is the name or text of parameter #${idx + 1}?`;
+    if (key === "body") return "What is the body?";
     if (nodeType === "call" && key === "func")
       return "Which function or method is being called?";
     if (nodeType === "call" && key === "args")
