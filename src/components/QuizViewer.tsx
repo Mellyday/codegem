@@ -1614,51 +1614,131 @@ export const QuizViewer = ({
       </div>
       <div className="flex justify-end gap-2">
         {code && (
-          <button
-            type="button"
-            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
-            disabled={marked.size === 0}
-            onClick={async () => {
-              try {
-                const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
-                const derived = derivedCardsFromMarks(markedIdxs, questions, root, code);
-                if (derived.length === 0) {
-                  alert("No derived questions could be generated from the marked items.");
-                  return;
-                }
-                const cards = derived.map((c, i) => ({ ...c, order: i }));
-                const payload = {
-                  fileKey,
-                  name: `Custom drill ${new Date().toLocaleString()}`,
-                  type: "CustomQuizV1",
-                  rootNode: {
-                    type: root.type,
-                    text: code.substring(root.startIndex, root.endIndex),
-                  },
-                  cards: cards.map(({ order, type, text, action, question }) => ({
-                    order,
-                    type,
-                    text,
-                    action,
-                    question,
-                  })),
-                } as any;
+          <>
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              disabled={marked.size === 0}
+              onClick={async () => {
+                try {
+                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
+                  const toSaveQs = markedIdxs.map((i) => questions[i]).filter(Boolean);
+                  const only = baseCardsFromQuestions(toSaveQs, code).map((c, i) => ({
+                    ...c,
+                    order: i,
+                  }));
+                  if (only.length === 0) {
+                    alert("Could not extract the marked card.");
+                    return;
+                  }
+                  const payload = {
+                    fileKey,
+                    name: `Selected cards ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1",
+                    rootNode: {
+                      type: root.type,
+                      text: code.substring(root.startIndex, root.endIndex),
+                    },
+                    cards: only.map(({ order, type, text, action, question }) => ({
+                      order,
+                      type,
+                      text,
+                      action,
+                      question,
+                    })),
+                  } as any;
 
-                const res = await fetch("/api/quizzes", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify(payload),
-                });
-                if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                alert("Drill-only custom quiz saved!");
-              } catch (err) {
-                console.error(err);
-                alert("Failed to save drill-only quiz.");
-              }
-            }}
-          >
-            Save marked as new custom quiz
-          </button>
+                  const res = await fetch("/api/quizzes", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                  });
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  alert("Saved quiz with only the marked cards.");
+                } catch (err) {
+                  console.error(err);
+                  alert("Failed to save single-card quiz.");
+                }
+              }}
+            >
+              Save: Only Marked
+            </button>
+
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+              disabled={marked.size === 0}
+              onClick={async () => {
+                try {
+                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
+                  const base = baseCardsFromQuestions(questions, code);
+                  const markedSet = new Set(markedIdxs);
+                  // Precompute derived pieces per marked index
+                  const derivedByIndex = new Map<number, ReturnType<typeof baseCardsFromQuestions>>();
+                  for (const idx of markedIdxs) {
+                    const anchorQ = questions[idx];
+                    const anchorNode = nodeFromQuestion(anchorQ, root, code);
+                    if (!anchorNode) continue;
+                    const pieces = deriveCardsEnsuringBody(anchorNode, code).map((c) => ({
+                      ...c,
+                      source: "visited" as const,
+                      action: "next" as const,
+                    }));
+                    // If nothing derived, fall back to the original base card
+                    derivedByIndex.set(idx, pieces.length ? pieces : [base[idx]]);
+                  }
+
+                  // Build combined by replacing each marked card with its derived pieces, in-place
+                  const combined: typeof base = [] as any;
+                  for (let i = 0; i < base.length; i++) {
+                    if (markedSet.has(i)) {
+                      const parts = derivedByIndex.get(i) || [];
+                      combined.push(...parts);
+                    } else {
+                      combined.push(base[i]);
+                    }
+                  }
+                  // Normalize order
+                  for (let i = 0; i < combined.length; i++) combined[i].order = i;
+
+                  if (combined.length === 0) {
+                    alert("Nothing to save.");
+                    return;
+                  }
+
+                  const payload = {
+                    fileKey,
+                    name: `Mixed drill ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1",
+                    rootNode: {
+                      type: root.type,
+                      text: code.substring(root.startIndex, root.endIndex),
+                    },
+                    cards: combined.map(({ order, type, text, action, question }) => ({
+                      order,
+                      type,
+                      text,
+                      action,
+                      question,
+                    })),
+                  } as any;
+
+                  const res = await fetch("/api/quizzes", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                  });
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  alert("Saved quiz with breakdown inserted at each marked position.");
+                } catch (err) {
+                  console.error(err);
+                  alert("Failed to save mixed quiz.");
+                }
+              }}
+            >
+              Save: Insert Breakdown
+            </button>
+          </>
         )}
         {!selectedCustom && (
           <button
