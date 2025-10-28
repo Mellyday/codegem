@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { useEffect, useMemo, useState } from "react";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
@@ -7,6 +8,8 @@ import {
   findDeepestNodeCoveringSpan,
   findNearestAnchorCoveringSpan,
 } from "../lib/pyCuration";
+import { ErrorBoundary } from "./ErrorBoundary";
+import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
 
 // Treat Python blocks/suites as body-owning containers
 const BLOCK_TYPES = new Set(["block", "suite"]);
@@ -172,55 +175,7 @@ type SavedCustomQuizV11 = {
   cards: SavedCustomQuizCardV11[];
 };
 
-async function loadSavedCustomQuizzesFromApi(fileKey?: {
-  kind: "repo" | "project";
-  id: string;
-  path: string;
-}): Promise<SavedCustomQuizV11[]> {
-  try {
-    if (!fileKey) return [];
-    const qs = new URLSearchParams({
-      kind: fileKey.kind,
-      id: fileKey.id,
-      path: fileKey.path,
-    });
-    const res = await fetch(`/api/quizzes?${qs.toString()}`, { method: "GET" });
-    if (!res.ok) return [];
-    const data = await res.json();
-    const list = Array.isArray(data.quizzes) ? data.quizzes : [];
-    const out: SavedCustomQuizV11[] = list.map((q: any) => ({
-      id: String(q.id || ""),
-      kind: "custom-quiz",
-      createdAt: q.createdAt
-        ? new Date(q.createdAt).toISOString()
-        : new Date().toISOString(),
-      typeLabel: q.type,
-      profile: q.profile,
-      root: {
-        type: q.rootNode?.type || "unknown",
-        text: q.rootNode?.text,
-        start: q.rootNode?.start,
-        end: q.rootNode?.end,
-        path: q.rootNode?.path,
-      },
-      totalCards: Array.isArray(q.cards) ? q.cards.length : 0,
-      cards: (q.cards || []).map((c: any) => ({
-        order: c.order,
-        type: c.type,
-        text: c.text,
-        action: c.action === "dig" ? "dig" : "next",
-        sourceRef: c.sourceRef,
-        semanticRole: c.semanticRole,
-        question: c.question,
-        generatorRule: c.generatorRule,
-        difficulty: c.difficulty,
-      })),
-    }));
-    return out;
-  } catch {
-    return [];
-  }
-}
+// fetching of saved quizzes moved to SavedCustomQuizzesPanel
 
 const generateQuestionsFromCustom = (
   quiz: SavedCustomQuizV11,
@@ -874,20 +829,9 @@ export const QuizViewer = ({
   );
 
   // Custom quiz selection state
-  const [savedCustoms, setSavedCustoms] = useState<SavedCustomQuizV11[]>([]);
   const [selectedCustom, setSelectedCustom] = useState<
     SavedCustomQuizV11 | undefined
   >(undefined);
-
-  useEffect(() => {
-    let cancelled = false;
-    loadSavedCustomQuizzesFromApi(fileKey).then((list) => {
-      if (!cancelled) setSavedCustoms(list);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [mode, fileKey]);
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -1023,75 +967,18 @@ export const QuizViewer = ({
           </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <div className="mb-2 flex items-center justify-between">
-            <p className="text-sm text-slate-700">Saved Custom Quizzes</p>
-            <button
-              type="button"
-              className="text-xs text-slate-500 underline decoration-dotted"
-              onClick={async () =>
-                setSavedCustoms(await loadSavedCustomQuizzesFromApi(fileKey))
-              }
-            >
-              Refresh
-            </button>
-          </div>
-          {savedCustoms.length === 0 ? (
-            <p className="text-xs italic text-slate-400">
-              No custom quizzes saved
-            </p>
-          ) : (
-            <ul className="space-y-2">
-              {savedCustoms.map((q) => (
-                <li
-                  key={q.id}
-                  className="flex items-center justify-between rounded bg-white px-3 py-2 text-xs shadow-sm"
-                >
-                  <div className="flex-1">
-                    <div className="text-slate-700">
-                      {q.root.type}
-                      <span className="ml-2 text-slate-400">
-                        · {q.totalCards} cards
-                      </span>
-                    </div>
-                    <div className="text-slate-400">
-                      {new Date(q.createdAt).toLocaleString()}
-                    </div>
-                  </div>
-                  <div className="ml-3 flex gap-2">
-                    <button
-                      type="button"
-                      className="rounded-md bg-amber-500 px-2.5 py-1 text-white shadow hover:bg-amber-600"
-                      onClick={() => {
-                        setSelectedCustom(q);
-                        onStart();
-                      }}
-                    >
-                      Start
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
-                      onClick={async () => {
-                        try {
-                          await fetch(
-                            `/api/quizzes?id=${encodeURIComponent(q.id)}`,
-                            { method: "DELETE" }
-                          );
-                        } catch {}
-                        setSavedCustoms(
-                          await loadSavedCustomQuizzesFromApi(fileKey)
-                        );
-                      }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+        <ErrorBoundary fallback={<div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">Failed to load quizzes.</div>}>
+          <Suspense fallback={<div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Loading saved quizzes…</div>}>
+            <SavedCustomQuizzesPanel
+              fileKey={fileKey}
+              onStartSaved={(q) => {
+                // panel is isolated; only it remounts on refresh/errors
+                setSelectedCustom(q as any);
+                onStart();
+              }}
+            />
+          </Suspense>
+        </ErrorBoundary>
       </div>
     );
   };
