@@ -10,6 +10,11 @@ import {
 } from "../lib/pyCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
+import {
+  buildCuratedSections,
+  childrenOfType,
+  firstChildOfType,
+} from "../lib/pyCuration";
 
 // Treat Python blocks/suites as body-owning containers
 const BLOCK_TYPES = new Set(["block", "suite"]);
@@ -808,6 +813,218 @@ function generateQuestionsV11(
   return [];
 }
 
+// ----- Heuristic quiz orchestrator (Shallow / Deep) -----
+type Profile = "shallow" | "deep";
+
+function headerMaskAndAnswer(
+  stmt: TreeSitterAstNode,
+  code: string
+): { answerText: string } {
+  const nonStructural = new Set([
+    "block",
+    "else_clause",
+    "elif_clause",
+    "finally_clause",
+    "except_clause",
+  ]);
+  const firstNamed = (stmt.namedChildren || []).find(
+    (c) => !nonStructural.has(c.type)
+  );
+  const full = code.substring(stmt.startIndex, stmt.endIndex);
+  const colonIdx = full.indexOf(":");
+  const answerText = (
+    colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
+  ).trimEnd();
+  return { answerText };
+}
+
+function buildHeuristicQuiz(
+  root: TreeSitterAstNode,
+  code: string,
+  profile: Profile,
+  opts?: { maxDeepPerStmt?: number; maxQuestions?: number }
+): SavedCustomQuizV11 {
+  const cards: SavedCustomQuizCardV11[] = [];
+  let order = 0;
+
+  const emitCard = (
+    text: string,
+    q: string,
+    node: TreeSitterAstNode,
+    kind?: string,
+    semanticRole?: string
+  ) => {
+    cards.push({
+      order: order++,
+      type: kind || node.type,
+      text,
+      action: "next",
+      question: q,
+      semanticRole,
+      sourceRef: {
+        nodeType: node.type,
+        start: node.startIndex,
+        end: node.endIndex,
+        path: computeAstPath(root, node),
+        preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
+      },
+    });
+  };
+
+  const emitHeader = (stmt: TreeSitterAstNode) => {
+    const { answerText } = headerMaskAndAnswer(stmt, code);
+    emitCard(answerText, "Write the full header line", stmt, stmt.type, "header");
+  };
+
+  const walkBlock = (block: TreeSitterAstNode) => {
+    for (const stmt of block.namedChildren || []) {
+      walkStmt(stmt);
+    }
+  };
+
+  const walkStmt = (node: TreeSitterAstNode) => {
+    switch (node.type) {
+      case "import_from_statement": {
+        const groups = buildCuratedSections(node);
+        const moduleGroup = groups.find((g) => g.key === "module");
+        if (moduleGroup?.items?.[0]) {
+          const mod = moduleGroup.items[0];
+          const modTxt = code.slice(mod.startIndex, mod.endIndex);
+          emitCard(modTxt, "What is the module?", mod, "module");
+        }
+        const namesGroup = groups.find((g) => g.key === "names");
+        for (const name of namesGroup?.items || []) {
+          const txt = code.slice(name.startIndex, name.endIndex);
+          emitCard(txt, "Which name is imported?", name, "imported_name");
+        }
+        break;
+      }
+      case "import_statement": {
+        const groups = buildCuratedSections(node);
+        const namesGroup = groups.find((g) => g.key === "names");
+        for (const name of namesGroup?.items || []) {
+          const txt = code.slice(name.startIndex, name.endIndex);
+          emitCard(txt, "Which name is imported?", name, "imported_name");
+        }
+        break;
+      }
+      case "function_definition": {
+        // Params and return first (shallow)
+        const pieces = cardsFromCuratedSections(node, code, {
+          includeBody: false,
+          groupOrder: ["args", "returns"],
+        });
+        for (const p of pieces) {
+          emitCard(p.text, p.question || "What is this?", node, p.type, p.semanticRole);
+        }
+        // Then walk body
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "class_definition": {
+        // Optional in first pass: skip header; walk body only
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "while_statement":
+      case "for_statement": {
+        emitHeader(node);
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        const elseCl = firstChildOfType(node, "else_clause");
+        if (elseCl) {
+          emitHeader(elseCl);
+          const eb = firstChildOfType(elseCl, "block");
+          if (eb) walkBlock(eb);
+        }
+        break;
+      }
+      case "if_statement": {
+        emitHeader(node);
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        for (const e of childrenOfType(node, "elif_clause")) {
+          emitHeader(e);
+          const b = firstChildOfType(e, "block");
+          if (b) walkBlock(b);
+        }
+        const elseCl = firstChildOfType(node, "else_clause");
+        if (elseCl) {
+          emitHeader(elseCl);
+          const eb = firstChildOfType(elseCl, "block");
+          if (eb) walkBlock(eb);
+        }
+        break;
+      }
+      case "with_statement": {
+        emitHeader(node);
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "try_statement": {
+        emitHeader(node);
+        const body = firstChildOfType(node, "block");
+        if (body) walkBlock(body);
+        for (const h of (node.namedChildren || []).filter((c) => c.type.includes("except"))) {
+          emitHeader(h);
+          const b = firstChildOfType(h, "block");
+          if (b) walkBlock(b);
+        }
+        const elseCl = firstChildOfType(node, "else_clause");
+        if (elseCl) {
+          emitHeader(elseCl);
+          const eb = firstChildOfType(elseCl, "block");
+          if (eb) walkBlock(eb);
+        }
+        const finCl = firstChildOfType(node, "finally_clause");
+        if (finCl) {
+          emitHeader(finCl);
+          const fb = firstChildOfType(finCl, "block");
+          if (fb) walkBlock(fb);
+        }
+        break;
+      }
+      default: {
+        // Simple statement → shallow card
+        const text = code.slice(node.startIndex, node.endIndex);
+        emitCard(text, "What comes next?", node);
+        // Deep insertions after shallow card
+        if (profile === "deep") {
+          const deepQs = generateQuestionsV11(root, node, "deep", code).slice(
+            0,
+            opts?.maxDeepPerStmt ?? 6
+          );
+          for (const q of deepQs) {
+            emitCard(q.answerLabel, q.stem, node, q.kind);
+          }
+        }
+      }
+    }
+  };
+
+  for (const top of root.namedChildren || []) {
+    walkStmt(top);
+  }
+
+  if (typeof opts?.maxQuestions === "number") {
+    cards.length = Math.min(cards.length, opts.maxQuestions);
+  }
+
+  return {
+    id: "",
+    kind: "custom-quiz",
+    createdAt: new Date().toISOString(),
+    typeLabel: "CustomQuizV1.1",
+    profile,
+    root: { type: root.type, start: root.startIndex, end: root.endIndex },
+    totalCards: cards.length,
+    cards,
+  };
+}
+
 export const QuizViewer = ({
   root,
   code,
@@ -941,28 +1158,57 @@ export const QuizViewer = ({
           )}
         </div>
 
-        <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <span className="text-sm text-slate-700">
-            Preview questions:{" "}
-            <span className="font-semibold">{preview.length}</span>
-          </span>
-          <div className="flex gap-2">
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
+          <div className="flex items-center justify-between">
+            <span className="text-sm text-slate-700">
+              Preview questions: <span className="font-semibold">{preview.length}</span>
+            </span>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+                onClick={onCancel}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
+                onClick={() => {
+                  setSelectedCustom(undefined);
+                  onStart();
+                }}
+              >
+                Start Quiz
+              </button>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 pt-1">
+            <span className="text-xs uppercase tracking-wide text-slate-500">Heuristic presets:</span>
             <button
               type="button"
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={onCancel}
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
               onClick={() => {
-                setSelectedCustom(undefined);
+                if (!root) return;
+                const quiz = buildHeuristicQuiz(root, code || "", "shallow");
+                setSelectedCustom(quiz as any);
                 onStart();
               }}
             >
-              Start Quiz
+              Shallow (Line-by-Line)
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => {
+                if (!root) return;
+                const quiz = buildHeuristicQuiz(root, code || "", "deep", { maxDeepPerStmt: 6 });
+                setSelectedCustom(quiz as any);
+                onStart();
+              }}
+            >
+              Deep (With Expression Detail)
             </button>
           </div>
         </div>

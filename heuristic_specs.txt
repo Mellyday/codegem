@@ -1,0 +1,386 @@
+Goal
+Add two one-click quiz builders that generate good, deterministic quizzes directly from a Python AST (Tree‑sitter) without asking the user to tune breakdown options:
+
+Shallow mode: line-by-line, human-logical order, with special treatment for headers (if/elif/else/while/for) and function params/return type.
+Deep mode: everything in Shallow, plus decomposition of expressions (especially assignments and function/method calls) into their meaningful parts. Extendable via a small rule engine.
+Below is a concrete spec you can implement against your existing TreeSitterAstNode API and the curated-sections helpers you already have.
+
+What “Shallow” should do
+Shallow mode asks for the next meaningful piece of code in natural reading order. It treats control-flow headers and function signatures specially, and otherwise produces one card per statement/expression.
+
+Key behaviors:
+
+Imports:
+One card for the module, one per imported name.
+Example: from typing import List → “typing”, “List”
+Class definitions:
+Optional in the first pass. If included, one card for the class header (no body in shallow unless you want it).
+Function definitions:
+One card per parameter (the visible source slice of each parameter, including its type annotation if present).
+One card for the return annotation.
+Then walk the function body in lexical order.
+Simple statements in a block (assignments, returns, bare expression statements):
+One card per line, showing the exact code slice for that statement.
+Control-flow statements (if/elif/else/while/for/with/try):
+A single header card asking for the full header text (token + condition/target/etc. up to the colon), e.g., “while left <= right”.
+Then continue shallowly into the body: one card per simple statement. For nested control-flow, repeat the same (header card, then simple statements).
+Elif/Else:
+One header card for elif <cond> or else (up to the colon).
+Then shallowly walk the body as above.
+Reveals:
+For header questions, mask just the keyword and colon in the code viewer but ask the user to “Write the full header line” (you already have headerMaskAndAnswer for this).
+Shallow ordering rule of thumb:
+
+At the module level: imports → class/function definitions (you can skip class header initially if desired).
+For a function: params → return type → top-level simple statements (in order) → each control-flow: header then body lines (in order) → trailing statements after control flow.
+Use exact source slices for answers to keep it reliable.
+Deep but minimal heuristics (still in Shallow mode):
+
+None. Shallow never asks for substructure inside expressions. It only splits headers and parameters vs. body. Everything else is one card per line.
+Shallow example on your snippet
+For this code:
+
+from typing import List
+
+class Solution:
+    def searchMatrix(self, matrix: List[List[int]], target: int) -> bool:
+        left = 0
+        right = len(matrix) * len(matrix[0]) - 1
+        n = len(matrix[0])
+        while left <= right:
+            mid = (left + right) // 2
+            val = matrix[mid // n][mid % n]
+            if val == target:
+                return True
+            elif val >= target:
+                right = mid - 1
+            else:
+                left = mid + 1
+        return False
+Shallow should produce cards like:
+
+typing
+List
+self
+matrix: List[List[int]]
+target: int
+bool
+left = 0
+right = len(matrix) * len(matrix[0]) - 1
+n = len(matrix[0])
+while left <= right
+mid = (left + right) // 2
+val = matrix[mid // n][mid % n]
+if val == target
+return True
+elif val >= target
+right = mid - 1
+else
+left = mid + 1
+return False
+This matches exactly what you described: parameters, return type, then one line per statement; for control-flow, header card then body lines.
+
+What “Deep” should do
+Deep mode keeps the Shallow sequence and inserts extra questions that decompose expressions you care about. Start with two must-haves:
+
+Assignments:
+Ask for the left-hand side (target).
+Ask for the right-hand side (value).
+Calls (includes method chains and nested calls):
+Ask which function/method is called.
+For method/attribute chains, ask for each object/attribute/method name in order.
+Ask for each positional argument (by number).
+Ask for each keyword argument name (and optionally its value as a follow-up if you want more depth later).
+Handle splats: *args, **kwargs as separate items if present.
+Recommended “nice to have” deep splits (easy wins using what you already implemented):
+
+Binary operators: operator token, left operand, right operand.
+Comparisons: left operand, operator token(s), comparator(s) (handles chains like a < b <= c).
+Subscripts/slices: base value, index or slice (and slice parts: start, stop, step).
+Function definitions (deeper): parameter names, parameter type annotations (if any), return type.
+With-items: context/alias pairs.
+Try/except: except type, bound name, finally/else blocks.
+Deep ordering rule of thumb:
+
+Preserve Shallow’s natural order.
+Immediately after a Shallow card for a statement, inject its deep decomposition cards (assignment parts, call parts, operators, etc.). If that gets too long, you can gate by a max-per-statement or a total cap.
+Deep example for: sound = duck.props.call().quack("loud")
+Emit:
+
+Shallow line card: sound = duck.props.call().quack("loud")
+Deep insertion:
+What is the left-hand side (target)? → sound
+What is the right-hand side (value)? → duck.props.call().quack("loud")
+Chain/object/method details (left-to-right):
+What is the base object? → duck
+What is the attribute #1? → props
+Which function or method is being called? → call
+Which function or method is being called? → quack
+Arguments:
+What is positional argument #1? → "loud"
+You’ve already got most of the machinery for this in your rules map (assignment/call/attribute/binary_operator/comparison/subscript/slice/function_definition) and helpers like extractCallChain.
+
+Traversal and ordering (shared by both modes)
+Walk lexical order of named statements.
+For imports, emit module + names first.
+For function definitions, emit params then returns, then body in order.
+For control-flow:
+Emit exactly one header card per if/elif/else/while/for/with/try (full header text).
+Recurse into the body: in Shallow, emit one card per simple statement; in Deep, inject deeper cards after each shallow statement’s card.
+Always use exact source slices (startIndex..endIndex) for answers to ensure stability.
+Normalize type synonyms:
+if_statement / if_stmt, while_statement / while_stmt, for_statement / for_stmt.
+You already guard for these in curated sections and can keep doing so.
+Question stems
+Use clear, consistent stems (you have many of these already):
+
+Imports:
+Module: “What is the module?”
+Names: “Which name is imported?”
+Function def:
+Params: “What is the name or text of parameter #i?”
+Return: “What is the return type?”
+Control-flow header:
+“Write the full header line” (your maskAndAnswerForStep already does the right masking).
+Simple statement line:
+“What comes next?”
+Assignment (deep):
+“What is the left-hand side (target)?”
+“What is the right-hand side (value)?”
+Call (deep):
+“Which function or method is being called?”
+“What is positional argument #i?”
+“What is this keyword argument name?”
+Operators (deep):
+“What is the operator?”
+“What is the left operand?” / “What is the right operand?”
+Subscript/slice (deep):
+“What is the base being indexed?”
+“What is the index?” or “What is the start/stop/step of this slice?”
+Practical implementation plan
+You already have most of the plumbing. Add a small wrapper that builds a quiz “by heuristic profile” and two buttons to trigger it.
+
+Add two buttons to the Quiz Setup view
+“Shallow (Line-by-Line)”
+“Deep (With Expression Detail)”
+New orchestrator
+Create an orchestrator that returns a SavedCustomQuizV1.1-ish payload so you can reuse generateQuestionsFromCustom or directly set questions:
+Inputs: root: TreeSitterAstNode, code: string, profile: "shallow" | "deep", optional caps: maxDeepPerStmt, maxQuestions.
+Output: ordered array of “cards” each with:
+order, type, text (answer slice), question (stem), semanticRole (optional), and sourceRef (node type, start, end, path).
+Traversal core
+Walk the selected anchor (module or function).
+For each node:
+If import_from_statement:
+Emit one module card (module slice).
+Emit one card per imported name.
+If function_definition:
+Emit params and return via curated sections (your cardsFromCuratedSections already does the right thing for args and returns).
+Emit body using “block → statements.”
+If statement is simple:
+Shallow: one card = exact statement text.
+Deep: the shallow card, then run rules on that node (assignment/call/etc.) and emit additional cards inline.
+If control-flow:
+Emit header via headerMaskAndAnswer (you already have this).
+Then process body statements as above.
+Rule engine for Deep (you already have it)
+Use your generateQuestionsV11 rules map:
+Always apply rules for assignment and call.
+Optionally enable rules for binary_operator, comparison, subscript, slice, function_definition when profile === "deep".
+Return an array of Q11-like items and convert each to a card (stem + answerLabel + sourceRefs).
+Caps and safety
+Provide an optional maxDeepPerStmt (e.g., 6) to avoid overwhelming questions for long chains.
+Provide an optional maxQuestions to truncate large files smartly.
+If a deep rule yields no questions, fall back to the shallow behavior.
+SourceRef and reveals
+For every card, attach sourceRef using your computeAstPath.
+For header cards, keep using your existing maskAndAnswerForStep to compute the visible slice and answer text.
+For shallow “What comes next?” cards inside a parent context, set revealStart to the parent start, revealEndBeforeChild to child start, revealEndAfterChild to child end.
+Suggested minimal APIs (pseudo-code)
+ts
+Copy
+type Profile = "shallow" | "deep";
+
+function buildHeuristicQuiz(root: TreeSitterAstNode, code: string, profile: Profile, opts?: {
+  maxDeepPerStmt?: number; // default 6
+  maxQuestions?: number;   // default undefined
+}): SavedCustomQuizV11 {
+  const cards: SavedCustomQuizCardV11[] = [];
+  let order = 0;
+
+  const emitCard = (text: string, q: string, node: TreeSitterAstNode, kind?: string, semanticRole?: string) => {
+    cards.push({
+      order: order++,
+      type: kind || node.type,
+      text,
+      action: "next",
+      question: q,
+      semanticRole,
+      sourceRef: {
+        nodeType: node.type,
+        start: node.startIndex,
+        end: node.endIndex,
+        path: computeAstPath(root, node),
+        preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
+      }
+    });
+  };
+
+  const emitHeader = (stmt: TreeSitterAstNode, defaultStem: string) => {
+    const { answerText } = headerMaskAndAnswer(stmt, code);
+    emitCard(answerText, "Write the full header line", stmt, stmt.type, "header");
+  };
+
+  function walkBlock(block: TreeSitterAstNode) {
+    for (const stmt of (block.namedChildren || [])) {
+      walkStmt(stmt);
+    }
+  }
+
+  function walkStmt(node: TreeSitterAstNode) {
+    switch (node.type) {
+      case "import_from_statement": {
+        // module
+        const groups = buildCuratedSections(node);
+        const moduleGroup = groups.find(g => g.key === "module");
+        if (moduleGroup?.items?.[0]) {
+          const modTxt = code.slice(moduleGroup.items[0].startIndex, moduleGroup.items[0].endIndex);
+          emitCard(modTxt, "What is the module?", node, "module");
+        }
+        // names
+        const namesGroup = groups.find(g => g.key === "names");
+        for (const name of (namesGroup?.items || [])) {
+          const txt = code.slice(name.startIndex, name.endIndex);
+          emitCard(txt, "Which name is imported?", name, "imported_name");
+        }
+        break;
+      }
+      case "function_definition": {
+        // params + returns
+        const pieces = cardsFromCuratedSections(node, code, {
+          includeBody: false,
+          groupOrder: ["args", "returns"]
+        });
+        for (const p of pieces) {
+          emitCard(p.text, p.question || "What is this?", node, p.type, p.semanticRole);
+        }
+        // then body
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "while_statement":
+      case "if_statement":
+      case "for_statement":
+      case "with_statement":
+      case "try_statement": {
+        emitHeader(node, "Write the full header line");
+        // primary body
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        // elif/else/finally as applicable
+        if (node.type === "if_statement") {
+          for (const e of childrenOfType(node, "elif_clause")) {
+            emitHeader(e, "Write the full header line");
+            const b = firstChildOfType(e, "block");
+            if (b) walkBlock(b);
+          }
+          const elseCl = firstChildOfType(node, "else_clause");
+          if (elseCl) {
+            emitHeader(elseCl, "Write the full header line"); // “else”
+            const eb = firstChildOfType(elseCl, "block");
+            if (eb) walkBlock(eb);
+          }
+        } else if (node.type === "while_statement" || node.type === "for_statement") {
+          const elseCl = firstChildOfType(node, "else_clause");
+          if (elseCl) {
+            emitHeader(elseCl, "Write the full header line");
+            const eb = firstChildOfType(elseCl, "block");
+            if (eb) walkBlock(eb);
+          }
+        } else if (node.type === "try_statement") {
+          for (const h of (node.namedChildren || []).filter(c => c.type.includes("except"))) {
+            emitHeader(h, "Write the full header line");
+            const b = firstChildOfType(h, "block");
+            if (b) walkBlock(b);
+          }
+          const elseCl = firstChildOfType(node, "else_clause");
+          if (elseCl) {
+            emitHeader(elseCl, "Write the full header line");
+            const eb = firstChildOfType(elseCl, "block");
+            if (eb) walkBlock(eb);
+          }
+          const finCl = firstChildOfType(node, "finally_clause");
+          if (finCl) {
+            emitHeader(finCl, "Write the full header line");
+            const fb = firstChildOfType(finCl, "block");
+            if (fb) walkBlock(fb);
+          }
+        }
+        break;
+      }
+      default: {
+        // Simple statement → shallow card
+        const text = code.slice(node.startIndex, node.endIndex);
+        emitCard(text, "What comes next?", node);
+
+        // Deep insertions (only if profile === "deep")
+        if (profile === "deep") {
+          const deepQs = generateQuestionsV11(root, node, "deep", code).slice(0, (opts?.maxDeepPerStmt ?? 6));
+          for (const q of deepQs) {
+            emitCard(q.answerLabel, q.stem, node, q.kind);
+          }
+        }
+      }
+    }
+  }
+
+  // Entry: choose starting anchor (module, class body, or a single function)
+  // For now, auto-walk the entire root.
+  for (const top of (root.namedChildren || [])) {
+    walkStmt(top);
+  }
+
+  if (typeof opts?.maxQuestions === "number") {
+    cards.length = Math.min(cards.length, opts.maxQuestions);
+  }
+
+  return {
+    id: "",
+    kind: "custom-quiz",
+    createdAt: new Date().toISOString(),
+    typeLabel: "CustomQuizV1.1",
+    profile: profile,
+    root: { type: root.type, start: root.startIndex, end: root.endIndex },
+    totalCards: cards.length,
+    cards
+  };
+}
+This orchestrator:
+
+Reuses curated sections for function params/returns.
+Uses your header masking logic.
+Emits shallow cards for lines.
+Injects deep rule-based questions inline when in Deep mode (leveraging your existing rules via generateQuestionsV11).
+UI wiring
+In your Quiz Setup panel, add:
+“Shallow (Line-by-Line)” button → call buildHeuristicQuiz(root, code, "shallow"), then either:
+Start directly with those cards (convert to Question[]), or
+Save them transiently as a “custom quiz” payload and use your existing generateQuestionsFromCustom to render.
+“Deep (With Expression Detail)” button → same, but "deep".
+Optionally:
+
+Show an advanced popover with two toggles:
+Max deep cards per statement (default 6)
+Max questions overall (default ∞)
+Edge cases and quality knobs
+Multi-line headers: still take everything up to the colon; your mask logic is already robust.
+Docstrings: treat as a simple statement in shallow; skip deep decomposition.
+Python grammar variants: keep handling _stmt vs _statement forms (you already do).
+Very long bodies: use maxQuestions to cap.
+Long strings: keep your current “Show More/Less” expansion pattern for options.
+Why this will feel right to users
+Shallow matches how people read code: signature → quick skim of top-level lines → enter control flow one header at a time.
+Deep gives meaningful practice on the exact things that trip people up: targets vs. values in assignments, what exactly is being called in a chain, and what each argument is.
+The design is fully incremental: turn on more rule types (binary ops, comparisons, subscript, slice, with/try) as you like without changing the orchestrator.
+If you want, I can turn this spec into concrete patches against your components (add the two buttons and the orchestrator), but as a first step this should give you a clear blueprint for implementing the heuristic modes you described.
