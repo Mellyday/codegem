@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
+import { findNodeBySpan, cardsFromCuratedSections } from "../lib/pyCuration";
 
 type QuizMode = "setup" | "active" | "complete";
 
@@ -879,6 +880,17 @@ export const QuizViewer = ({
   const [expandedOptions, setExpandedOptions] = useState<
     Record<string, boolean>
   >({});
+  // Marked questions
+  const [marked, setMarked] = useState<Set<number>>(new Set());
+
+  const toggleMark = (idx: number) => {
+    setMarked((prev) => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (mode === "active") {
@@ -1271,6 +1283,17 @@ export const QuizViewer = ({
             </div>
             <button
               type="button"
+              className={
+                marked.has(current)
+                  ? "rounded-md border border-amber-300 bg-amber-50 px-3 py-1.5 text-sm text-amber-700 shadow-sm"
+                  : "rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              }
+              onClick={() => toggleMark(current)}
+            >
+              {marked.has(current) ? "Unmark" : "Mark this"}
+            </button>
+            <button
+              type="button"
               className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50"
               onClick={next}
               disabled={!answered}
@@ -1372,98 +1395,92 @@ export const QuizViewer = ({
             </div>
           )}
 
-          {/* v1.1 actions: inline breakdown and drill */}
-          {selectedCustom && (
-            <div className="mt-3 flex gap-2">
-              <button
-                type="button"
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-                onClick={() => {
-                  const q = questions[current];
-                  const src = q.sourceRefs?.[0];
-                  if (!src) return;
-                  const node = resolveByPath(root, src.path);
-                  if (!node) return;
-                  const deeper = generateQuestionsV11(root, node, "deep", code).map(
-                    (sub) => ({
-                      stem: sub.stem,
-                      answerLabel: sub.answerLabel,
-                      options: shuffleArray([sub.answerLabel, ...buildDistractors(sub.answerLabel, { code })]),
-                      kind: sub.kind,
-                      generatorRule: sub.generatorRule,
-                      difficulty: "hard" as const,
-                      sourceRefs: sub.sourceRefs,
-                    })
-                  );
-                  if (!deeper.length) return;
-                  setQuestions((prev) => {
-                    const next = prev.slice();
-                    next.splice(current, 1, ...deeper);
-                    return next;
-                  });
-                  setSelected(undefined);
-                  setAnswers([]);
-                }}
-              >
-                Break down this step
-              </button>
-
-              <button
-                type="button"
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-                onClick={async () => {
-                  const q = questions[current];
-                  const src = q.sourceRefs?.[0];
-                  if (!src) return;
-                  const node = resolveByPath(root, src.path);
-                  if (!node) return;
-                  const deeper = generateQuestionsV11(root, node, "deep", code);
-                  if (!deeper.length) return;
-                  const payload = {
-                    fileKey,
-                    name: `Drill: ${q.kind || src.nodeType} @ ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1.1",
-                    rootNode: {
-                      type: root.type,
-                      start: root.startIndex,
-                      end: root.endIndex,
-                      path: [],
-                      text: textForRange(root.startIndex, root.endIndex, code),
-                    },
-                    profile: "deep" as DecompositionLevel,
-                    cards: deeper.map((sub, i) => ({
-                      order: i,
-                      type: sub.kind,
-                      text: sub.answerLabel,
-                      action: "next" as const,
-                      generatorRule: sub.generatorRule,
-                      difficulty: "hard" as const,
-                      sourceRef: sub.sourceRefs[0],
-                      question: sub.stem,
-                    })),
-                  } as any;
-                  try {
-                    await fetch("/api/quizzes", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify(payload),
-                    });
-                    alert("Drill quiz saved!");
-                  } catch {
-                    alert("Failed to save drill quiz.");
-                  }
-                }}
-              >
-                Drill only this
-              </button>
-            </div>
-          )}
-
-          {/* Bottom actions now handled in the header nav above */}
+          {/* Old inline breakdown/drill actions removed in favor of Mark flow */}
         </div>
       </div>
     );
   };
+
+  // Helper to locate the AST node for a given question
+  function nodeFromQuestion(
+    q: Question,
+    root: TreeSitterAstNode,
+    code?: string
+  ): TreeSitterAstNode | undefined {
+    if (!root) return undefined;
+    const start = q.revealEndBeforeChild;
+    const end = q.revealEndAfterChild;
+    if (typeof start === "number" && typeof end === "number") {
+      const exact = findNodeBySpan(root, start, end);
+      if (exact) return exact;
+    }
+    if (code && q.answerLabel) {
+      const pos = code.indexOf(q.answerLabel);
+      if (pos >= 0) {
+        const exact = findNodeBySpan(root, pos, pos + q.answerLabel.length);
+        if (exact) return exact;
+      }
+    }
+    return undefined;
+  }
+
+  // Types and builders for saving derived quizzes
+  type SavedCustomQuizCard = {
+    order: number;
+    type: string;
+    text: string;
+    source: "visited" | "pending";
+    action: "next" | "dig";
+    semanticRole?: string;
+    question?: string;
+  };
+
+  function baseCardsFromQuestions(
+    qs: Question[],
+    code?: string
+  ): SavedCustomQuizCard[] {
+    return qs.map((q, i) => {
+      const text =
+        typeof q.revealEndBeforeChild === "number" &&
+        typeof q.revealEndAfterChild === "number" &&
+        code
+          ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
+          : q.answerLabel;
+      return {
+        order: i,
+        type: q.childType || "unknown",
+        text: String(text ?? ""),
+        source: "visited",
+        action: "next",
+        semanticRole: q.parentType,
+        question: q.stem,
+      };
+    });
+  }
+
+  function derivedCardsFromMarks(
+    markedIdxs: number[],
+    qs: Question[],
+    root: TreeSitterAstNode,
+    code: string
+  ): SavedCustomQuizCard[] {
+    let order = 0;
+    const out: SavedCustomQuizCard[] = [];
+    for (const qi of markedIdxs) {
+      const q = qs[qi];
+      if (!q) continue;
+      const node = nodeFromQuestion(q, root, code);
+      if (!node) continue;
+      const cards = cardsFromCuratedSections(node, code).map((c) => ({
+        ...c,
+        order: order++,
+        source: "visited" as const,
+        action: "next" as const,
+      }));
+      out.push(...cards);
+    }
+    return out;
+  }
 
   const renderComplete = () => (
     <div className="space-y-4">
@@ -1477,6 +1494,97 @@ export const QuizViewer = ({
         <p className="text-sm text-slate-700">Thanks for playing!</p>
       </div>
       <div className="flex justify-end gap-2">
+        {code && (
+          <>
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={async () => {
+                try {
+                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
+                  const base = baseCardsFromQuestions(questions, code);
+                  const derived = derivedCardsFromMarks(markedIdxs, questions, root, code);
+                  const cards = [...base, ...derived].map((c, i) => ({ ...c, order: i }));
+
+                  const payload = {
+                    fileKey,
+                    name: `Custom quiz (merged) ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1",
+                    rootNode: {
+                      type: root.type,
+                      text: code.substring(root.startIndex, root.endIndex),
+                    },
+                    cards: cards.map(({ order, type, text, action, question }) => ({
+                      order,
+                      type,
+                      text,
+                      action,
+                      question,
+                    })),
+                  } as any;
+
+                  const res = await fetch("/api/quizzes", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                  });
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  alert("Derived quiz (merged) saved!");
+                } catch (err) {
+                  console.error(err);
+                  alert("Failed to save derived quiz.");
+                }
+              }}
+            >
+              Save derived quiz (merge with current)
+            </button>
+
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={async () => {
+                try {
+                  const markedIdxs = Array.from(marked.values()).sort((a, b) => a - b);
+                  const derived = derivedCardsFromMarks(markedIdxs, questions, root, code);
+                  if (derived.length === 0) {
+                    alert("No marked items produced derived questions.");
+                    return;
+                  }
+                  const cards = derived.map((c, i) => ({ ...c, order: i }));
+                  const payload = {
+                    fileKey,
+                    name: `Custom quiz (drill only) ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1",
+                    rootNode: {
+                      type: root.type,
+                      text: code.substring(root.startIndex, root.endIndex),
+                    },
+                    cards: cards.map(({ order, type, text, action, question }) => ({
+                      order,
+                      type,
+                      text,
+                      action,
+                      question,
+                    })),
+                  } as any;
+
+                  const res = await fetch("/api/quizzes", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                  });
+                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                  alert("Drill-only quiz saved!");
+                } catch (err) {
+                  console.error(err);
+                  alert("Failed to save drill-only quiz.");
+                }
+              }}
+            >
+              Save drill-only quiz
+            </button>
+          </>
+        )}
         {!selectedCustom && (
           <button
             type="button"
