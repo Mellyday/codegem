@@ -599,6 +599,7 @@ export const QuizViewer = ({
                 )
               )}
             </div>
+            {/* Desktop/tablet slider */}
             <div className="hidden sm:flex items-center gap-2">
               <label
                 htmlFor="q-range"
@@ -617,10 +618,28 @@ export const QuizViewer = ({
               />
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          {/* Mobile slider shown on its own row */}
+          <div className="flex items-center gap-2 sm:hidden px-1">
+            <label
+              htmlFor="q-range-mobile"
+              className="text-xs text-slate-500 whitespace-nowrap"
+            >
+              Jump
+            </label>
+            <input
+              id="q-range-mobile"
+              type="range"
+              min={0}
+              max={Math.max(0, total - 1)}
+              value={current}
+              onChange={(e) => jumpTo(Number(e.target.value))}
+              className="h-1.5 w-full cursor-pointer appearance-none rounded bg-slate-200 accent-amber-500"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
-              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
               onClick={prev}
               disabled={current <= 0}
             >
@@ -647,7 +666,7 @@ export const QuizViewer = ({
               />
               <button
                 type="button"
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50 shrink-0"
                 onClick={(e) => {
                   const input =
                     (e.currentTarget
@@ -674,7 +693,7 @@ export const QuizViewer = ({
             </button>
             <button
               type="button"
-              className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50"
+              className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0"
               onClick={next}
               disabled={!answered}
             >
