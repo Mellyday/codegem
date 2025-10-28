@@ -1,101 +1,101 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ChevronsLeft, ChevronsRight } from 'lucide-react'
-import type { TreeSitterAstNode } from '../lib/treeSitter'
-import { randomString, shuffleArray } from '../lib/utils'
+import { useEffect, useMemo, useState } from "react";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import type { TreeSitterAstNode } from "../lib/treeSitter";
+import { randomString, shuffleArray } from "../lib/utils";
 
-type QuizMode = 'setup' | 'active' | 'complete'
+type QuizMode = "setup" | "active" | "complete";
 
 export type QuizViewerProps = {
-  root: TreeSitterAstNode
+  root: TreeSitterAstNode;
   // Full source code for computing exact text of nodes
-  code?: string
+  code?: string;
   // File context to load saved custom quizzes
-  fileKey?: { kind: 'repo' | 'project'; id: string; path: string }
-  mode: QuizMode
-  onStart: () => void
-  onCancel: () => void
-  onComplete: () => void
-  onReturnToAst: () => void
+  fileKey?: { kind: "repo" | "project"; id: string; path: string };
+  mode: QuizMode;
+  onStart: () => void;
+  onCancel: () => void;
+  onComplete: () => void;
+  onReturnToAst: () => void;
   // Notify parent of the absolute end index to reveal in the code viewer
-  onRevealChange?: (endIndex: number | undefined) => void
-}
+  onRevealChange?: (endIndex: number | undefined) => void;
+};
 
 type Question = {
   // Human-readable stem for the current question
-  stem: string
+  stem: string;
   // The label corresponding to the correct answer
-  answerLabel: string
+  answerLabel: string;
   // Options to display
-  options: string[]
+  options: string[];
   // Optional snippet text to show (used by custom quizzes)
-  snippetText?: string
+  snippetText?: string;
   // Optional metadata for AST-sourced questions
-  parentType?: string
-  childType?: string
-  index?: number
+  parentType?: string;
+  childType?: string;
+  index?: number;
   // For controlling how much of the parent's code to reveal while this question is active
   // Absolute indices within the source file. Only set for AST-sourced questions
-  revealStart?: number
-  revealEndBeforeChild?: number
-  revealEndAfterChild?: number
-}
+  revealStart?: number;
+  revealEndBeforeChild?: number;
+  revealEndAfterChild?: number;
+};
 
 const gatherContainerTypes = (node: TreeSitterAstNode, acc: Set<string>) => {
   if ((node.namedChildren || []).length > 0) {
-    acc.add(node.type)
-    for (const c of node.namedChildren || []) gatherContainerTypes(c, acc)
+    acc.add(node.type);
+    for (const c of node.namedChildren || []) gatherContainerTypes(c, acc);
   }
-  return acc
-}
+  return acc;
+};
 
 const generateDistractors = (correct: string): string[] => {
-  const out = new Set<string>()
+  const out = new Set<string>();
   while (out.size < 3) {
-    const d = randomString(correct.length)
-    if (d !== correct) out.add(d)
+    const d = randomString(correct.length);
+    if (d !== correct) out.add(d);
   }
-  return Array.from(out)
-}
+  return Array.from(out);
+};
 
 const textForNode = (
   node: TreeSitterAstNode,
-  code?: string,
+  code?: string
 ): string | undefined => {
-  if (node.text && node.text.length > 0) return node.text
+  if (node.text && node.text.length > 0) return node.text;
   if (code) {
-    return code.substring(node.startIndex, node.endIndex)
+    return code.substring(node.startIndex, node.endIndex);
   }
-  return undefined
-}
+  return undefined;
+};
 
 const generateQuestions = (
   node: TreeSitterAstNode,
   breakdownTypes: Set<string>,
-  code?: string,
+  code?: string
 ): Question[] => {
-  const questions: Question[] = []
-  const children = node.namedChildren || []
+  const questions: Question[] = [];
+  const children = node.namedChildren || [];
   children.forEach((child, idx) => {
     if (
       breakdownTypes.has(child.type) &&
       (child.namedChildren || []).length > 0
     ) {
-      questions.push(...generateQuestions(child, breakdownTypes, code))
+      questions.push(...generateQuestions(child, breakdownTypes, code));
     } else {
-      const childType = child.type
+      const childType = child.type;
       // Prefer the actual source text where available (identifier, parameters, etc.)
-      const preferredLabel = textForNode(child, code) || childType
-      const distractors = generateDistractors(preferredLabel)
-      const options = shuffleArray([preferredLabel, ...distractors])
+      const preferredLabel = textForNode(child, code) || childType;
+      const distractors = generateDistractors(preferredLabel);
+      const options = shuffleArray([preferredLabel, ...distractors]);
 
       // Compute reveal ranges relative to the parent
-      const parentStart = node.startIndex
-      const revealStart = parentStart
-      const revealEndBeforeChild = child.startIndex
-      const revealEndAfterChild = child.endIndex
+      const parentStart = node.startIndex;
+      const revealStart = parentStart;
+      const revealEndBeforeChild = child.startIndex;
+      const revealEndAfterChild = child.endIndex;
 
       questions.push({
-        stem: 'What comes next?',
+        stem: "What comes next?",
         answerLabel: preferredLabel,
         options,
         parentType: node.type,
@@ -104,105 +104,110 @@ const generateQuestions = (
         revealStart,
         revealEndBeforeChild,
         revealEndAfterChild,
-      })
+      });
     }
-  })
-  return questions
-}
+  });
+  return questions;
+};
 
 // Saved Custom Quiz structures (from LessonViewer)
 type SavedCustomQuizCard = {
-  order: number
-  type: string
-  text: string
-  source: 'visited' | 'pending'
-  action: 'next' | 'dig'
+  order: number;
+  type: string;
+  text: string;
+  source: "visited" | "pending";
+  action: "next" | "dig";
   // Optional metadata for smarter custom quizzes
-  semanticRole?: string
-  question?: string
-}
+  semanticRole?: string;
+  question?: string;
+};
 
 type SavedCustomQuiz = {
-  id: string
-  kind: 'custom-quiz'
-  createdAt: string
-  root: { type: string; text: string }
-  totalCards: number
-  cards: SavedCustomQuizCard[]
-}
+  id: string;
+  kind: "custom-quiz";
+  createdAt: string;
+  root: { type: string; text: string };
+  totalCards: number;
+  cards: SavedCustomQuizCard[];
+};
 
 async function loadSavedCustomQuizzesFromApi(fileKey?: {
-  kind: 'repo' | 'project'
-  id: string
-  path: string
+  kind: "repo" | "project";
+  id: string;
+  path: string;
 }): Promise<SavedCustomQuiz[]> {
   try {
-    if (!fileKey) return []
+    if (!fileKey) return [];
     const qs = new URLSearchParams({
       kind: fileKey.kind,
       id: fileKey.id,
       path: fileKey.path,
-    })
-    const res = await fetch(`/api/quizzes?${qs.toString()}`, { method: 'GET' })
-    if (!res.ok) return []
-    const data = await res.json()
-    const list = Array.isArray(data.quizzes) ? data.quizzes : []
+    });
+    const res = await fetch(`/api/quizzes?${qs.toString()}`, { method: "GET" });
+    if (!res.ok) return [];
+    const data = await res.json();
+    const list = Array.isArray(data.quizzes) ? data.quizzes : [];
     const out: SavedCustomQuiz[] = list.map((q: any) => ({
-      id: String(q.id || ''),
-      kind: 'custom-quiz',
-      createdAt: q.createdAt ? new Date(q.createdAt).toISOString() : new Date().toISOString(),
-      root: { type: q.rootNode?.type || 'unknown', text: q.rootNode?.text || '' },
+      id: String(q.id || ""),
+      kind: "custom-quiz",
+      createdAt: q.createdAt
+        ? new Date(q.createdAt).toISOString()
+        : new Date().toISOString(),
+      root: {
+        type: q.rootNode?.type || "unknown",
+        text: q.rootNode?.text || "",
+      },
       totalCards: Array.isArray(q.cards) ? q.cards.length : 0,
       cards: (q.cards || []).map((c: any) => ({
         order: c.order,
         type: c.type,
         text: c.text,
-        source: 'visited' as const,
-        action: c.action === 'dig' ? 'dig' : 'next',
+        source: "visited" as const,
+        action: c.action === "dig" ? "dig" : "next",
       })),
-    }))
-    return out
+    }));
+    return out;
   } catch {
-    return []
+    return [];
   }
 }
 
 const generateQuestionsFromCustom = (
   quiz: SavedCustomQuiz,
   code?: string,
-  astRootFallback?: TreeSitterAstNode,
+  astRootFallback?: TreeSitterAstNode
 ): Question[] => {
   // Progressive “What comes next?” using saved card texts.
   // Attempts to compute absolute reveal indices by searching within the file's code.
   // Ignore any cards saved from a "dig deeper" action to prevent duplicates
   const cards = quiz.cards
-    .filter((c) => c.action !== 'dig')
+    .filter((c) => c.action !== "dig")
     .slice()
-    .sort((a, b) => a.order - b.order)
-  const qs: Question[] = []
+    .sort((a, b) => a.order - b.order);
+  const qs: Question[] = [];
 
-  let rootStart = -1
-  if (typeof code === 'string') {
-    rootStart = code.indexOf(quiz.root.text)
+  let rootStart = -1;
+  if (typeof code === "string") {
+    rootStart = code.indexOf(quiz.root.text);
   }
   if (rootStart < 0 && astRootFallback) {
-    rootStart = astRootFallback.startIndex
+    rootStart = astRootFallback.startIndex;
   }
 
-  let cursor = rootStart >= 0 ? rootStart : 0
+  let cursor = rootStart >= 0 ? rootStart : 0;
 
   for (const c of cards) {
-    const correct = c.text
-    const options = shuffleArray([correct, ...generateDistractors(correct)])
-    const stem = c.question || 'What comes next?'
+    const correct = c.text;
+    const options = shuffleArray([correct, ...generateDistractors(correct)]);
+    const stem = c.question || "What comes next?";
 
-    if (typeof code === 'string' && rootStart >= 0) {
-      let childStart = code.indexOf(correct, cursor)
+    if (typeof code === "string" && rootStart >= 0) {
+      let childStart = code.indexOf(correct, cursor);
       if (childStart < 0) {
-        childStart = code.indexOf(correct, rootStart)
+        childStart = code.indexOf(correct, rootStart);
       }
       if (childStart >= 0) {
-        const childEnd = childStart + correct.length
+        const childEnd = childStart + correct.length;
         qs.push({
           stem,
           answerLabel: correct,
@@ -210,9 +215,9 @@ const generateQuestionsFromCustom = (
           revealStart: rootStart,
           revealEndBeforeChild: childStart,
           revealEndAfterChild: childEnd,
-        })
-        cursor = childEnd
-        continue
+        });
+        cursor = childEnd;
+        continue;
       }
     }
 
@@ -221,11 +226,11 @@ const generateQuestionsFromCustom = (
       stem,
       answerLabel: correct,
       options,
-    })
+    });
   }
 
-  return qs
-}
+  return qs;
+};
 
 export const QuizViewer = ({
   root,
@@ -241,77 +246,82 @@ export const QuizViewer = ({
   // Setup state
   const containerTypes = useMemo(
     () => Array.from(gatherContainerTypes(root, new Set<string>())),
-    [root],
-  )
+    [root]
+  );
   const [breakdownTypes, setBreakdownTypes] = useState<Set<string>>(
-    () => new Set(containerTypes.filter((t) => t === 'block')),
-  )
+    () => new Set(containerTypes.filter((t) => t === "block"))
+  );
 
   // Custom quiz selection state
-  const [savedCustoms, setSavedCustoms] = useState<SavedCustomQuiz[]>([])
+  const [savedCustoms, setSavedCustoms] = useState<SavedCustomQuiz[]>([]);
   const [selectedCustom, setSelectedCustom] = useState<
     SavedCustomQuiz | undefined
-  >(undefined)
+  >(undefined);
 
   useEffect(() => {
-    let cancelled = false
+    let cancelled = false;
     loadSavedCustomQuizzesFromApi(fileKey).then((list) => {
-      if (!cancelled) setSavedCustoms(list)
-    })
+      if (!cancelled) setSavedCustoms(list);
+    });
     return () => {
-      cancelled = true
-    }
-  }, [mode, fileKey])
+      cancelled = true;
+    };
+  }, [mode, fileKey]);
 
   // Quiz state
-  const [questions, setQuestions] = useState<Question[]>([])
-  const [current, setCurrent] = useState(0)
-  const [selected, setSelected] = useState<string | undefined>(undefined)
-  const [score, setScore] = useState(0)
+  const [questions, setQuestions] = useState<Question[]>([]);
+  const [current, setCurrent] = useState(0);
+  const [selected, setSelected] = useState<string | undefined>(undefined);
+  const [score, setScore] = useState(0);
   // Persist answers per question index so navigation retains choices
-  const [answers, setAnswers] = useState<Array<string | undefined>>([])
+  const [answers, setAnswers] = useState<Array<string | undefined>>([]);
+  // Track per-option expansion state (keyed by question+option index)
+  const [expandedOptions, setExpandedOptions] = useState<
+    Record<string, boolean>
+  >({});
 
   useEffect(() => {
-    if (mode === 'active') {
+    if (mode === "active") {
       const qs = selectedCustom
         ? generateQuestionsFromCustom(selectedCustom, code, root)
-        : generateQuestions(root, breakdownTypes, code)
-      setQuestions(qs)
-      setCurrent(0)
-      setSelected(undefined)
-      setScore(0)
-      setAnswers(new Array(qs.length).fill(undefined))
+        : generateQuestions(root, breakdownTypes, code);
+      setQuestions(qs);
+      setCurrent(0);
+      setSelected(undefined);
+      setScore(0);
+      setAnswers(new Array(qs.length).fill(undefined));
+      setExpandedOptions({});
       // Initial reveal if available (applies to AST and custom)
-      if (qs.length > 0 && typeof qs[0].revealEndBeforeChild === 'number') {
-        onRevealChange?.(qs[0].revealEndBeforeChild)
+      if (qs.length > 0 && typeof qs[0].revealEndBeforeChild === "number") {
+        onRevealChange?.(qs[0].revealEndBeforeChild);
       } else {
-        onRevealChange?.(undefined)
+        onRevealChange?.(undefined);
       }
     }
-  }, [mode, root, breakdownTypes, code, selectedCustom])
+  }, [mode, root, breakdownTypes, code, selectedCustom]);
 
   // Clear reveal when leaving quiz modes
   useEffect(() => {
-    if (mode !== 'active') {
-      onRevealChange?.(undefined)
+    if (mode !== "active") {
+      onRevealChange?.(undefined);
     }
-  }, [mode, onRevealChange])
+  }, [mode, onRevealChange]);
 
-  const total = questions.length
-  const currentQ = questions[current]
+  const total = questions.length;
+  const currentQ = questions[current];
 
   const handleToggleType = (type: string) => {
     setBreakdownTypes((prev) => {
-      const next = new Set(prev)
-      if (next.has(type)) next.delete(type)
-      else next.add(type)
-      return next
-    })
-  }
+      const next = new Set(prev);
+      if (next.has(type)) next.delete(type);
+      else next.add(type);
+      return next;
+    });
+  };
 
   const renderSetup = () => {
     // Show unique container-like types available for breakdown selection
-    const preview = generateQuestions(root, breakdownTypes)
+    const preview = generateQuestions(root, breakdownTypes);
     return (
       <div className="space-y-4">
         <div className="mb-2">
@@ -357,7 +367,7 @@ export const QuizViewer = ({
 
         <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
           <span className="text-sm text-slate-700">
-            Preview questions:{' '}
+            Preview questions:{" "}
             <span className="font-semibold">{preview.length}</span>
           </span>
           <div className="flex gap-2">
@@ -372,8 +382,8 @@ export const QuizViewer = ({
               type="button"
               className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
               onClick={() => {
-                setSelectedCustom(undefined)
-                onStart()
+                setSelectedCustom(undefined);
+                onStart();
               }}
             >
               Start Quiz
@@ -387,7 +397,9 @@ export const QuizViewer = ({
             <button
               type="button"
               className="text-xs text-slate-500 underline decoration-dotted"
-              onClick={async () => setSavedCustoms(await loadSavedCustomQuizzesFromApi(fileKey))}
+              onClick={async () =>
+                setSavedCustoms(await loadSavedCustomQuizzesFromApi(fileKey))
+              }
             >
               Refresh
             </button>
@@ -419,8 +431,8 @@ export const QuizViewer = ({
                       type="button"
                       className="rounded-md bg-amber-500 px-2.5 py-1 text-white shadow hover:bg-amber-600"
                       onClick={() => {
-                        setSelectedCustom(q)
-                        onStart()
+                        setSelectedCustom(q);
+                        onStart();
                       }}
                     >
                       Start
@@ -430,9 +442,14 @@ export const QuizViewer = ({
                       className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
                       onClick={async () => {
                         try {
-                          await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, { method: 'DELETE' })
+                          await fetch(
+                            `/api/quizzes?id=${encodeURIComponent(q.id)}`,
+                            { method: "DELETE" }
+                          );
                         } catch {}
-                        setSavedCustoms(await loadSavedCustomQuizzesFromApi(fileKey))
+                        setSavedCustoms(
+                          await loadSavedCustomQuizzesFromApi(fileKey)
+                        );
                       }}
                     >
                       Delete
@@ -444,8 +461,8 @@ export const QuizViewer = ({
           )}
         </div>
       </div>
-    )
-  }
+    );
+  };
 
   const renderActive = () => {
     if (!currentQ) {
@@ -453,95 +470,98 @@ export const QuizViewer = ({
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-700">
           Generating questions…
         </div>
-      )
+      );
     }
 
-    const answered = selected !== undefined
-    const correct = selected === currentQ.answerLabel
+    const answered = selected !== undefined;
+    const correct = selected === currentQ.answerLabel;
 
     const handleSelect = (opt: string) => {
-      if (answered) return
-      setSelected(opt)
+      if (answered) return;
+      setSelected(opt);
       setAnswers((prev) => {
-        const next = prev.slice()
-        next[current] = opt
-        return next
-      })
-      if (opt === currentQ.answerLabel) setScore((s) => s + 1)
-      if (typeof currentQ.revealEndAfterChild === 'number') {
-        onRevealChange?.(currentQ.revealEndAfterChild)
+        const next = prev.slice();
+        next[current] = opt;
+        return next;
+      });
+      if (opt === currentQ.answerLabel) setScore((s) => s + 1);
+      if (typeof currentQ.revealEndAfterChild === "number") {
+        onRevealChange?.(currentQ.revealEndAfterChild);
       }
-    }
+    };
 
     const next = () => {
       if (current + 1 >= total) {
-        onComplete()
+        onComplete();
       } else {
-        const nextIdx = current + 1
-        setCurrent(nextIdx)
-        setSelected(answers[nextIdx])
+        const nextIdx = current + 1;
+        setCurrent(nextIdx);
+        setSelected(answers[nextIdx]);
         // Update reveal window for the next question if available (AST or custom)
-        const nextQ = questions[current + 1]
-        if (nextQ && typeof nextQ.revealEndBeforeChild === 'number') {
-          onRevealChange?.(nextQ.revealEndBeforeChild)
+        const nextQ = questions[current + 1];
+        if (nextQ && typeof nextQ.revealEndBeforeChild === "number") {
+          onRevealChange?.(nextQ.revealEndBeforeChild);
         } else {
-          onRevealChange?.(undefined)
+          onRevealChange?.(undefined);
         }
       }
-    }
+    };
 
     const prev = () => {
       if (current > 0) {
-        const idx = current - 1
-        setCurrent(idx)
-        setSelected(answers[idx])
-        const q = questions[idx]
-        if (q && typeof q.revealEndBeforeChild === 'number') {
-          onRevealChange?.(q.revealEndBeforeChild)
+        const idx = current - 1;
+        setCurrent(idx);
+        setSelected(answers[idx]);
+        const q = questions[idx];
+        if (q && typeof q.revealEndBeforeChild === "number") {
+          onRevealChange?.(q.revealEndBeforeChild);
         } else {
-          onRevealChange?.(undefined)
+          onRevealChange?.(undefined);
         }
       }
-    }
+    };
 
     const jumpTo = (idx: number) => {
-      if (!Number.isFinite(idx)) return
-      const clamped = Math.min(Math.max(0, Math.floor(idx)), Math.max(0, total - 1))
-      setCurrent(clamped)
-      setSelected(answers[clamped])
-      const q = questions[clamped]
-      if (q && typeof q.revealEndBeforeChild === 'number') {
-        onRevealChange?.(q.revealEndBeforeChild)
+      if (!Number.isFinite(idx)) return;
+      const clamped = Math.min(
+        Math.max(0, Math.floor(idx)),
+        Math.max(0, total - 1)
+      );
+      setCurrent(clamped);
+      setSelected(answers[clamped]);
+      const q = questions[clamped];
+      if (q && typeof q.revealEndBeforeChild === "number") {
+        onRevealChange?.(q.revealEndBeforeChild);
       } else {
-        onRevealChange?.(undefined)
+        onRevealChange?.(undefined);
       }
-    }
+    };
 
     const stepNavItems = (() => {
-      const n = total
-      const cur = current
-      if (n <= 1) return [0]
-      const items: Array<number | '…'> = []
-      const add = (x: number | '…') => items.push(x)
-      const windowRadius = 2
-      const left = Math.max(0, cur - windowRadius)
-      const right = Math.min(n - 1, cur + windowRadius)
-      add(0)
-      if (left > 1) add('…')
+      const n = total;
+      const cur = current;
+      if (n <= 1) return [0];
+      const items: Array<number | "…"> = [];
+      const add = (x: number | "…") => items.push(x);
+      const windowRadius = 2;
+      const left = Math.max(0, cur - windowRadius);
+      const right = Math.min(n - 1, cur + windowRadius);
+      add(0);
+      if (left > 1) add("…");
       for (let i = left; i <= right; i++) {
-        if (i !== 0 && i !== n - 1) add(i)
+        if (i !== 0 && i !== n - 1) add(i);
       }
-      if (right < n - 2) add('…')
-      if (n - 1 !== 0) add(n - 1)
-      return items
-    })()
+      if (right < n - 2) add("…");
+      if (n - 1 !== 0) add(n - 1);
+      return items;
+    })();
 
     return (
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-slate-800">
-              {selectedCustom ? 'Custom Quiz' : 'AST Quiz'}
+              {selectedCustom ? "Custom Quiz" : "AST Quiz"}
             </h3>
             {!selectedCustom && currentQ.parentType && (
               <p className="text-xs uppercase tracking-wide text-slate-500">
@@ -566,27 +586,34 @@ export const QuizViewer = ({
         <div className="flex flex-col gap-3">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1 -mx-2 px-2">
-              {stepNavItems.map((it, idx) => (
-                typeof it === 'number' ? (
+              {stepNavItems.map((it, idx) =>
+                typeof it === "number" ? (
                   <button
                     key={`s-${idx}-${it}`}
                     type="button"
                     onClick={() => jumpTo(it)}
                     className={
                       it === current
-                        ? 'min-w-9 px-2 py-1 rounded-md bg-amber-500 text-white text-xs font-medium shadow'
-                        : 'min-w-9 px-2 py-1 rounded-md border border-slate-200 bg-white text-slate-700 text-xs shadow-sm hover:bg-slate-50'
+                        ? "min-w-9 px-2 py-1 rounded-md bg-amber-500 text-white text-xs font-medium shadow"
+                        : "min-w-9 px-2 py-1 rounded-md border border-slate-200 bg-white text-slate-700 text-xs shadow-sm hover:bg-slate-50"
                     }
                   >
                     {it + 1}
                   </button>
                 ) : (
-                  <span key={`e-${idx}`} className="px-1 text-slate-400">{it}</span>
+                  <span key={`e-${idx}`} className="px-1 text-slate-400">
+                    {it}
+                  </span>
                 )
-              ))}
+              )}
             </div>
             <div className="hidden sm:flex items-center gap-2">
-              <label htmlFor="q-range" className="text-xs text-slate-500 whitespace-nowrap">Jump</label>
+              <label
+                htmlFor="q-range"
+                className="text-xs text-slate-500 whitespace-nowrap"
+              >
+                Jump
+              </label>
               <input
                 id="q-range"
                 type="range"
@@ -609,7 +636,9 @@ export const QuizViewer = ({
               Prev
             </button>
             <div className="flex items-center gap-2">
-              <label htmlFor="q-input" className="text-xs text-slate-500">Go to</label>
+              <label htmlFor="q-input" className="text-xs text-slate-500">
+                Go to
+              </label>
               <input
                 id="q-input"
                 type="number"
@@ -617,9 +646,9 @@ export const QuizViewer = ({
                 max={Math.max(1, total)}
                 defaultValue={current + 1}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter') {
-                    const v = (e.target as HTMLInputElement).valueAsNumber
-                    if (Number.isFinite(v)) jumpTo(v - 1)
+                  if (e.key === "Enter") {
+                    const v = (e.target as HTMLInputElement).valueAsNumber;
+                    if (Number.isFinite(v)) jumpTo(v - 1);
                   }
                 }}
                 className="w-20 rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
@@ -628,10 +657,12 @@ export const QuizViewer = ({
                 type="button"
                 className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
                 onClick={(e) => {
-                  const input = (e.currentTarget.previousElementSibling as HTMLInputElement) ?? null
+                  const input =
+                    (e.currentTarget
+                      .previousElementSibling as HTMLInputElement) ?? null;
                   if (input) {
-                    const v = input.valueAsNumber
-                    if (Number.isFinite(v)) jumpTo(v - 1)
+                    const v = input.valueAsNumber;
+                    if (Number.isFinite(v)) jumpTo(v - 1);
                   }
                 }}
               >
@@ -644,7 +675,7 @@ export const QuizViewer = ({
               onClick={next}
               disabled={!answered}
             >
-              {current + 1 >= total ? 'Finish' : 'Next'}
+              {current + 1 >= total ? "Finish" : "Next"}
               <ChevronsRight className="h-4 w-4" />
             </button>
           </div>
@@ -657,39 +688,86 @@ export const QuizViewer = ({
           </p>
 
           <ul className="mt-3 grid gap-2">
-            {currentQ.options.map((opt) => {
-              const isCorrect = opt === currentQ.answerLabel
-              const isSelected = selected === opt
+            {currentQ.options.map((opt, i) => {
+              const isCorrect = opt === currentQ.answerLabel;
+              const isSelected = selected === opt;
               const base =
-                'w-full rounded-md border px-3 py-2 text-left text-sm shadow-sm'
+                "w-full rounded-md border px-3 py-2 text-left text-sm shadow-sm";
               const idle =
-                'border-slate-200 bg-white hover:bg-slate-50 text-slate-700'
-              const correctCls = 'border-green-200 bg-green-50 text-green-700'
-              const wrongCls = 'border-rose-200 bg-rose-50 text-rose-700'
+                "border-slate-200 bg-white hover:bg-slate-50 text-slate-700";
+              const correctCls = "border-green-200 bg-green-50 text-green-700";
+              const wrongCls = "border-rose-200 bg-rose-50 text-rose-700";
+              const answered = selected !== undefined;
+
               const cls = !answered
                 ? `${base} ${idle}`
-                : `${base} ${isSelected ? (isCorrect ? correctCls : wrongCls) : isCorrect ? correctCls : idle}`
+                : `${base} ${
+                    isSelected ? (isCorrect ? correctCls : wrongCls) : isCorrect ? correctCls : idle
+                  }`;
+
+              const optionId = `${current}-${i}`;
+              const isExpanded = !!expandedOptions[optionId];
+              const isLong = opt.length > 100;
+
               return (
-                <li key={opt}>
-                  <button
-                    type="button"
-                    className={cls}
-                    onClick={() => handleSelect(opt)}
-                    disabled={answered}
-                  >
-                    <span className="font-mono">{opt}</span>
-                  </button>
+                <li key={optionId}>
+                  {/* Make the whole row a non-button clickable region */}
+                  <div className={`${cls}`}>
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      className="w-full text-left"
+                      onClick={() => handleSelect(opt)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          handleSelect(opt);
+                        }
+                      }}
+                    >
+                      <span
+                        className={`font-mono whitespace-pre-wrap break-all sm:break-words ${
+                          isLong && !isExpanded ? "line-clamp-2" : ""
+                        }`}
+                        style={{ overflowWrap: "anywhere" }}
+                      >
+                        {opt}
+                      </span>
+                    </div>
+
+                    {/* Show More/Less outside the clickable area and stop events early */}
+                    {isLong && (
+                      <button
+                        type="button"
+                        className="mt-1 text-xs font-semibold text-amber-600 hover:underline"
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedOptions((prev) => ({
+                            ...prev,
+                            [optionId]: !prev[optionId],
+                          }));
+                        }}
+                      >
+                        {isExpanded ? "Show Less" : "Show More"}
+                      </button>
+                    )}
+                  </div>
                 </li>
-              )
+              );
             })}
           </ul>
 
           {answered && (
             <div
-              className={`mt-3 rounded-md px-3 py-2 text-sm ${correct ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-rose-50 text-rose-700 border border-rose-200'}`}
+              className={`mt-3 rounded-md px-3 py-2 text-sm ${
+                correct
+                  ? "bg-green-50 text-green-700 border border-green-200"
+                  : "bg-rose-50 text-rose-700 border border-rose-200"
+              }`}
             >
               {correct
-                ? 'Correct!'
+                ? "Correct!"
                 : `Incorrect — answer: ${currentQ.answerLabel}`}
             </div>
           )}
@@ -697,8 +775,8 @@ export const QuizViewer = ({
           {/* Bottom actions now handled in the header nav above */}
         </div>
       </div>
-    )
-  }
+    );
+  };
 
   const renderComplete = () => (
     <div className="space-y-4">
@@ -718,7 +796,7 @@ export const QuizViewer = ({
             className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
             onClick={async () => {
               const exportPayload = {
-                type: 'ast-quiz',
+                type: "ast-quiz",
                 root: {
                   type: root.type,
                   startIndex: root.startIndex,
@@ -735,49 +813,49 @@ export const QuizViewer = ({
                   revealEndBeforeChild: q.revealEndBeforeChild,
                   revealEndAfterChild: q.revealEndAfterChild,
                   codeSnippet:
-                    typeof code === 'string' &&
-                    typeof q.revealStart === 'number' &&
-                    typeof q.revealEndBeforeChild === 'number'
+                    typeof code === "string" &&
+                    typeof q.revealStart === "number" &&
+                    typeof q.revealEndBeforeChild === "number"
                       ? code.substring(q.revealStart, q.revealEndBeforeChild)
                       : undefined,
                   childText:
-                    typeof code === 'string' &&
-                    typeof q.revealEndBeforeChild === 'number' &&
-                    typeof q.revealEndAfterChild === 'number'
+                    typeof code === "string" &&
+                    typeof q.revealEndBeforeChild === "number" &&
+                    typeof q.revealEndAfterChild === "number"
                       ? code.substring(
                           q.revealEndBeforeChild,
-                          q.revealEndAfterChild,
+                          q.revealEndAfterChild
                         )
                       : undefined,
                   options: q.options,
                 })),
-              }
+              };
 
-              const json = JSON.stringify(exportPayload, null, 2)
+              const json = JSON.stringify(exportPayload, null, 2);
 
               const fallbackCopy = (text: string) => {
                 try {
-                  const ta = document.createElement('textarea')
-                  ta.value = text
-                  ta.style.position = 'fixed'
-                  ta.style.left = '-9999px'
-                  document.body.appendChild(ta)
-                  ta.focus()
-                  ta.select()
-                  document.execCommand('copy')
-                  document.body.removeChild(ta)
-                  return true
+                  const ta = document.createElement("textarea");
+                  ta.value = text;
+                  ta.style.position = "fixed";
+                  ta.style.left = "-9999px";
+                  document.body.appendChild(ta);
+                  ta.focus();
+                  ta.select();
+                  document.execCommand("copy");
+                  document.body.removeChild(ta);
+                  return true;
                 } catch {
-                  return false
+                  return false;
                 }
-              }
+              };
 
               try {
                 if (navigator.clipboard && navigator.clipboard.writeText) {
-                  await navigator.clipboard.writeText(json)
+                  await navigator.clipboard.writeText(json);
                 } else {
-                  const ok = fallbackCopy(json)
-                  if (!ok) throw new Error('Clipboard unavailable')
+                  const ok = fallbackCopy(json);
+                  if (!ok) throw new Error("Clipboard unavailable");
                 }
               } catch {
                 // ignore
@@ -796,13 +874,13 @@ export const QuizViewer = ({
         </button>
       </div>
     </div>
-  )
+  );
 
   return (
     <div className="space-y-3">
-      {mode === 'setup' && renderSetup()}
-      {mode === 'active' && renderActive()}
-      {mode === 'complete' && renderComplete()}
+      {mode === "setup" && renderSetup()}
+      {mode === "active" && renderActive()}
+      {mode === "complete" && renderComplete()}
     </div>
-  )
-}
+  );
+};

@@ -27,6 +27,7 @@
     "web-tree-sitter": "^0.25.10"
   },
   "devDependencies": {
+    "@tailwindcss/line-clamp": "^0.4.4",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/react": "^19",
