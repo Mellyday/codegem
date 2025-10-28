@@ -33,6 +33,11 @@ type Question = {
   parentType?: string;
   childType?: string;
   index?: number;
+  // Optional v1.1 metadata
+  kind?: string;
+  generatorRule?: string;
+  difficulty?: "easy" | "medium" | "hard";
+  sourceRefs?: SourceRef[];
   // For controlling how much of the parent's code to reveal while this question is active
   // Absolute indices within the source file. Only set for AST-sourced questions
   revealStart?: number;
@@ -110,32 +115,47 @@ const generateQuestions = (
   return questions;
 };
 
-// Saved Custom Quiz structures (from LessonViewer)
-type SavedCustomQuizCard = {
+// v1.1: stable reference to an AST node or slice
+type SourceRef = {
+  nodeType: string;
+  start: number;
+  end: number;
+  path: number[];
+  fieldName?: string;
+  textHash?: string;
+  preview?: string;
+};
+
+// Saved Custom Quiz structures (v1 and v1.1)
+type SavedCustomQuizCardV11 = {
   order: number;
   type: string;
   text: string;
-  source: "visited" | "pending";
   action: "next" | "dig";
-  // Optional metadata for smarter custom quizzes
+  // v1.1 additions
+  sourceRef?: SourceRef;
   semanticRole?: string;
   question?: string;
+  generatorRule?: string;
+  difficulty?: "easy" | "medium" | "hard";
 };
 
-type SavedCustomQuiz = {
+type SavedCustomQuizV11 = {
   id: string;
   kind: "custom-quiz";
   createdAt: string;
-  root: { type: string; text: string };
+  typeLabel?: string; // e.g., CustomQuizV1.1
+  profile?: "shallow" | "normal" | "deep";
+  root: { type: string; text?: string; start?: number; end?: number; path?: number[] };
   totalCards: number;
-  cards: SavedCustomQuizCard[];
+  cards: SavedCustomQuizCardV11[];
 };
 
 async function loadSavedCustomQuizzesFromApi(fileKey?: {
   kind: "repo" | "project";
   id: string;
   path: string;
-}): Promise<SavedCustomQuiz[]> {
+}): Promise<SavedCustomQuizV11[]> {
   try {
     if (!fileKey) return [];
     const qs = new URLSearchParams({
@@ -147,23 +167,32 @@ async function loadSavedCustomQuizzesFromApi(fileKey?: {
     if (!res.ok) return [];
     const data = await res.json();
     const list = Array.isArray(data.quizzes) ? data.quizzes : [];
-    const out: SavedCustomQuiz[] = list.map((q: any) => ({
+    const out: SavedCustomQuizV11[] = list.map((q: any) => ({
       id: String(q.id || ""),
       kind: "custom-quiz",
       createdAt: q.createdAt
         ? new Date(q.createdAt).toISOString()
         : new Date().toISOString(),
+      typeLabel: q.type,
+      profile: q.profile,
       root: {
         type: q.rootNode?.type || "unknown",
-        text: q.rootNode?.text || "",
+        text: q.rootNode?.text,
+        start: q.rootNode?.start,
+        end: q.rootNode?.end,
+        path: q.rootNode?.path,
       },
       totalCards: Array.isArray(q.cards) ? q.cards.length : 0,
       cards: (q.cards || []).map((c: any) => ({
         order: c.order,
         type: c.type,
         text: c.text,
-        source: "visited" as const,
         action: c.action === "dig" ? "dig" : "next",
+        sourceRef: c.sourceRef,
+        semanticRole: c.semanticRole,
+        question: c.question,
+        generatorRule: c.generatorRule,
+        difficulty: c.difficulty,
       })),
     }));
     return out;
@@ -173,7 +202,7 @@ async function loadSavedCustomQuizzesFromApi(fileKey?: {
 }
 
 const generateQuestionsFromCustom = (
-  quiz: SavedCustomQuiz,
+  quiz: SavedCustomQuizV11,
   code?: string,
   astRootFallback?: TreeSitterAstNode
 ): Question[] => {
@@ -188,7 +217,8 @@ const generateQuestionsFromCustom = (
 
   let rootStart = -1;
   if (typeof code === "string") {
-    rootStart = code.indexOf(quiz.root.text);
+    if (quiz.root.start !== undefined) rootStart = quiz.root.start;
+    else if (quiz.root.text) rootStart = code.indexOf(quiz.root.text);
   }
   if (rootStart < 0 && astRootFallback) {
     rootStart = astRootFallback.startIndex;
@@ -212,6 +242,10 @@ const generateQuestionsFromCustom = (
           stem,
           answerLabel: correct,
           options,
+          kind: c.type,
+          generatorRule: c.generatorRule,
+          difficulty: c.difficulty,
+          sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
           revealStart: rootStart,
           revealEndBeforeChild: childStart,
           revealEndAfterChild: childEnd,
@@ -226,11 +260,577 @@ const generateQuestionsFromCustom = (
       stem,
       answerLabel: correct,
       options,
+      kind: c.type,
+      generatorRule: c.generatorRule,
+      difficulty: c.difficulty,
+      sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
     });
   }
 
   return qs;
 };
+
+// -------- v1.1 helpers for deeper breakdown --------
+type DecompositionLevel = "shallow" | "normal" | "deep";
+
+const computeAstPath = (
+  root: TreeSitterAstNode,
+  target: TreeSitterAstNode
+): number[] => {
+  const path: number[] = [];
+  let found = false;
+  const dfs = (node: TreeSitterAstNode, cur: number[]) => {
+    if (found) return;
+    if (
+      node.startIndex === target.startIndex &&
+      node.endIndex === target.endIndex &&
+      node.type === target.type
+    ) {
+      path.push(...cur);
+      found = true;
+      return;
+    }
+    (node.namedChildren || []).forEach((c, idx) => dfs(c, cur.concat(idx)));
+  };
+  dfs(root, []);
+  return path;
+};
+
+const resolveByPath = (
+  root: TreeSitterAstNode,
+  path: number[] | undefined
+): TreeSitterAstNode | undefined => {
+  if (!path) return undefined;
+  let cur: TreeSitterAstNode | undefined = root;
+  for (const idx of path) {
+    if (!cur?.namedChildren || !cur.namedChildren[idx]) return undefined;
+    cur = cur.namedChildren[idx];
+  }
+  return cur;
+};
+
+const textForRange = (
+  start: number | undefined,
+  end: number | undefined,
+  code?: string
+) => {
+  if (
+    typeof start === "number" &&
+    typeof end === "number" &&
+    typeof code === "string"
+  )
+    return code.slice(start, end);
+  return undefined;
+};
+
+// Basic distractors upgrade stub (non-breaking)
+function buildDistractors(correct: string, _ctx?: { code?: string }): string[] {
+  const out = new Set<string>();
+  while (out.size < 3) {
+    const variation =
+      correct.length <= 3
+        ? correct.toUpperCase() !== correct
+          ? correct.toUpperCase()
+          : correct.toLowerCase()
+        : correct.replace(/[a-zA-Z]/, (c) =>
+            c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
+          );
+    if (variation !== correct) out.add(variation);
+    if (out.size < 3) out.add(correct + "_");
+    if (out.size < 3)
+      out.add(correct.slice(0, Math.max(1, Math.floor(correct.length * 0.8))));
+  }
+  return Array.from(out);
+}
+
+// Helpers for reading fields and extracting operators/chains
+const childByField = (node: TreeSitterAstNode, field: string) =>
+  (node.namedChildren || []).find((c) => c.fieldName === field);
+
+const extractOperatorBetween = (
+  code: string | undefined,
+  leftEnd: number,
+  rightStart: number
+): string | undefined => {
+  if (!code) return undefined;
+  const raw = code.slice(leftEnd, rightStart).trim();
+  // Compress inner whitespace to a single space
+  return raw.replace(/\s+/g, " ");
+};
+
+type ChainLink = { kind: "attr" | "call"; name?: string; args?: TreeSitterAstNode[] };
+const extractCallChain = (
+  node: TreeSitterAstNode,
+  code?: string
+): ChainLink[] => {
+  const links: ChainLink[] = [];
+  let cur: TreeSitterAstNode | undefined = node;
+
+  const getFuncNode = (n: TreeSitterAstNode) =>
+    childByField(n, "function") || (n.namedChildren || [])[0];
+
+  const pushAttr = (n: TreeSitterAstNode) => {
+    const kids = n.namedChildren || [];
+    const nameNode = kids[kids.length - 1];
+    const name = nameNode
+      ? textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type
+      : undefined;
+    links.push({ kind: "attr", name });
+  };
+
+  const pushCall = (n: TreeSitterAstNode) => {
+    const fn = getFuncNode(n);
+    let name: string | undefined;
+    if (fn?.type === "identifier") {
+      name = textForRange(fn.startIndex, fn.endIndex, code) || fn.type;
+    } else if (fn?.type === "attribute") {
+      const kids = fn.namedChildren || [];
+      const leaf = kids[kids.length - 1];
+      if (leaf?.type === "identifier") {
+        name = textForRange(leaf.startIndex, leaf.endIndex, code) || leaf.type;
+      }
+    }
+    const argsList =
+      childByField(n, "arguments") ||
+      (n.namedChildren || []).find((c) => c.type === "argument_list");
+    const args = argsList?.namedChildren || [];
+    links.push({ kind: "call", name, args });
+  };
+
+  while (cur) {
+    if (cur.type === "call") {
+      pushCall(cur);
+      const fn = getFuncNode(cur);
+      cur = fn;
+    } else if (cur.type === "attribute") {
+      pushAttr(cur);
+      cur = (cur.namedChildren || [])[0];
+    } else {
+      break;
+    }
+  }
+  return links.reverse();
+};
+
+// Minimal rule set: assignment and call; can expand incrementally
+type RuleCtx = {
+  root: TreeSitterAstNode;
+  node: TreeSitterAstNode;
+  code?: string;
+  sourceRef: SourceRef;
+  profile: DecompositionLevel;
+};
+
+type Q11 = {
+  stem: string;
+  kind: string;
+  answerLabel: string;
+  options: string[];
+  sourceRefs: SourceRef[];
+  generatorRule: string;
+  difficulty?: "easy" | "medium" | "hard";
+};
+
+type Rule = (ctx: RuleCtx) => Q11[] | undefined;
+
+const rules: Record<string, Rule[]> = {
+  assignment: [
+    ({ root, node, code, sourceRef }) => {
+      const kids = node.namedChildren || [];
+      const left = kids[0];
+      const right = kids[kids.length - 1];
+      if (!left || !right) return;
+      const leftText =
+        textForRange(left.startIndex, left.endIndex, code) || left.type;
+      const rightText =
+        textForRange(right.startIndex, right.endIndex, code) || right.type;
+      return [
+        {
+          kind: "identify-field",
+          stem: "What is the left-hand side (target) of this assignment?",
+          answerLabel: leftText,
+          options: buildDistractors(leftText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: left.type,
+              start: left.startIndex,
+              end: left.endIndex,
+              path: computeAstPath(root, left),
+            },
+          ],
+          generatorRule: "assignment.lhs",
+        },
+        {
+          kind: "identify-field",
+          stem: "What is the right-hand side (value) of this assignment?",
+          answerLabel: rightText,
+          options: buildDistractors(rightText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: right.type,
+              start: right.startIndex,
+              end: right.endIndex,
+              path: computeAstPath(root, right),
+            },
+          ],
+          generatorRule: "assignment.rhs",
+        },
+      ];
+    },
+  ],
+  call: [
+    ({ root, node, code, sourceRef, profile }) => {
+      const fnNode =
+        (node.namedChildren || []).find((c) => c.fieldName === "function") ||
+        (node.namedChildren || [])[0];
+      const argsList =
+        (node.namedChildren || []).find((c) => c.fieldName === "arguments") ||
+        (node.namedChildren || []).find((c) => c.type === "argument_list");
+      const fnText = fnNode
+        ? textForRange(fnNode.startIndex, fnNode.endIndex, code) || fnNode.type
+        : "call";
+      const qs: Q11[] = [
+        {
+          kind: "call-func",
+          stem: "Which function or method is being called here?",
+          answerLabel: fnText,
+          options: buildDistractors(fnText, { code }),
+          sourceRefs: [sourceRef],
+          generatorRule: "call.func",
+        },
+      ];
+      if (profile !== "shallow" && argsList) {
+        const args = argsList.namedChildren || [];
+        let pos = 0;
+        for (const a of args) {
+          if (a.type === "keyword_argument") {
+            const nameNode = (a.namedChildren || [])[0];
+            const nameText =
+              nameNode && textForRange(nameNode.startIndex, nameNode.endIndex, code);
+            if (nameText) {
+              qs.push({
+                kind: "call-arg-keyword",
+                stem: `What is this keyword argument name?`,
+                answerLabel: nameText,
+                options: buildDistractors(nameText, { code }),
+                sourceRefs: [
+                  sourceRef,
+                  {
+                    nodeType: a.type,
+                    start: a.startIndex,
+                    end: a.endIndex,
+                    path: computeAstPath(root, a),
+                  },
+                ],
+                generatorRule: "call.kwarg-name",
+              });
+            }
+          } else {
+            pos += 1;
+            const argText =
+              textForRange(a.startIndex, a.endIndex, code) || a.type;
+            qs.push({
+              kind: "call-arg-positional",
+              stem: `What is positional argument #${pos}?`,
+              answerLabel: argText,
+              options: buildDistractors(argText, { code }),
+              sourceRefs: [
+                sourceRef,
+                {
+                  nodeType: a.type,
+                  start: a.startIndex,
+                  end: a.endIndex,
+                  path: computeAstPath(root, a),
+                },
+              ],
+              generatorRule: "call.pos-arg",
+            });
+          }
+        }
+      }
+      return qs;
+    },
+  ],
+  attribute: [
+    ({ node, code, sourceRef, profile }) => {
+      if (profile === "shallow") return;
+      const chain = extractCallChain(node, code);
+      if (chain.length <= 1) return;
+      const qs: Q11[] = [];
+      chain.forEach((link, i) => {
+        if (link.kind === "call" && link.name) {
+          qs.push({
+            kind: "chain-method-name",
+            stem: `What is the name of method #${i + 1} in this chain?`,
+            answerLabel: link.name,
+            options: buildDistractors(link.name, { code }),
+            sourceRefs: [sourceRef],
+            generatorRule: "chain.method-name",
+          });
+        }
+      });
+      return qs;
+    },
+  ],
+  binary_operator: [
+    ({ root, node, code, sourceRef }) => {
+      const children = node.namedChildren || [];
+      const left = childByField(node, "left") || children[0];
+      const right = childByField(node, "right") || children[children.length - 1];
+      if (!left || !right) return;
+      const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
+      const rightText = textForRange(right.startIndex, right.endIndex, code) || right.type;
+      const op = extractOperatorBetween(code, left.endIndex, right.startIndex);
+      const qs: Q11[] = [
+        {
+          kind: "identify-field",
+          stem: "What is the left operand?",
+          answerLabel: leftText,
+          options: buildDistractors(leftText, { code }),
+          sourceRefs: [
+            sourceRef,
+            { nodeType: left.type, start: left.startIndex, end: left.endIndex, path: computeAstPath(root, left) },
+          ],
+          generatorRule: "binary.left",
+        },
+        {
+          kind: "identify-field",
+          stem: "What is the right operand?",
+          answerLabel: rightText,
+          options: buildDistractors(rightText, { code }),
+          sourceRefs: [
+            sourceRef,
+            { nodeType: right.type, start: right.startIndex, end: right.endIndex, path: computeAstPath(root, right) },
+          ],
+          generatorRule: "binary.right",
+        },
+      ];
+      if (op && op.length <= 6) {
+        qs.unshift({
+          kind: "operator",
+          stem: "What is the operator?",
+          answerLabel: op,
+          options: buildDistractors(op, { code }),
+          sourceRefs: [sourceRef],
+          generatorRule: "binary.op",
+        });
+      }
+      return qs;
+    },
+  ],
+  comparison: [
+    ({ root, node, code, sourceRef }) => {
+      const kids = node.namedChildren || [];
+      if (kids.length < 2) return;
+      const left = kids[0];
+      const qs: Q11[] = [];
+      const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
+      qs.push({
+        kind: "identify-field",
+        stem: "What is the left operand?",
+        answerLabel: leftText,
+        options: buildDistractors(leftText, { code }),
+        sourceRefs: [
+          sourceRef,
+          { nodeType: left.type, start: left.startIndex, end: left.endIndex, path: computeAstPath(root, left) },
+        ],
+        generatorRule: "comparison.left",
+      });
+      for (let i = 1; i < kids.length; i++) {
+        const comp = kids[i];
+        const compText = textForRange(comp.startIndex, comp.endIndex, code) || comp.type;
+        const prev = kids[i - 1];
+        const op = extractOperatorBetween(code, prev.endIndex, comp.startIndex);
+        if (op && op.length <= 6) {
+          qs.push({
+            kind: "operator",
+            stem: `What is the operator #${i}?`,
+            answerLabel: op,
+            options: buildDistractors(op, { code }),
+            sourceRefs: [sourceRef],
+            generatorRule: "comparison.op",
+          });
+        }
+        qs.push({
+          kind: "identify-field",
+          stem: `What is comparator #${i}?`,
+          answerLabel: compText,
+          options: buildDistractors(compText, { code }),
+          sourceRefs: [
+            sourceRef,
+            { nodeType: comp.type, start: comp.startIndex, end: comp.endIndex, path: computeAstPath(root, comp) },
+          ],
+          generatorRule: "comparison.comparator",
+        });
+      }
+      return qs;
+    },
+  ],
+  subscript: [
+    ({ root, node, code, sourceRef }) => {
+      const valueNode = childByField(node, "value") || (node.namedChildren || [])[0];
+      const second = childByField(node, "slice") || (node.namedChildren || [])[1];
+      if (!valueNode) return;
+      const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
+      const qs: Q11[] = [
+        {
+          kind: "identify-field",
+          stem: "What is the base being indexed?",
+          answerLabel: valueText,
+          options: buildDistractors(valueText, { code }),
+          sourceRefs: [
+            sourceRef,
+            { nodeType: valueNode.type, start: valueNode.startIndex, end: valueNode.endIndex, path: computeAstPath(root, valueNode) },
+          ],
+          generatorRule: "subscript.base",
+        },
+      ];
+      if (second) {
+        if (second.type === "slice") {
+          const parts = second.namedChildren || [];
+          const labels = ["start", "stop", "step"] as const;
+          parts.slice(0, 3).forEach((p, idx) => {
+            const txt = textForRange(p.startIndex, p.endIndex, code) || p.type;
+            qs.push({
+              kind: "identify-field",
+              stem: `What is the ${labels[idx]} of this slice?`,
+              answerLabel: txt,
+              options: buildDistractors(txt, { code }),
+              sourceRefs: [
+                sourceRef,
+                { nodeType: p.type, start: p.startIndex, end: p.endIndex, path: computeAstPath(root, p) },
+              ],
+              generatorRule: `slice.${labels[idx]}`,
+            });
+          });
+        } else {
+          const idxText = textForRange(second.startIndex, second.endIndex, code) || second.type;
+          qs.push({
+            kind: "identify-field",
+            stem: "What is the index?",
+            answerLabel: idxText,
+            options: buildDistractors(idxText, { code }),
+            sourceRefs: [
+              sourceRef,
+              { nodeType: second.type, start: second.startIndex, end: second.endIndex, path: computeAstPath(root, second) },
+            ],
+            generatorRule: "subscript.index",
+          });
+        }
+      }
+      return qs;
+    },
+  ],
+  slice: [
+    ({ root, node, code, sourceRef }) => {
+      const parts = node.namedChildren || [];
+      const labels = ["start", "stop", "step"] as const;
+      if (parts.length === 0) return;
+      const qs: Q11[] = [];
+      parts.slice(0, 3).forEach((p, idx) => {
+        const txt = textForRange(p.startIndex, p.endIndex, code) || p.type;
+        qs.push({
+          kind: "identify-field",
+          stem: `What is the ${labels[idx]} of this slice?`,
+          answerLabel: txt,
+          options: buildDistractors(txt, { code }),
+          sourceRefs: [
+            sourceRef,
+            { nodeType: p.type, start: p.startIndex, end: p.endIndex, path: computeAstPath(root, p) },
+          ],
+          generatorRule: `slice.${labels[idx]}`,
+        });
+      });
+      return qs;
+    },
+  ],
+  function_definition: [
+    ({ root, node, code, sourceRef, profile }) => {
+      const params = (node.namedChildren || []).find((c) => c.type === "parameters")?.namedChildren || [];
+      const qs: Q11[] = [];
+      params.forEach((p, idx) => {
+        const nameNode = (p.namedChildren || []).find((c) => c.type === "identifier");
+        if (nameNode) {
+          const nameText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || "param";
+          qs.push({
+            kind: "param-name",
+            stem: `What is the name of parameter #${idx + 1}?`,
+            answerLabel: nameText,
+            options: buildDistractors(nameText, { code }),
+            sourceRefs: [
+              sourceRef,
+              { nodeType: p.type, start: p.startIndex, end: p.endIndex, path: computeAstPath(root, p) },
+            ],
+            generatorRule: "func.param-name",
+          });
+        }
+        if (profile !== "shallow") {
+          const typeNode = (p.namedChildren || []).find(
+            (c) => c.type === "type" || c.type === "type_annotation"
+          );
+          if (typeNode) {
+            const typeText = textForRange(typeNode.startIndex, typeNode.endIndex, code) || "type";
+            qs.push({
+              kind: "param-type",
+              stem: `What is the type annotation of parameter #${idx + 1}?`,
+              answerLabel: typeText,
+              options: buildDistractors(typeText, { code }),
+              sourceRefs: [
+                sourceRef,
+                { nodeType: typeNode.type, start: typeNode.startIndex, end: typeNode.endIndex, path: computeAstPath(root, typeNode) },
+              ],
+              generatorRule: "func.param-type",
+            });
+          }
+        }
+      });
+      if (profile !== "shallow") {
+        const ret = (node.namedChildren || []).find(
+          (c) => c.type === "type" || c.type === "return_type"
+        );
+        if (ret) {
+          const retText = textForRange(ret.startIndex, ret.endIndex, code) || "type";
+          qs.push({
+            kind: "param-type",
+            stem: "What is the return type of this function?",
+            answerLabel: retText,
+            options: buildDistractors(retText, { code }),
+            sourceRefs: [
+              sourceRef,
+              { nodeType: ret.type, start: ret.startIndex, end: ret.endIndex, path: computeAstPath(root, ret) },
+            ],
+            generatorRule: "func.return-type",
+          });
+        }
+      }
+      return qs;
+    },
+  ],
+};
+
+function generateQuestionsV11(
+  root: TreeSitterAstNode,
+  node: TreeSitterAstNode,
+  profile: DecompositionLevel,
+  code?: string
+): Q11[] {
+  const src: SourceRef = {
+    nodeType: node.type,
+    start: node.startIndex,
+    end: node.endIndex,
+    path: computeAstPath(root, node),
+    preview: textForRange(node.startIndex, node.endIndex, code)?.slice(0, 120),
+  };
+  const applyRules = rules[node.type] || [];
+  for (const rule of applyRules) {
+    const qs = rule({ root, node, code, sourceRef: src, profile });
+    if (qs && qs.length) return qs;
+  }
+  // Fallback: no decomposition
+  return [];
+}
 
 export const QuizViewer = ({
   root,
@@ -253,9 +853,9 @@ export const QuizViewer = ({
   );
 
   // Custom quiz selection state
-  const [savedCustoms, setSavedCustoms] = useState<SavedCustomQuiz[]>([]);
+  const [savedCustoms, setSavedCustoms] = useState<SavedCustomQuizV11[]>([]);
   const [selectedCustom, setSelectedCustom] = useState<
-    SavedCustomQuiz | undefined
+    SavedCustomQuizV11 | undefined
   >(undefined);
 
   useEffect(() => {
@@ -769,6 +1369,93 @@ export const QuizViewer = ({
               {correct
                 ? "Correct!"
                 : `Incorrect — answer: ${currentQ.answerLabel}`}
+            </div>
+          )}
+
+          {/* v1.1 actions: inline breakdown and drill */}
+          {selectedCustom && (
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+                onClick={() => {
+                  const q = questions[current];
+                  const src = q.sourceRefs?.[0];
+                  if (!src) return;
+                  const node = resolveByPath(root, src.path);
+                  if (!node) return;
+                  const deeper = generateQuestionsV11(root, node, "deep", code).map(
+                    (sub) => ({
+                      stem: sub.stem,
+                      answerLabel: sub.answerLabel,
+                      options: shuffleArray([sub.answerLabel, ...buildDistractors(sub.answerLabel, { code })]),
+                      kind: sub.kind,
+                      generatorRule: sub.generatorRule,
+                      difficulty: "hard" as const,
+                      sourceRefs: sub.sourceRefs,
+                    })
+                  );
+                  if (!deeper.length) return;
+                  setQuestions((prev) => {
+                    const next = prev.slice();
+                    next.splice(current, 1, ...deeper);
+                    return next;
+                  });
+                  setSelected(undefined);
+                  setAnswers([]);
+                }}
+              >
+                Break down this step
+              </button>
+
+              <button
+                type="button"
+                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+                onClick={async () => {
+                  const q = questions[current];
+                  const src = q.sourceRefs?.[0];
+                  if (!src) return;
+                  const node = resolveByPath(root, src.path);
+                  if (!node) return;
+                  const deeper = generateQuestionsV11(root, node, "deep", code);
+                  if (!deeper.length) return;
+                  const payload = {
+                    fileKey,
+                    name: `Drill: ${q.kind || src.nodeType} @ ${new Date().toLocaleString()}`,
+                    type: "CustomQuizV1.1",
+                    rootNode: {
+                      type: root.type,
+                      start: root.startIndex,
+                      end: root.endIndex,
+                      path: [],
+                      text: textForRange(root.startIndex, root.endIndex, code),
+                    },
+                    profile: "deep" as DecompositionLevel,
+                    cards: deeper.map((sub, i) => ({
+                      order: i,
+                      type: sub.kind,
+                      text: sub.answerLabel,
+                      action: "next" as const,
+                      generatorRule: sub.generatorRule,
+                      difficulty: "hard" as const,
+                      sourceRef: sub.sourceRefs[0],
+                      question: sub.stem,
+                    })),
+                  } as any;
+                  try {
+                    await fetch("/api/quizzes", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify(payload),
+                    });
+                    alert("Drill quiz saved!");
+                  } catch {
+                    alert("Failed to save drill quiz.");
+                  }
+                }}
+              >
+                Drill only this
+              </button>
             </div>
           )}
 

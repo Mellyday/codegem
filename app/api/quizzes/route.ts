@@ -4,11 +4,26 @@ import { getDb } from "../../../src/lib/mongodb";
 import { ObjectId } from "mongodb";
 import { auth } from "@clerk/nextjs/server";
 
+type SourceRef = {
+  nodeType: string;
+  start: number;
+  end: number;
+  path: number[];
+  fieldName?: string;
+  textHash?: string;
+  preview?: string;
+};
+
 type QuizCard = {
   order: number;
   type: string;
   text: string;
   action: "next" | "dig";
+  // v1.1 optional fields
+  question?: string;
+  generatorRule?: string;
+  difficulty?: "easy" | "medium" | "hard";
+  sourceRef?: SourceRef;
 };
 
 type QuizPayload = {
@@ -17,8 +32,9 @@ type QuizPayload = {
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
   name: string;
   // Schema/version discriminator
-  type: string; // e.g. "CustomQuizV1"
-  rootNode: { type: string; text: string };
+  type: string; // e.g. "CustomQuizV1.1"
+  rootNode: { type: string; text?: string; start?: number; end?: number; path?: number[] };
+  profile?: "shallow" | "normal" | "deep";
   cards: QuizCard[];
 };
 
@@ -93,12 +109,25 @@ export async function POST(request: Request) {
       ...(origin ? { origin } : {}),
       name: body.name,
       type: body.type,
-      rootNode: { type: body.rootNode.type, text: body.rootNode.text },
+      rootNode: {
+        type: body.rootNode.type,
+        ...(body.rootNode.text ? { text: body.rootNode.text } : {}),
+        ...(typeof body.rootNode.start === "number"
+          ? { start: body.rootNode.start }
+          : {}),
+        ...(typeof body.rootNode.end === "number" ? { end: body.rootNode.end } : {}),
+        ...(Array.isArray(body.rootNode.path) ? { path: body.rootNode.path } : {}),
+      },
+      ...(body.profile ? { profile: body.profile } : {}),
       cards: body.cards?.map((c) => ({
         order: c.order,
         type: c.type,
         text: c.text,
         action: c.action,
+        ...(c.question ? { question: c.question } : {}),
+        ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
+        ...(c.difficulty ? { difficulty: c.difficulty } : {}),
+        ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
       })) ?? [],
       createdAt: now,
     } as const;

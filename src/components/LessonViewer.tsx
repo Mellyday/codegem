@@ -16,6 +16,30 @@ const textForNode = (node: TreeSitterAstNode, code: string): string => {
   return code.substring(node.startIndex, node.endIndex);
 };
 
+// Compute child-index path from root to the target node for stable anchoring
+function computeAstPath(
+  root: TreeSitterAstNode,
+  target: TreeSitterAstNode
+): number[] {
+  const path: number[] = [];
+  let found = false;
+  const dfs = (n: TreeSitterAstNode, cur: number[]) => {
+    if (found) return;
+    if (
+      n.startIndex === target.startIndex &&
+      n.endIndex === target.endIndex &&
+      n.type === target.type
+    ) {
+      path.push(...cur);
+      found = true;
+      return;
+    }
+    (n.namedChildren || []).forEach((c, idx) => dfs(c, cur.concat(idx)));
+  };
+  dfs(root, []);
+  return path;
+}
+
 type LessonHistoryItem = LessonStep & { action?: "next" | "dig" };
 
 type MaskRange = { start: number; end: number };
@@ -221,6 +245,13 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
             break;
         }
         const { answerText } = maskAndAnswerForStep(step, root, code);
+        const sourceRef = {
+          nodeType: step.node.type,
+          start: step.node.startIndex,
+          end: step.node.endIndex,
+          path: computeAstPath(root, step.node),
+          preview: textForNode(step.node, code).slice(0, 120),
+        };
         return {
           order,
           type: step.node.type,
@@ -230,6 +261,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
           // extra metadata for smarter custom quizzes
           semanticRole: step.semanticRole,
           question,
+          sourceRef,
         };
       };
 
@@ -250,13 +282,23 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       const payload = {
         fileKey,
         name: `Custom quiz ${new Date().toLocaleString()}`,
-        type: "CustomQuizV1",
-        rootNode: { type: root.type, text: textForNode(root, code) },
+        type: "CustomQuizV1.1",
+        profile: "normal" as const,
+        rootNode: {
+          type: root.type,
+          text: textForNode(root, code),
+          start: root.startIndex,
+          end: root.endIndex,
+          path: [],
+        },
         cards: cards.map((c) => ({
           order: c.order,
           type: c.type,
           text: c.text,
           action: c.action,
+          question: c.question,
+          semanticRole: c.semanticRole,
+          sourceRef: (c as any).sourceRef,
         })),
       };
 
