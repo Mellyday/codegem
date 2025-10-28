@@ -1,7 +1,15 @@
 import React, { useState, useEffect } from "react";
 import { type TreeSitterAstNode } from "../lib/treeSitter";
 import { BookOpen, ChevronsRight, ChevronsLeft, FileJson } from "lucide-react";
-import { generateLessonPlan, type LessonStep } from "../lib/lessonPlanner";
+import {
+  generateLessonPlan,
+  type LessonStep,
+  type LessonHistoryItem,
+  maskAndAnswerForStep,
+  textForNode,
+  computeAstPath,
+  buildCustomQuizPayload,
+} from "../lib/pyLesson";
 
 export type LessonViewerProps = {
   root: TreeSitterAstNode;
@@ -12,111 +20,15 @@ export type LessonViewerProps = {
   onMaskRangesChange: (ranges: { start: number; end: number }[]) => void;
 };
 
-const textForNode = (node: TreeSitterAstNode, code: string): string => {
-  return code.substring(node.startIndex, node.endIndex);
-};
-
 // Compute child-index path from root to the target node for stable anchoring
-function computeAstPath(
-  root: TreeSitterAstNode,
-  target: TreeSitterAstNode
-): number[] {
-  const path: number[] = [];
-  let found = false;
-  const dfs = (n: TreeSitterAstNode, cur: number[]) => {
-    if (found) return;
-    if (
-      n.startIndex === target.startIndex &&
-      n.endIndex === target.endIndex &&
-      n.type === target.type
-    ) {
-      path.push(...cur);
-      found = true;
-      return;
-    }
-    (n.namedChildren || []).forEach((c, idx) => dfs(c, cur.concat(idx)));
-  };
-  dfs(root, []);
-  return path;
-}
-
-type LessonHistoryItem = LessonStep & { action?: "next" | "dig" };
 
 type MaskRange = { start: number; end: number };
 
 // Find nearest ancestor statement among the given types by walking down from root
-function findEnclosingByTypes(
-  root: TreeSitterAstNode,
-  target: TreeSitterAstNode,
-  types: string[]
-): TreeSitterAstNode | undefined {
-  let found: TreeSitterAstNode | undefined;
-  const walk = (n: TreeSitterAstNode) => {
-    const kids = n.namedChildren || [];
-    for (const c of kids) {
-      if (c.startIndex <= target.startIndex && c.endIndex >= target.endIndex) {
-        if (types.includes(c.type)) found = c;
-        walk(c);
-      }
-    }
-  };
-  walk(root);
-  return found;
-}
 
 // Build mask for the leading keyword and compute answer text (header without trailing colon)
-function headerMaskAndAnswer(
-  stmt: TreeSitterAstNode,
-  code: string
-): { masks: MaskRange[]; answerText: string } {
-  const nonStructural = new Set([
-    "block",
-    "else_clause",
-    "elif_clause",
-    "finally_clause",
-    "except_clause",
-  ]);
-  const firstNamed = (stmt.namedChildren || []).find(
-    (c) => !nonStructural.has(c.type)
-  );
-  const maskStart = stmt.startIndex;
-  const maskEnd = firstNamed ? firstNamed.startIndex : stmt.startIndex;
-
-  const full = code.substring(stmt.startIndex, stmt.endIndex);
-  const colonIdx = full.indexOf(":");
-  const answerText = (
-    colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
-  ).trimEnd();
-
-  const masks = maskEnd > maskStart ? [{ start: maskStart, end: maskEnd }] : [];
-  return { masks, answerText };
-}
 
 // Compute mask and statement-anchored answer for a step
-function maskAndAnswerForStep(
-  step: LessonStep,
-  root: TreeSitterAstNode,
-  code: string
-): { masks: MaskRange[]; answerText: string } {
-  const headerTypes = [
-    "if_statement",
-    "elif_clause",
-    "while_statement",
-    "for_statement",
-  ];
-  const role = step.semanticRole;
-  const isHeaderNode = headerTypes.includes(step.node.type);
-
-  if (role === "if_condition" || role === "loop_condition" || isHeaderNode) {
-    const stmt = isHeaderNode
-      ? step.node
-      : findEnclosingByTypes(root, step.node, headerTypes);
-    if (stmt) {
-      return headerMaskAndAnswer(stmt, code);
-    }
-  }
-  return { masks: [], answerText: textForNode(step.node, code) };
-}
 
 export const LessonViewer: React.FC<LessonViewerProps> = ({
   root,
@@ -226,81 +138,14 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
   const handleSaveCustomQuiz = async () => {
     try {
-      // Helper to convert a LessonStep into a quiz card with semantic context
-      const stepToCard = (
-        step: LessonStep,
-        order: number,
-        source: "visited" | "pending",
-        action: "next" | "dig" = "next"
-      ) => {
-        let question = `What is this ${step.node.type}?`;
-        switch (step.semanticRole) {
-          case "return_type":
-            question = "What is the return type of this function?";
-            break;
-          case "loop_condition":
-          case "if_condition":
-            // Prefer full header instead of just the condition
-            question = "Write the full header line";
-            break;
-        }
-        const { answerText } = maskAndAnswerForStep(step, root, code);
-        const sourceRef = {
-          nodeType: step.node.type,
-          start: step.node.startIndex,
-          end: step.node.endIndex,
-          path: computeAstPath(root, step.node),
-          preview: textForNode(step.node, code).slice(0, 120),
-        };
-        return {
-          order,
-          type: step.node.type,
-          text: answerText,
-          source,
-          action,
-          // extra metadata for smarter custom quizzes
-          semanticRole: step.semanticRole,
-          question,
-          sourceRef,
-        };
-      };
-
-      // Exclude any cards where we "dug deeper" to avoid duplicates
-      const filteredHistory = history.filter((h) => h.action !== "dig");
-      const visitedCards = filteredHistory.map((step, idx) =>
-        stepToCard(step, idx, "visited", step.action ?? "next")
-      );
-      const pendingCards = lessonQueue
-        .slice(currentStep)
-        .map((step, i) =>
-          stepToCard(step, filteredHistory.length + i, "pending")
-        );
-
-      const cards = [...visitedCards, ...pendingCards];
-
-      // Persist to server (MongoDB) via API
-      const payload = {
+      const payload = buildCustomQuizPayload({
         fileKey,
-        name: `Custom quiz ${new Date().toLocaleString()}`,
-        type: "CustomQuizV1.1",
-        profile: "normal" as const,
-        rootNode: {
-          type: root.type,
-          text: textForNode(root, code),
-          start: root.startIndex,
-          end: root.endIndex,
-          path: [],
-        },
-        cards: cards.map((c) => ({
-          order: c.order,
-          type: c.type,
-          text: c.text,
-          action: c.action,
-          question: c.question,
-          semanticRole: c.semanticRole,
-          sourceRef: (c as any).sourceRef,
-        })),
-      };
+        root,
+        code,
+        history,
+        lessonQueue,
+        currentStep,
+      });
 
       const res = await fetch("/api/quizzes", {
         method: "POST",
