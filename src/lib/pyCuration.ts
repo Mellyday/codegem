@@ -541,6 +541,24 @@ export const buildCuratedSections = (
       ];
     }
 
+    case "elif_clause": {
+      // elif <test>: <block>
+      const block = firstChildOfType(node, "block");
+      const test = (node.namedChildren || []).find((c) => c.type !== "block");
+      const body = block ? [block] : [];
+      return [
+        { key: "test", items: test ? [test] : [] },
+        { key: "body", items: body },
+      ];
+    }
+
+    case "else_clause": {
+      // else: <block>
+      const block = firstChildOfType(node, "block");
+      const body = block ? [block] : [];
+      return [{ key: "body", items: body }];
+    }
+
     case "if_statement": {
       // if <test>: <body> (elif ...)* (else ...)?
       const blocks = childrenOfType(node, "block");
@@ -878,11 +896,29 @@ export function findNodeBySpan(
   return found;
 }
 
+// Find the deepest node of any of the given types that covers [start, end]
+export function findNearestAnchorCoveringSpan(
+  root: TreeSitterAstNode,
+  start: number,
+  end: number,
+  types: Set<string>
+): TreeSitterAstNode | undefined {
+  let best: TreeSitterAstNode | undefined;
+  const dfs = (n: TreeSitterAstNode) => {
+    if (n.startIndex <= start && n.endIndex >= end) {
+      if (types.has(n.type)) best = n;
+      for (const c of n.namedChildren || []) dfs(c);
+    }
+  };
+  dfs(root);
+  return best;
+}
+
 // Turn curated sections into simple quiz cards
 export function cardsFromCuratedSections(
   node: TreeSitterAstNode,
   code: string,
-  opts: { includeBody?: boolean } = {}
+  opts: { includeBody?: boolean; groupOrder?: string[] } = {}
 ): Array<{
   order: number;
   type: string;
@@ -900,7 +936,24 @@ export function cardsFromCuratedSections(
     if (s.key === "body") return !includeBody;
     return s.items.every((it) => it.type === "block");
   });
-  const flatGroups = sections.filter((s) => !inlineHints.includes(s));
+  let flatGroups = sections.filter((s) => !inlineHints.includes(s));
+
+  // Optional stable override for the order of groups (by key)
+  if (opts.groupOrder && opts.groupOrder.length) {
+    const priority = new Map<string, number>();
+    opts.groupOrder.forEach((k, i) => priority.set(k, i));
+    const sectionIndex = new Map<CuratedSection, number>();
+    sections.forEach((s, i) => sectionIndex.set(s, i));
+    flatGroups = [...flatGroups].sort((a, b) => {
+      const pa = priority.has(a.key) ? (priority.get(a.key) as number) : Number.MAX_SAFE_INTEGER;
+      const pb = priority.has(b.key) ? (priority.get(b.key) as number) : Number.MAX_SAFE_INTEGER;
+      if (pa !== pb) return pa - pb;
+      // stable tiebreaker: original position in sections
+      const ia = sectionIndex.get(a) as number;
+      const ib = sectionIndex.get(b) as number;
+      return ia - ib;
+    });
+  }
 
   let order = 0;
   const out: Array<{

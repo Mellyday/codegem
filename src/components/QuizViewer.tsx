@@ -5,7 +5,11 @@ import { randomString, shuffleArray } from "../lib/utils";
 import {
   cardsFromCuratedSections,
   findDeepestNodeCoveringSpan,
+  findNearestAnchorCoveringSpan,
 } from "../lib/pyCuration";
+
+// Treat Python blocks/suites as body-owning containers
+const BLOCK_TYPES = new Set(["block", "suite"]);
 
 const CURATABLE_ANCHORS = new Set([
   "function_definition",
@@ -13,10 +17,12 @@ const CURATABLE_ANCHORS = new Set([
   "assignment",
   "expression_statement",
   "call",
-  "if_statement",
-  "for_statement",
-  "while_statement",
+  "if_statement", "if_stmt",
+  "elif_clause", "else_clause",
+  "for_statement", "for_stmt",
+  "while_statement", "while_stmt",
   "with_statement",
+  "try_statement",
 ]);
 type QuizMode = "setup" | "active" | "complete";
 
@@ -1426,19 +1432,15 @@ export const QuizViewer = ({
   ): TreeSitterAstNode | undefined {
     if (!root) return undefined;
 
-    const bubbleToCuratableAnchor = (n?: TreeSitterAstNode) => {
-      if (!n) return n;
-      let cur: TreeSitterAstNode | undefined = n;
-      while (cur?.parent) {
-        if (CURATABLE_ANCHORS.has(cur.type)) return cur;
-        cur = cur.parent;
+    // Prefer block/suite if the span is exactly a block, else land on a statement anchor
+    const resolveAnchor = (s: number, e: number) => {
+      const deepest = findDeepestNodeCoveringSpan(root, s, e);
+      if (deepest && BLOCK_TYPES.has(deepest.type)) {
+        // If user marked a body span exactly, keep the block as the anchor
+        return deepest;
       }
-      return n;
-    };
-
-    const resolveDeepest = (s: number, e: number) => {
-      const n = findDeepestNodeCoveringSpan(root, s, e);
-      return bubbleToCuratableAnchor(n);
+      const anchor = findNearestAnchorCoveringSpan(root, s, e, CURATABLE_ANCHORS);
+      return anchor ?? deepest;
     };
 
     // Prefer explicit reveal spans (child range)
@@ -1446,7 +1448,7 @@ export const QuizViewer = ({
       typeof q.revealEndBeforeChild === "number" &&
       typeof q.revealEndAfterChild === "number"
     ) {
-      const n = resolveDeepest(
+      const n = resolveAnchor(
         q.revealEndBeforeChild,
         q.revealEndAfterChild
       );
@@ -1457,7 +1459,7 @@ export const QuizViewer = ({
     if (code && q.answerLabel) {
       const idx = code.indexOf(q.answerLabel);
       if (idx >= 0) {
-        const n = resolveDeepest(idx, idx + q.answerLabel.length);
+        const n = resolveAnchor(idx, idx + q.answerLabel.length);
         if (n) return n;
       }
     }
@@ -1466,7 +1468,6 @@ export const QuizViewer = ({
   }
 
   // Helpers to ensure we include a single body card for function definitions
-  const BLOCK_TYPES = new Set(["block", "suite"]);
   function findBlockChild(n?: TreeSitterAstNode) {
     if (!n?.namedChildren) return undefined;
     return n.namedChildren.find((c) => BLOCK_TYPES.has(c.type));
@@ -1485,23 +1486,58 @@ export const QuizViewer = ({
     anchor: TreeSitterAstNode,
     code: string
   ): any[] {
-    let pieces = cardsFromCuratedSections(anchor, code, { includeBody: true }) || [];
+    const isFunc = anchor.type === "function_definition";
+    const hasBlock = !!findBlockChild(anchor);
 
-    if (anchor.type === "function_definition" && !hasBodyPiece(pieces)) {
+    // Optional stable group ordering for common statements (handle _stmt/_statement)
+    const isWhile =
+      anchor.type === "while_statement" || anchor.type === "while_stmt";
+    const isIf = anchor.type === "if_statement" || anchor.type === "if_stmt";
+    const isFor = anchor.type === "for_statement" || anchor.type === "for_stmt";
+    const isElif = anchor.type === "elif_clause";
+    const isElse = anchor.type === "else_clause";
+    const groupOrder =
+      isFunc
+        ? ["type_params", "args", "returns", "body", "decorators"]
+      : isWhile
+        ? ["test", "body", "orelse"]
+      : isIf
+        ? ["test", "body", "orelse"]
+      : isElif
+        ? ["test", "body"]
+      : isElse
+        ? ["body"]
+      : isFor
+        ? ["target", "iter", "body", "orelse"]
+        : anchor.type === "with_statement"
+        ? ["items", "body"]
+        : anchor.type === "try_statement"
+        ? ["body", "handlers", "orelse", "finalbody"]
+        : undefined;
+
+    let pieces =
+      cardsFromCuratedSections(anchor, code, {
+        // Show a single "body" card whenever this node actually owns a block/suite
+        includeBody: hasBlock || isFunc,
+        groupOrder,
+      }) || [];
+
+    // Fallback: if for any reason we still didn't get a body card but this node owns one,
+    // synthesize exactly one body card from the block/suite span.
+    if (hasBlock && !hasBodyPiece(pieces)) {
       const body = findBlockChild(anchor);
       if (body) {
-        const bodyPieces = cardsFromCuratedSections(body, code, { includeBody: true }) || [];
-        const preferred =
-          bodyPieces.find(
-            (bp: any) =>
-              bp?.semanticRole === "body" ||
-              bp?.semanticRole === "block" ||
-              bp?.type === "body" ||
-              bp?.type === "block"
-          ) ?? bodyPieces[0];
-        if (preferred) {
-          pieces = [...pieces, preferred];
-        }
+        pieces = [
+          ...pieces,
+          {
+            order: 0, // caller will overwrite
+            type: "block",
+            text: code.substring(body.startIndex, body.endIndex),
+            action: "next" as const,
+            semanticRole: "body",
+            question: "What is the body?",
+          },
+        ];
       }
     }
     return pieces;
