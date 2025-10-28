@@ -10,6 +10,7 @@ import { parseCodeToAst, type ParseResult } from "../lib/ast";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { QuizViewer } from "./QuizViewer";
 import { LessonViewer } from "./LessonViewer";
+import { adaptBabelToTsAst } from "../lib/babelToTsAst";
 
 type SandboxViewerProps = {
   sandboxId: string;
@@ -220,7 +221,7 @@ export const SandboxViewer = ({
     return node;
   };
 
-  // Active Tree-sitter root: either zoomed root or top-level AST
+  // Active Tree-sitter root: either zoomed root or top-level AST (Tree-sitter only)
   const activeTsRoot: TreeSitterAstNode | undefined = useMemo(() => {
     if (zoomRootTs) return zoomRootTs;
     if (
@@ -231,6 +232,24 @@ export const SandboxViewer = ({
     }
     return undefined;
   }, [zoomRootTs, parseResult]);
+
+  // For Babel-parsed JS/TS files, adapt the AST to our TreeSitter-like shape for quiz/lesson
+  const adaptedJsRoot: TreeSitterAstNode | undefined = useMemo(() => {
+    if (parseResult?.status === "success" && parseResult.parser === "babel") {
+      try {
+        return adaptBabelToTsAst(parseResult.ast as any);
+      } catch (e) {
+        console.warn("Failed to adapt Babel AST:", e);
+      }
+    }
+    return undefined;
+  }, [parseResult]);
+
+  const languageKind: "python" | "js" | undefined = useMemo(() => {
+    if (parseResult?.status !== "success") return undefined;
+    if (parseResult.parser === "tree-sitter" && /python/i.test(parseResult.language)) return "python";
+    return "js";
+  }, [parseResult]);
 
   // When zoomed, restrict the displayed code precisely to the node's character span,
   // and when in quiz mode, further clip to the currently revealed prefix.
@@ -510,15 +529,17 @@ export const SandboxViewer = ({
               {(viewMode === "quiz_setup" ||
                 viewMode === "quiz_active" ||
                 viewMode === "quiz_complete") &&
-                parseResult?.status === "success" &&
-                parseResult.parser === "tree-sitter" && (
+                parseResult?.status === "success" && (
                   <QuizViewer
                     root={
                       (activeTsRoot as TreeSitterAstNode) ??
-                      (parseResult.ast as TreeSitterAstNode)
+                      ((parseResult.parser === "tree-sitter"
+                        ? (parseResult.ast as TreeSitterAstNode)
+                        : (adaptedJsRoot as TreeSitterAstNode)) as TreeSitterAstNode)
                     }
                     code={state.code}
                     fileKey={fileKey}
+                    language={languageKind}
                     mode={
                       viewMode.replace("quiz_", "") as
                         | "setup"
@@ -534,15 +555,17 @@ export const SandboxViewer = ({
                 )}
 
               {viewMode === "lesson" &&
-                parseResult?.status === "success" &&
-                parseResult.parser === "tree-sitter" && (
+                parseResult?.status === "success" && (
                   <LessonViewer
                     root={
                       (activeTsRoot as TreeSitterAstNode) ??
-                      (parseResult.ast as TreeSitterAstNode)
+                      ((parseResult.parser === "tree-sitter"
+                        ? (parseResult.ast as TreeSitterAstNode)
+                        : (adaptedJsRoot as TreeSitterAstNode)) as TreeSitterAstNode)
                     }
                     code={state.code}
                     fileKey={fileKey}
+                    language={languageKind}
                     onReturnToAst={() => setViewMode("ast")}
                     onRevealEndIndexChange={setRevealEndIndex}
                     onMaskRangesChange={setMaskRanges}

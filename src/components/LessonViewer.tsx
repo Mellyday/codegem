@@ -1,20 +1,16 @@
 import React, { useState, useEffect } from "react";
 import { type TreeSitterAstNode } from "../lib/treeSitter";
 import { BookOpen, ChevronsRight, ChevronsLeft, FileJson } from "lucide-react";
-import {
-  generateLessonPlan,
-  type LessonStep,
-  type LessonHistoryItem,
-  maskAndAnswerForStep,
-  textForNode,
-  computeAstPath,
-  buildCustomQuizPayload,
-} from "../lib/pyLesson";
+import * as pyLesson from "../lib/pyLesson";
+import * as jsLesson from "../lib/jsLesson";
+import type { LessonStep as PyLessonStep, LessonHistoryItem as PyLessonHistoryItem } from "../lib/pyLesson";
+import type { LessonStep as JsLessonStep, LessonHistoryItem as JsLessonHistoryItem } from "../lib/jsLesson";
 
 export type LessonViewerProps = {
   root: TreeSitterAstNode;
   code: string;
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
+  language?: "python" | "js";
   onReturnToAst: () => void;
   onRevealEndIndexChange: (endIndex: number | undefined) => void;
   onMaskRangesChange: (ranges: { start: number; end: number }[]) => void;
@@ -34,10 +30,13 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   root,
   code,
   fileKey,
+  language = "python",
   onReturnToAst,
   onRevealEndIndexChange,
   onMaskRangesChange,
 }) => {
+  type LessonStep = PyLessonStep | JsLessonStep;
+  type LessonHistoryItem = PyLessonHistoryItem | JsLessonHistoryItem;
   const [lessonQueue, setLessonQueue] = useState<LessonStep[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [history, setHistory] = useState<LessonHistoryItem[]>([]);
@@ -47,12 +46,12 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     if (root) {
       // Prefer semantic steps over raw namedChildren
       // Hide function/class names by default for more useful prompts
-      const plan = generateLessonPlan(root, { includeNames: false });
+      const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(root, { includeNames: false });
       setLessonQueue(plan);
       setCurrentStep(0);
       setHistory([]);
     }
-  }, [root]);
+  }, [root, language]);
 
   useEffect(() => {
     if (!lessonQueue.length) return;
@@ -73,7 +72,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
     const curr = lessonQueue[currentStep];
     if (curr) {
-      const { masks } = maskAndAnswerForStep(curr, root, code);
+      const { masks } = (language === "python" ? pyLesson.maskAndAnswerForStep : jsLesson.maskAndAnswerForStep)(curr as any, root, code);
       onMaskRangesChange(masks);
     } else {
       onMaskRangesChange([]);
@@ -85,6 +84,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     code,
     onRevealEndIndexChange,
     onMaskRangesChange,
+    language,
   ]);
 
   useEffect(() => {
@@ -121,9 +121,12 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const handleDigDeeper = () => {
     if (currentStep < lessonQueue.length) {
       const stepToExpand = lessonQueue[currentStep];
-      const childrenSteps = generateLessonPlan(stepToExpand.node, {
-        includeNames: false,
-      });
+      const childrenSteps = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
+        stepToExpand.node,
+        {
+          includeNames: false,
+        }
+      );
 
       if (childrenSteps.length > 0) {
         setHistory((prev) => [...prev, { ...stepToExpand, action: "dig" }]);
@@ -138,7 +141,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
   const handleSaveCustomQuiz = async () => {
     try {
-      const payload = buildCustomQuizPayload({
+      const payload = (language === "python" ? pyLesson.buildCustomQuizPayload : jsLesson.buildCustomQuizPayload)({
         fileKey,
         root,
         code,
@@ -243,7 +246,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         </div>
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
         <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto">
-          <code>{nextNode ? textForNode(nextNode, code) : ""}</code>
+          <code>{nextNode ? (language === "python" ? pyLesson.textForNode : jsLesson.textForNode)(nextNode, code) : ""}</code>
         </pre>
       </div>
 

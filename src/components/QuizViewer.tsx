@@ -3,32 +3,16 @@ import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
-import {
-  cardsFromCuratedSections,
-  findDeepestNodeCoveringSpan,
-  findNearestAnchorCoveringSpan,
-} from "../lib/pyCuration";
+import * as pyCuration from "../lib/pyCuration";
+import * as jsCuration from "../lib/jsCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
-import { computeAstPath, buildHeuristicQuiz } from "../lib/pyQuiz";
+import * as pyQuiz from "../lib/pyQuiz";
+import * as jsQuiz from "../lib/jsQuiz";
 
-// Treat Python blocks/suites as body-owning containers
-const BLOCK_TYPES = new Set(["block", "suite"]);
-
-const CURATABLE_ANCHORS = new Set([
-  "function_definition",
-  "class_definition",
-  "assignment",
-  "expression_statement",
-  "call",
-  "if_statement", "if_stmt",
-  "elif_clause", "else_clause",
-  "for_statement", "for_stmt",
-  "while_statement", "while_stmt",
-  "with_statement",
-  "try_statement",
-]);
+// Constants moved inside component to depend on language
 type QuizMode = "setup" | "active" | "complete";
+type LanguageKind = "python" | "js";
 
 export type QuizViewerProps = {
   root: TreeSitterAstNode;
@@ -37,6 +21,7 @@ export type QuizViewerProps = {
   // File context to load saved custom quizzes
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
   mode: QuizMode;
+  language?: LanguageKind;
   onStart: () => void;
   onCancel: () => void;
   onComplete: () => void;
@@ -268,12 +253,53 @@ export const QuizViewer = ({
   code,
   fileKey,
   mode,
+  language = "python",
   onStart,
   onCancel,
   onComplete,
   onReturnToAst,
   onRevealChange,
 }: QuizViewerProps) => {
+  // Treat blocks/suites or JS BlockStatements as containers
+  const BLOCK_TYPES = useMemo(() => (language === "python" ? new Set(["block", "suite"]) : new Set(["BlockStatement"])), [language]);
+  const CURATABLE_ANCHORS = useMemo(
+    () =>
+      language === "python"
+        ? new Set([
+            "function_definition",
+            "class_definition",
+            "assignment",
+            "expression_statement",
+            "call",
+            "if_statement",
+            "if_stmt",
+            "elif_clause",
+            "else_clause",
+            "for_statement",
+            "for_stmt",
+            "while_statement",
+            "while_stmt",
+            "with_statement",
+            "try_statement",
+          ])
+        : new Set([
+            "FunctionDeclaration",
+            "FunctionExpression",
+            "ArrowFunctionExpression",
+            "ClassDeclaration",
+            "ClassExpression",
+            "VariableDeclaration",
+            "ExpressionStatement",
+            "CallExpression",
+            "IfStatement",
+            "ForStatement",
+            "ForInStatement",
+            "ForOfStatement",
+            "WhileStatement",
+            "TryStatement",
+          ]),
+    [language]
+  );
   // Setup state
   const containerTypes = useMemo(
     () => Array.from(gatherContainerTypes(root, new Set<string>())),
@@ -423,7 +449,11 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz = buildHeuristicQuiz(root, code || "", "shallow");
+                const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+                  root,
+                  code || "",
+                  "shallow"
+                );
                 setSelectedCustom(quiz as any);
                 onStart();
               }}
@@ -435,7 +465,12 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz = buildHeuristicQuiz(root, code || "", "deep", { maxDeepPerStmt: 6 });
+                const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+                  root,
+                  code || "",
+                  "deep",
+                  { maxDeepPerStmt: 6 }
+                );
                 setSelectedCustom(quiz as any);
                 onStart();
               }}
@@ -840,12 +875,21 @@ export const QuizViewer = ({
 
     // Prefer block/suite if the span is exactly a block, else land on a statement anchor
     const resolveAnchor = (s: number, e: number) => {
-      const deepest = findDeepestNodeCoveringSpan(root, s, e);
+      const deepest = (language === "python" ? pyCuration.findDeepestNodeCoveringSpan : jsCuration.findDeepestNodeCoveringSpan)(
+        root,
+        s,
+        e
+      );
       if (deepest && BLOCK_TYPES.has(deepest.type)) {
         // If user marked a body span exactly, keep the block as the anchor
         return deepest;
       }
-      const anchor = findNearestAnchorCoveringSpan(root, s, e, CURATABLE_ANCHORS);
+      const anchor = (language === "python" ? pyCuration.findNearestAnchorCoveringSpan : jsCuration.findNearestAnchorCoveringSpan)(
+        root,
+        s,
+        e,
+        CURATABLE_ANCHORS
+      );
       return anchor ?? deepest;
     };
 
@@ -922,7 +966,7 @@ export const QuizViewer = ({
         : undefined;
 
     let pieces =
-      cardsFromCuratedSections(anchor, code, {
+      (language === "python" ? pyCuration.cardsFromCuratedSections : jsCuration.cardsFromCuratedSections)(anchor, code, {
         // Show a single "body" card whenever this node actually owns a block/suite
         includeBody: hasBlock || isFunc,
         groupOrder,
@@ -1035,7 +1079,7 @@ export const QuizViewer = ({
               nodeType: node.type,
               start: node.startIndex,
               end: node.endIndex,
-              path: computeAstPath(root, node),
+              path: (language === "python" ? pyQuiz.computeAstPath : jsQuiz.computeAstPath)(root, node),
               preview:
                 typeof code === "string"
                   ? code.substring(node.startIndex, node.endIndex).slice(0, 120)
