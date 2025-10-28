@@ -10,7 +10,7 @@ import {
 } from "../lib/pyCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
-import { buildHeuristicQuiz } from "../lib/heuristicQuiz";
+import { buildHeuristicQuiz } from "../lib/pyQuiz";
 
 // Treat Python blocks/suites as body-owning containers
 const BLOCK_TYPES = new Set(["block", "suite"]);
