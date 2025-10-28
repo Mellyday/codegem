@@ -268,6 +268,8 @@ export const QuizViewer = ({
   const [current, setCurrent] = useState(0)
   const [selected, setSelected] = useState<string | undefined>(undefined)
   const [score, setScore] = useState(0)
+  // Persist answers per question index so navigation retains choices
+  const [answers, setAnswers] = useState<Array<string | undefined>>([])
 
   useEffect(() => {
     if (mode === 'active') {
@@ -278,6 +280,7 @@ export const QuizViewer = ({
       setCurrent(0)
       setSelected(undefined)
       setScore(0)
+      setAnswers(new Array(qs.length).fill(undefined))
       // Initial reveal if available (applies to AST and custom)
       if (qs.length > 0 && typeof qs[0].revealEndBeforeChild === 'number') {
         onRevealChange?.(qs[0].revealEndBeforeChild)
@@ -459,6 +462,11 @@ export const QuizViewer = ({
     const handleSelect = (opt: string) => {
       if (answered) return
       setSelected(opt)
+      setAnswers((prev) => {
+        const next = prev.slice()
+        next[current] = opt
+        return next
+      })
       if (opt === currentQ.answerLabel) setScore((s) => s + 1)
       if (typeof currentQ.revealEndAfterChild === 'number') {
         onRevealChange?.(currentQ.revealEndAfterChild)
@@ -469,8 +477,9 @@ export const QuizViewer = ({
       if (current + 1 >= total) {
         onComplete()
       } else {
-        setCurrent((i) => i + 1)
-        setSelected(undefined)
+        const nextIdx = current + 1
+        setCurrent(nextIdx)
+        setSelected(answers[nextIdx])
         // Update reveal window for the next question if available (AST or custom)
         const nextQ = questions[current + 1]
         if (nextQ && typeof nextQ.revealEndBeforeChild === 'number') {
@@ -485,7 +494,7 @@ export const QuizViewer = ({
       if (current > 0) {
         const idx = current - 1
         setCurrent(idx)
-        setSelected(undefined)
+        setSelected(answers[idx])
         const q = questions[idx]
         if (q && typeof q.revealEndBeforeChild === 'number') {
           onRevealChange?.(q.revealEndBeforeChild)
@@ -499,7 +508,7 @@ export const QuizViewer = ({
       if (!Number.isFinite(idx)) return
       const clamped = Math.min(Math.max(0, Math.floor(idx)), Math.max(0, total - 1))
       setCurrent(clamped)
-      setSelected(undefined)
+      setSelected(answers[clamped])
       const q = questions[clamped]
       if (q && typeof q.revealEndBeforeChild === 'number') {
         onRevealChange?.(q.revealEndBeforeChild)
