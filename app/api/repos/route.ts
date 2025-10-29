@@ -8,14 +8,16 @@ import { parseAndPersistRepo } from "../../../src/lib/services/repoParser";
 
 type PostBody = { url: string };
 
-export async function GET() {
+export async function GET(req: Request) {
   try {
     const { userId } = await auth();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const headerUserId = req.headers.get("x-user-id") || undefined;
+    const effectiveUserId = userId ?? headerUserId;
+    if (!effectiveUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDb();
     const repos = db.collection("repos");
     const cursor = repos
-      .find({ userId }, { sort: { createdAt: -1 } })
+      .find({ userId: effectiveUserId }, { sort: { createdAt: -1 } })
       .map((r) => ({
         id: String((r as any)._id),
         url: (r as any).url,
@@ -36,7 +38,9 @@ export async function GET() {
 export async function POST(req: Request) {
   try {
     const { userId } = await auth();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    const headerUserId = req.headers.get("x-user-id") || undefined;
+    const effectiveUserId = userId ?? headerUserId;
+    if (!effectiveUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = (await req.json()) as PostBody;
     if (!body?.url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
 
@@ -47,7 +51,7 @@ export async function POST(req: Request) {
 
     // Create repo document in pending state
     const insert = await repos.insertOne({
-      userId,
+      userId: effectiveUserId,
       url: body.url,
       name,
       owner,
@@ -73,7 +77,7 @@ export async function POST(req: Request) {
         { $set: { status: "parsing", clonedPath: clonedDir, updatedAt: new Date() } }
       );
 
-      const progress = await parseAndPersistRepo(db, repoId, userId, cloned.dir);
+      const progress = await parseAndPersistRepo(db, repoId, effectiveUserId as string, cloned.dir);
 
       await repos.updateOne(
         { _id: repoId },
@@ -112,4 +116,3 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
-
