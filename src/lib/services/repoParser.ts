@@ -36,12 +36,19 @@ function relativePath(root: string, filePath: string): string {
 
 export async function parseAndPersistRepo(
   db: Db,
-  repoId: ObjectId,
-  userId: string,
-  rootDir: string
+  params: {
+    userId: string;
+    repoId: ObjectId;
+    url: string;
+    owner: string;
+    name: string;
+    rootDir: string;
+  }
 ): Promise<RepoProgress> {
-  const filesCol = db.collection("files");
-  const reposCol = db.collection("repos");
+  const { userId, repoId, url, owner, name, rootDir } = params;
+  // Per requirement: for GitHub auto-fetching flows, AST documents should be
+  // stored in the "repos" collection exclusively, not in "files".
+  const targetCol = db.collection("repos");
   const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0 };
 
   // First pass: count parseable files
@@ -51,10 +58,6 @@ export async function parseAndPersistRepo(
     if (canParseWithTreeSitter(ext)) allPaths.push(p);
   }
   progress.totalFiles = allPaths.length;
-  await reposCol.updateOne(
-    { _id: repoId },
-    { $set: { "progress.totalFiles": progress.totalFiles, updatedAt: new Date() } }
-  );
 
   for (const absPath of allPaths) {
     const ext = fileExtension(absPath);
@@ -63,10 +66,13 @@ export async function parseAndPersistRepo(
       const sourceCode = await fs.readFile(absPath, "utf8");
       const parsed = await parseWithTreeSitter(sourceCode, ext);
       const now = new Date();
-      await filesCol.insertOne({
+      await targetCol.insertOne({
         userId,
         repoId,
         projectId: null,
+        url,
+        owner,
+        name,
         path: relPath,
         language: parsed.languageId,
         extension: ext,
@@ -80,10 +86,13 @@ export async function parseAndPersistRepo(
       progress.parsedFiles += 1;
     } catch (err) {
       progress.failedFiles += 1;
-      await filesCol.insertOne({
+      await targetCol.insertOne({
         userId,
         repoId,
         projectId: null,
+        url,
+        owner,
+        name,
         path: relPath,
         language: "unknown",
         extension: ext,
@@ -96,18 +105,7 @@ export async function parseAndPersistRepo(
         updatedAt: new Date(),
       } as any);
     }
-    await reposCol.updateOne(
-      { _id: repoId },
-      {
-        $set: {
-          "progress.parsedFiles": progress.parsedFiles,
-          "progress.failedFiles": progress.failedFiles,
-          updatedAt: new Date(),
-        },
-      }
-    );
   }
 
   return progress;
 }
-

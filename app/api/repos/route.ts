@@ -2,9 +2,9 @@ export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getDb } from "../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
 import { cloneGithubRepo, parseGithubUrl } from "../../../src/lib/services/repoFetcher";
 import { parseAndPersistRepo } from "../../../src/lib/services/repoParser";
+import { ObjectId } from "mongodb";
 
 type PostBody = { url: string };
 
@@ -15,20 +15,43 @@ export async function GET(req: Request) {
     const effectiveUserId = userId ?? headerUserId;
     if (!effectiveUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDb();
-    const repos = db.collection("repos");
-    const cursor = repos
-      .find({ userId: effectiveUserId }, { sort: { createdAt: -1 } })
-      .map((r) => ({
-        id: String((r as any)._id),
-        url: (r as any).url,
-        name: (r as any).name,
-        owner: (r as any).owner,
-        status: (r as any).status,
-        progress: (r as any).progress,
-        createdAt: (r as any).createdAt,
-        updatedAt: (r as any).updatedAt,
-      }));
-    const list = await cursor.toArray();
+    const reposCol = db.collection("repos");
+    const pipeline = [
+      { $match: { userId: effectiveUserId, repoId: { $ne: null } } },
+      {
+        $group: {
+          _id: "$repoId",
+          url: { $first: "$url" },
+          name: { $first: "$name" },
+          owner: { $first: "$owner" },
+          createdAt: { $min: "$createdAt" },
+          updatedAt: { $max: "$updatedAt" },
+          totalFiles: { $sum: 1 },
+          parsedFiles: {
+            $sum: { $cond: [{ $eq: ["$parseStatus", "success"] }, 1, 0] },
+          },
+          failedFiles: {
+            $sum: { $cond: [{ $eq: ["$parseStatus", "failed"] }, 1, 0] },
+          },
+        },
+      },
+      { $sort: { updatedAt: -1 } },
+    ];
+    const agg = await reposCol.aggregate(pipeline).toArray();
+    const list = agg.map((g: any) => ({
+      id: String(g._id),
+      url: g.url,
+      name: g.name,
+      owner: g.owner,
+      status: "completed",
+      progress: {
+        totalFiles: g.totalFiles || 0,
+        parsedFiles: g.parsedFiles || 0,
+        failedFiles: g.failedFiles || 0,
+      },
+      createdAt: g.createdAt,
+      updatedAt: g.updatedAt,
+    }));
     return NextResponse.json({ repos: list });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -45,73 +68,25 @@ export async function POST(req: Request) {
     if (!body?.url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
 
     const db = await getDb();
-    const repos = db.collection("repos");
-    const now = new Date();
     const { owner, name } = parseGithubUrl(body.url);
-
-    // Create repo document in pending state
-    const insert = await repos.insertOne({
-      userId: effectiveUserId,
-      url: body.url,
-      name,
-      owner,
-      status: "pending",
-      progress: { totalFiles: 0, parsedFiles: 0, failedFiles: 0 },
-      createdAt: now,
-      updatedAt: now,
-    } as any);
-    const repoId = insert.insertedId as ObjectId;
-
-    // Clone and parse synchronously for Phase 1
-    await repos.updateOne(
-      { _id: repoId },
-      { $set: { status: "cloning", updatedAt: new Date() } }
-    );
 
     let clonedDir: string | undefined;
     try {
       const cloned = await cloneGithubRepo(body.url);
       clonedDir = cloned.dir;
-      await repos.updateOne(
-        { _id: repoId },
-        { $set: { status: "parsing", clonedPath: clonedDir, updatedAt: new Date() } }
-      );
-
-      const progress = await parseAndPersistRepo(db, repoId, effectiveUserId as string, cloned.dir);
-
-      await repos.updateOne(
-        { _id: repoId },
-        {
-          $set: {
-            status: "completed",
-            progress,
-            updatedAt: new Date(),
-          },
-        }
-      );
+      const repoId = new ObjectId();
+      const progress = await parseAndPersistRepo(db, {
+        userId: effectiveUserId as string,
+        repoId,
+        url: body.url,
+        owner,
+        name,
+        rootDir: cloned.dir,
+      });
+      return NextResponse.json({ id: String(repoId), owner, name, url: body.url, progress });
     } catch (err) {
-      await repos.updateOne(
-        { _id: repoId },
-        {
-          $set: {
-            status: "failed",
-            updatedAt: new Date(),
-            error: String(err),
-          },
-        }
-      );
-      return NextResponse.json({ id: String(repoId), status: "failed", error: String(err) }, { status: 500 });
+      return NextResponse.json({ owner, name, url: body.url, status: "failed", error: String(err) }, { status: 500 });
     }
-
-    const repo = await repos.findOne({ _id: repoId });
-    return NextResponse.json({
-      id: String(repoId),
-      url: (repo as any)?.url,
-      name: (repo as any)?.name,
-      owner: (repo as any)?.owner,
-      status: (repo as any)?.status,
-      progress: (repo as any)?.progress,
-    });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }

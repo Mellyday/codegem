@@ -3,7 +3,6 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getDb } from "../../../../src/lib/mongodb";
 import { ObjectId } from "mongodb";
-import fs from "node:fs/promises";
 
 export async function GET(
   _req: Request,
@@ -15,18 +14,41 @@ export async function GET(
     const db = await getDb();
     const repos = db.collection("repos");
     const _id = safeObjectId(params.id);
-    const repo = await repos.findOne({ _id, userId } as any);
-    if (!repo) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    const agg = await repos
+      .aggregate([
+        { $match: { userId, repoId: _id } as any },
+        {
+          $group: {
+            _id: "$repoId",
+            url: { $first: "$url" },
+            name: { $first: "$name" },
+            owner: { $first: "$owner" },
+            createdAt: { $min: "$createdAt" },
+            updatedAt: { $max: "$updatedAt" },
+            totalFiles: { $sum: 1 },
+            parsedFiles: { $sum: { $cond: [{ $eq: ["$parseStatus", "success"] }, 1, 0] } },
+            failedFiles: { $sum: { $cond: [{ $eq: ["$parseStatus", "failed"] }, 1, 0] } },
+          },
+        },
+      ])
+      .toArray();
+
+    if (!agg.length) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const g: any = agg[0];
     return NextResponse.json({
-      id: String((repo as any)._id),
-      url: (repo as any).url,
-      name: (repo as any).name,
-      owner: (repo as any).owner,
-      status: (repo as any).status,
-      progress: (repo as any).progress,
-      clonedPath: (repo as any).clonedPath,
-      createdAt: (repo as any).createdAt,
-      updatedAt: (repo as any).updatedAt,
+      id: String(g._id),
+      url: g.url,
+      name: g.name,
+      owner: g.owner,
+      status: "completed",
+      progress: {
+        totalFiles: g.totalFiles || 0,
+        parsedFiles: g.parsedFiles || 0,
+        failedFiles: g.failedFiles || 0,
+      },
+      createdAt: g.createdAt,
+      updatedAt: g.updatedAt,
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -42,25 +64,12 @@ export async function DELETE(
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDb();
     const repos = db.collection("repos");
-    const files = db.collection("files");
     const _id = safeObjectId(params.id);
 
-    const repo = await repos.findOne({ _id, userId } as any);
-    if (!repo) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const exists = await repos.findOne({ userId, repoId: _id } as any, { projection: { _id: 1 } });
+    if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    await files.deleteMany({ repoId: _id, userId } as any);
-    await repos.deleteOne({ _id, userId } as any);
-
-    // Best-effort cleanup of clonedPath
-    const clonedPath = (repo as any).clonedPath as string | undefined;
-    if (clonedPath) {
-      try {
-        await fs.rm(clonedPath, { recursive: true, force: true });
-      } catch {
-        // ignore cleanup errors
-      }
-    }
-
+    await repos.deleteMany({ userId, repoId: _id } as any);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -74,4 +83,3 @@ function safeObjectId(id: string) {
     return id as any;
   }
 }
-
