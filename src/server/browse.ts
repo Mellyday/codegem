@@ -74,12 +74,12 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
       type: "repo" as const,
       label: g.owner && g.name ? `${g.owner}/${g.name}` : `Repo ${String(g._id)}`,
     }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+    .sort((a: RepoOrProjectItem, b: RepoOrProjectItem) => a.label.localeCompare(b.label));
 
   const projects: RepoOrProjectItem[] = projectIds
     .filter(Boolean)
     .map((id) => ({ id: String(id), type: "project" as const, label: `Project ${String(id)}` }))
-    .sort((a, b) => a.label.localeCompare(b.label));
+    .sort((a: RepoOrProjectItem, b: RepoOrProjectItem) => a.label.localeCompare(b.label));
 
   return { repos, projects };
 }
@@ -162,8 +162,13 @@ export async function listPathChildren(
 
   return {
     prefix,
-    dirs: Array.from(dirSet).sort((a, b) => a.localeCompare(b)),
-    files: filesOut.sort((a, b) => a.name.localeCompare(b.name)),
+    dirs: Array.from(dirSet).sort((a: string, b: string) => a.localeCompare(b)),
+    files: filesOut.sort(
+      (
+        a: PathListing["files"][number],
+        b: PathListing["files"][number]
+      ) => a.name.localeCompare(b.name)
+    ),
   };
 }
 
