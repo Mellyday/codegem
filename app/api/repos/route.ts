@@ -10,14 +10,11 @@ type PostBody = { url: string };
 
 export async function GET(req: Request) {
   try {
-    const { userId } = await auth();
-    const headerUserId = req.headers.get("x-user-id") || undefined;
-    const effectiveUserId = userId ?? headerUserId;
-    if (!effectiveUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDb();
     const reposCol = db.collection("repos");
     const pipeline = [
-      { $match: { userId: effectiveUserId, repoId: { $ne: null } } },
+      // Show all repos across all users
+      { $match: { repoId: { $ne: null } } },
       {
         $group: {
           _id: "$repoId",

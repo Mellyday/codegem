@@ -1,5 +1,6 @@
 import { getDb } from "@/src/lib/mongodb";
 import { auth } from "@clerk/nextjs/server";
+import { ObjectId } from "mongodb";
 
 export type RepoOrProjectRef = {
   id: string; // stringified ObjectId
@@ -27,12 +28,7 @@ export type PathListing = {
   }>;
 };
 
-async function ensureAuthedUserId(): Promise<string> {
-  const { userId } = await auth();
-  if (!userId) throw new Error("Unauthorized");
-  return userId;
-}
-
+// Viewing is public; no userId required for browse/read operations.
 async function getOptionalUserId(): Promise<string | null> {
   try {
     const { userId } = await auth();
@@ -43,31 +39,41 @@ async function getOptionalUserId(): Promise<string | null> {
 }
 
 export async function listReposAndProjects(): Promise<TopLevelListing> {
-  const userId = await getOptionalUserId();
-  if (!userId) return { repos: [], projects: [] };
   // Be resilient when MongoDB is unavailable (e.g., offline or DNS SRV blocked)
   // If DB connection fails, return empty lists instead of erroring the page.
-  let files: any | null = null;
+  let db: any;
   try {
-    const db = await getDb();
-    files = db.collection("files");
+    db = await getDb();
   } catch {
     return { repos: [], projects: [] };
   }
 
-  // Distinct repoIds (excluding null)
-  const repoIds = (await files
-    .distinct("repoId", { userId, repoId: { $ne: null } })) as unknown[];
+  const files = db.collection("files");
+  const reposCol = db.collection("repos");
 
-  // Distinct projectIds (excluding null)
-  const projectIds = (await files.distinct("projectId", {
-    userId,
-    projectId: { $ne: null },
-  })) as unknown[];
+  // Repos are stored in the "repos" collection
+  const repoAgg = await reposCol
+    .aggregate([
+      { $match: { repoId: { $ne: null } } },
+      {
+        $group: {
+          _id: "$repoId",
+          owner: { $first: "$owner" },
+          name: { $first: "$name" },
+        },
+      },
+    ])
+    .toArray();
 
-  const repos: RepoOrProjectItem[] = repoIds
-    .filter(Boolean)
-    .map((id) => ({ id: String(id), type: "repo" as const, label: `Repo ${String(id)}` }))
+  // Projects are stored in the "files" collection
+  const projectIds = (await files.distinct("projectId", { projectId: { $ne: null } })) as unknown[];
+
+  const repos: RepoOrProjectItem[] = repoAgg
+    .map((g: any) => ({
+      id: String(g._id),
+      type: "repo" as const,
+      label: g.owner && g.name ? `${g.owner}/${g.name}` : `Repo ${String(g._id)}`,
+    }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
   const projects: RepoOrProjectItem[] = projectIds
@@ -85,17 +91,19 @@ type ListChildrenInput =
 export async function listPathChildren(
   input: ListChildrenInput
 ): Promise<PathListing> {
-  const userId = await ensureAuthedUserId();
   const db = await getDb();
   const files = db.collection("files");
 
   const prefix = normalizePrefix(input.prefix);
-  const match: any = { userId };
+  const match: any = {};
+  let col = files as any;
   if (input.kind === "repo") {
     match.repoId = coerceId(input.id);
     match.projectId = null;
+    col = db.collection("repos");
   } else {
     match.projectId = coerceId(input.id);
+    col = files;
   }
 
   // Fetch candidate files under the prefix (or all at root if empty)
@@ -109,7 +117,7 @@ export async function listPathChildren(
     or.push({});
   }
 
-  const cursor = files.find({ ...match, ...(or.length ? { $or: or } : {}) }, {
+  const cursor = col.find({ ...match, ...(or.length ? { $or: or } : {}) }, {
     projection: { path: 1, extension: 1, language: 1, size: 1, isDir: 1 },
   });
   const docs = (await cursor.toArray()) as unknown as Array<{
@@ -170,17 +178,20 @@ export async function getFileAtPath(input: {
     })
   | null
 > {
-  const userId = await ensureAuthedUserId();
   const db = await getDb();
   const files = db.collection("files");
-  const match: any = { userId, path: input.path };
+  const reposCol = db.collection("repos");
+  const match: any = { path: input.path };
+  let col = files as any;
   if (input.kind === "repo") {
     match.repoId = coerceId(input.id);
     match.projectId = null;
+    col = reposCol;
   } else {
     match.projectId = coerceId(input.id);
+    col = files;
   }
-  const doc = (await files.findOne(match)) as any;
+  const doc = (await col.findOne(match)) as any;
   if (!doc) return null;
   if ((doc as any).isDir) return null; // Do not treat folders as files
   const segments = doc.path.split("/");
@@ -204,7 +215,11 @@ function escapeRegex(s: string): string {
 }
 
 function coerceId(id: string): any {
-  // We allow stringified ObjectId or already-serialized strings depending on how data was inserted.
-  // Avoid importing ObjectId on the edge; Mongo will match string values too if stored as string.
-  return (id as unknown) as any;
+  // Try to coerce stringified ObjectIds to real ObjectIds for proper matching
+  try {
+    // Accept 24-hex string or already an ObjectId-like value
+    return new ObjectId(id);
+  } catch {
+    return (id as unknown) as any;
+  }
 }

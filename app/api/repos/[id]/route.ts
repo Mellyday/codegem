@@ -9,15 +9,14 @@ export async function GET(
   { params }: { params: { id: string } }
 ) {
   try {
-    const { userId } = await auth();
-    if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDb();
     const repos = db.collection("repos");
     const _id = safeObjectId(params.id);
 
     const agg = await repos
       .aggregate([
-        { $match: { userId, repoId: _id } as any },
+        // Allow fetching repo info regardless of owner
+        { $match: { repoId: _id } as any },
         {
           $group: {
             _id: "$repoId",
