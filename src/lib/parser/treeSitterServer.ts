@@ -1,16 +1,12 @@
-import path from "node:path";
-import { Parser, Language, type Node as TreeSitterNode } from "web-tree-sitter";
-
-// Absolute paths to WASM files served from public/wasm for server-side usage
-const wasmDir = path.join(process.cwd(), "public", "wasm");
-const pythonWasmPath = path.join(wasmDir, "tree-sitter-python.wasm");
-const coreWasmPath = path.join(wasmDir, "tree-sitter.wasm");
+import Parser from "tree-sitter";
+import type ParserType from "tree-sitter";
+import Python from "tree-sitter-python";
 
 type SupportedLanguageId = "python";
 
 type LanguageConfig = {
   id: SupportedLanguageId;
-  wasmPath: string;
+  language: any; // tree-sitter Language object from grammar package
   extensions: ReadonlySet<string>;
   displayName: string;
 };
@@ -37,7 +33,7 @@ const supportedLanguages: LanguageConfig[] = [
   {
     id: "python",
     displayName: "Python",
-    wasmPath: pythonWasmPath,
+    language: Python,
     extensions: new Set(["py"]),
   },
 ];
@@ -49,41 +45,29 @@ for (const config of supportedLanguages) {
   }
 }
 
-let initPromise: Promise<void> | undefined;
-
-const getInitPromise = () => {
-  if (!initPromise) {
-    initPromise = Parser.init({
-      locateFile: (scriptName: string, scriptDirectory: string) => {
-        // On Node, returning an absolute file system path allows web-tree-sitter
-        // to read the WASM via fs.
-        if (scriptName === "tree-sitter.wasm") return coreWasmPath;
-        return path.join(scriptDirectory, scriptName);
-      },
-    });
-  }
-  return initPromise;
-};
-
-const languageCache = new Map<SupportedLanguageId, Promise<Language>>();
+// With native tree-sitter bindings, languages are loaded via their packages.
+// Keep a trivial cache in case future grammars need lazy loading.
+const languageCache = new Map<SupportedLanguageId, any>();
 
 const loadLanguage = async (config: LanguageConfig) => {
   const cached = languageCache.get(config.id);
   if (cached) return cached;
-  const promise = getInitPromise().then(() => Language.load(config.wasmPath));
-  languageCache.set(config.id, promise);
-  return promise;
+  languageCache.set(config.id, config.language);
+  return config.language;
 };
 
 const serialiseNode = (
-  node: TreeSitterNode,
-  parent?: TreeSitterNode
+  node: ParserType.SyntaxNode,
+  parent?: ParserType.SyntaxNode
 ): TreeSitterAstNode => {
-  const toSerializableNamedChildren = (items: (TreeSitterNode | null)[]) =>
+  const toSerializableNamedChildren = (items: (ParserType.SyntaxNode | null)[]) =>
     items
-      .filter((item): item is TreeSitterNode => item !== null)
-      .map((child, index) => {
-        const fieldName = node.fieldNameForNamedChild(index) ?? undefined;
+      .filter((item): item is ParserType.SyntaxNode => item !== null)
+      .map((child) => {
+        // In native tree-sitter, fieldNameForChild expects the index within all children.
+        const all = node.children;
+        const childIdx = all.findIndex((c) => c.id === child.id);
+        const fieldName = childIdx >= 0 ? node.fieldNameForChild(childIdx) ?? undefined : undefined;
         const serialised = serialiseNode(child, node);
         return fieldName ? { ...serialised, fieldName } : serialised;
       });
@@ -131,7 +115,6 @@ export const parseWithTreeSitter = async (
     const tree = parser.parse(code);
     if (!tree) throw new Error("Tree-sitter failed to produce a tree");
     const ast = serialiseNode(tree.rootNode);
-    tree.delete();
     return {
       ast,
       parser: "tree-sitter",
@@ -139,7 +122,6 @@ export const parseWithTreeSitter = async (
       languageName: config.displayName,
     };
   } finally {
-    parser.delete();
+    // Native binding cleans up via GC; no explicit delete()
   }
 };
-

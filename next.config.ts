@@ -1,26 +1,29 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
   allowedDevOrigins: ["http://localhost:3001", "http://192.168.100.55:3001"],
+
   webpack: (config, { isServer }) => {
-    // Ensure client bundle doesn't try to resolve Node-only modules used by dependencies
+    // We must tell webpack NOT to bundle ANY of the tree-sitter packages.
+    // This includes the core library and all language grammars.
+    if (isServer) {
+      config.externals.push(
+        "tree-sitter",
+        "tree-sitter-python",
+        "tree-sitter-javascript", // From your earlier logs
+        "tree-sitter-typescript" // From your earlier logs
+      );
+    }
+
     if (!isServer) {
-      config.resolve = config.resolve || {};
       config.resolve.fallback = {
         ...(config.resolve.fallback || {}),
         fs: false,
         path: false,
         os: false,
-        module: false,
       };
-      // Explicitly ignore the subpath as well to prevent resolution errors
-      config.resolve.alias = {
-        ...(config.resolve.alias || {}),
-        "fs/promises": false,
-        module: false,
-      } as typeof config.resolve.alias;
     }
+
     return config;
   },
 };
