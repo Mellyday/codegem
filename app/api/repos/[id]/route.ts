@@ -6,12 +6,12 @@ import { ObjectId } from "mongodb";
 
 export async function GET(
   _req: Request,
-  context: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     const db = await getDb();
     const repos = db.collection("repos");
-    const { id } = context.params;
+    const { id } = await context.params;
     const _id = safeObjectId(id);
 
     const agg = await repos
@@ -57,14 +57,14 @@ export async function GET(
 
 export async function DELETE(
   _req: Request,
-  context: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const db = await getDb();
     const repos = db.collection("repos");
-    const { id } = context.params;
+    const { id } = await context.params;
     const _id = safeObjectId(id);
 
     const exists = await repos.findOne({ userId, repoId: _id } as any, { projection: { _id: 1 } });
