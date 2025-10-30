@@ -3,6 +3,16 @@ It seems there's no "break it down" button on the quiz view on mobile, or it's n
 
 ---
 
+0.5 Download more repos
+
+Our current format uses:
+curl -X POST "http://192.168.100.55:3001/api/repos" \ 
+  -H "Content-Type: application/json" \
+  -H "x-user-id: test-user-id" \
+  -d '{"url":"https://github.com/karpathy/minGPT"}'
+  
+---
+
 1. Split big files into multiple lessons
 In the "teach me" even medium size code can go well over a hundred card. We should split into multiple lessons instead, based on block.
 
