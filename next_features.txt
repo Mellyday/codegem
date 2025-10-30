@@ -1,0 +1,76 @@
+0. The break it down doesn't work on mobile
+It seems there's no "break it down" button on the quiz view on mobile, or it's not visible.
+
+---
+
+1. Split big files into multiple lessons
+In the "teach me" even medium size code can go well over a hundred card. We should split into multiple lessons instead, based on block.
+
+Motivating Example:
+mingpt/chargpt/chargpt.py
+https://github.com/metriport/metriport/blob/develop/packages/lambdas/src/sqs-to-converter.ts
+
+Reference:
+https://aistudio.google.com/prompts/1jUx-JQoIVRWB4VTMIQ4ALe9AClgSWvXf
+
+Use the contingous block rule (first response of aistudio). Make it optional. Use a heuristic to determine if we use it or not.
+
+---
+
+2. Use LLMs to group and create better question
+
+Input: The LLM is given a set of cards
+Output: The LLM give us back a new set of cards
+
+Example:
+def __init__(self, config, data):
+        self.config = config
+ 
+        chars = sorted(list(set(data)))
+        data_size, vocab_size = len(data), len(chars)
+        print('data has %d characters, %d unique.' % (data_size, vocab_size))
+ 
+        self.stoi = { ch:i for i,ch in enumerate(chars) }
+        self.itos = { i:ch for i,ch in enumerate(chars) }
+        self.vocab_size = vocab_size
+        self.data = data
+Source: Taken from mingpt/chargpt/chargpt.py
+
+As an example instead of asking what's left and what's right? It should realize that stoi, itos, vocab_size, data is one block.
+It should tell us to pick which variables do we need to define next in a choose 4 out of 10 style question.
+
+---
+
+3. Generate better distractors/false answers
+
+probably a job for the LLM although I suppose we could use a heuristic of using other tokens.
+
+---
+
+4. BUG: Python Decorator prevents the lesson/quiz from breaking functions down correctly
+
+---
+
+5. Make the "deep heuristic" for quiz generation works
+
+---
+
+6. Skip comments on lesson/quiz view 
+
+---
+
+7. Make the source code viewer on the mobile page better indented, always scrollable, and make it vertical position contant after each "next", also make it 
+scrolled all the way to the bottom always unless there's some manual change
+
+---
+
+8. We need quiz scores, answer history, etc 
+
+---
+
+9. Medal system
+
+Bronze/silver/gold: Accuracy of 80/95/100%
+Star 1/2/3: First achievement/achievement after 2 days of last time we studied it (lesson/quiz)/after 5 days
+We should also be able to reset "last touched date" manually if we are studying outside
+Folder can show like 53/85 files completed, 47 bronze, 18 silver, 4 gold like that for example 
