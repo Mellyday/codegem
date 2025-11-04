@@ -108,9 +108,7 @@ const generateQuestions = (
       breakdownTypes.has(child.type) &&
       (child.namedChildren || []).length > 0
     ) {
-      questions.push(
-        ...generateQuestions(child, breakdownTypes, code, opts)
-      );
+      questions.push(...generateQuestions(child, breakdownTypes, code, opts));
     } else {
       const childType = child.type;
       // Prefer the actual source text where available (identifier, parameters, etc.)
@@ -175,7 +173,13 @@ type SavedCustomQuizV11 = {
   createdAt: string;
   typeLabel?: string; // e.g., CustomQuizV1.1
   profile?: "shallow" | "normal" | "deep";
-  root: { type: string; text?: string; start?: number; end?: number; path?: number[] };
+  root: {
+    type: string;
+    text?: string;
+    start?: number;
+    end?: number;
+    path?: number[];
+  };
   totalCards: number;
   cards: SavedCustomQuizCardV11[];
 };
@@ -291,7 +295,13 @@ export const QuizViewer = ({
   onRevealChange,
 }: QuizViewerProps) => {
   // Treat blocks/suites or JS BlockStatements as containers
-  const BLOCK_TYPES = useMemo(() => (language === "python" ? new Set(["block", "suite"]) : new Set(["BlockStatement"])), [language]);
+  const BLOCK_TYPES = useMemo(
+    () =>
+      language === "python"
+        ? new Set(["block", "suite"])
+        : new Set(["BlockStatement"]),
+    [language]
+  );
   const CURATABLE_ANCHORS = useMemo(
     () =>
       language === "python"
@@ -368,16 +378,6 @@ export const QuizViewer = ({
     vroot: TreeSitterAstNode,
     name: string
   ) => {
-    try {
-      console.log("[QuizViewer] saveHeuristicQuiz: payload preview", {
-        name,
-        profile: quiz?.profile,
-        root: { type: vroot.type, start: vroot.startIndex, end: vroot.endIndex },
-        fileKey,
-        cards: Array.isArray(quiz?.cards) ? quiz.cards.length : 0,
-        firstCard: quiz?.cards?.[0],
-      });
-    } catch {}
     const payload = {
       fileKey,
       name,
@@ -416,7 +416,6 @@ export const QuizViewer = ({
       } catch {}
       throw new Error(msg);
     }
-    try { console.log("[QuizViewer] saveHeuristicQuiz: success"); } catch {}
   };
 
   // Save split quizzes using the same grouping heuristic as Lesson
@@ -425,23 +424,21 @@ export const QuizViewer = ({
     opts?: { maxDeepPerStmt?: number }
   ) => {
     if (!root) return;
-    try { console.log("[QuizViewer] saveSplitHeuristic: start", { profile, opts }); } catch {}
-    const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
-      root,
-      { includeNames: false, enableGrouping: "auto" as const }
-    );
+    const plan = (
+      language === "python"
+        ? pyLesson.generateLessonPlan
+        : jsLesson.generateLessonPlan
+    )(root, { includeNames: false, enableGrouping: "auto" as const });
     const groups = plan.filter(
       (s: any) => (s.node as any)?.isVirtual || s.node.type === "group"
     );
-    try { console.log("[QuizViewer] saveSplitHeuristic: groups", groups.map((g: any) => ({ prompt: g.prompt, start: g.node.startIndex, end: g.node.endIndex }))); } catch {}
     if (!groups.length) {
       // Fallback to single save
-      const single = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-        root,
-        code || "",
-        profile,
-        opts
-      );
+      const single = (
+        language === "python"
+          ? pyQuiz.buildHeuristicQuiz
+          : jsQuiz.buildHeuristicQuiz
+      )(root, code || "", profile, opts);
       await saveHeuristicQuiz(single, root, `Heuristic ${profile}`);
       alert(`Saved 1 quiz (Heuristic ${profile}).`);
       return;
@@ -472,14 +469,13 @@ export const QuizViewer = ({
       const start = g.node.startIndex;
       const end = g.node.endIndex;
       const vroot = buildGroupRoot(start, end);
-      const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-        vroot,
-        code || "",
-        profile,
-        opts
-      );
-      const name = `${g.prompt}`.slice(0, 160) || `Heuristic ${profile} (${i + 1})`;
-      try { console.log("[QuizViewer] saveSplitHeuristic: saving group", { i: i + 1, name, start, end, cards: quiz?.cards?.length }); } catch {}
+      const quiz = (
+        language === "python"
+          ? pyQuiz.buildHeuristicQuiz
+          : jsQuiz.buildHeuristicQuiz
+      )(vroot, code || "", profile, opts);
+      const name =
+        `${g.prompt}`.slice(0, 160) || `Heuristic ${profile} (${i + 1})`;
       await saveHeuristicQuiz(quiz, vroot, name);
       saved += 1;
     }
@@ -575,7 +571,8 @@ export const QuizViewer = ({
         <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
           <div className="flex items-center justify-between">
             <span className="text-sm text-slate-700">
-              Preview questions: <span className="font-semibold">{preview.length}</span>
+              Preview questions:{" "}
+              <span className="font-semibold">{preview.length}</span>
             </span>
             <div className="flex gap-2">
               <button
@@ -599,17 +596,19 @@ export const QuizViewer = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="text-xs uppercase tracking-wide text-slate-500">Heuristic presets:</span>
+            <span className="text-xs uppercase tracking-wide text-slate-500">
+              Heuristic presets:
+            </span>
             <button
               type="button"
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-                  root,
-                  code || "",
-                  "shallow"
-                );
+                const quiz = (
+                  language === "python"
+                    ? pyQuiz.buildHeuristicQuiz
+                    : jsQuiz.buildHeuristicQuiz
+                )(root, code || "", "shallow");
                 saveHeuristicQuiz(quiz, root, "Heuristic shallow")
                   .then(() => alert("Saved heuristic shallow quiz."))
                   .catch(() => alert("Failed to save heuristic shallow quiz."));
@@ -622,12 +621,11 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-                  root,
-                  code || "",
-                  "deep",
-                  { maxDeepPerStmt: 6 }
-                );
+                const quiz = (
+                  language === "python"
+                    ? pyQuiz.buildHeuristicQuiz
+                    : jsQuiz.buildHeuristicQuiz
+                )(root, code || "", "deep", { maxDeepPerStmt: 6 });
                 saveHeuristicQuiz(quiz, root, "Heuristic deep")
                   .then(() => alert("Saved heuristic deep quiz."))
                   .catch(() => alert("Failed to save heuristic deep quiz."));
@@ -658,8 +656,20 @@ export const QuizViewer = ({
 
         {/* Heuristic split now saves quizzes directly to DB */}
 
-        <ErrorBoundary fallback={<div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">Failed to load quizzes.</div>}>
-          <Suspense fallback={<div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Loading saved quizzes…</div>}>
+        <ErrorBoundary
+          fallback={
+            <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">
+              Failed to load quizzes.
+            </div>
+          }
+        >
+          <Suspense
+            fallback={
+              <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+                Loading saved quizzes…
+              </div>
+            }
+          >
             <SavedCustomQuizzesPanel
               fileKey={fileKey}
               onStartSaved={(q) => {
@@ -770,8 +780,15 @@ export const QuizViewer = ({
       if (selectedCustom) return; // Only supported for AST-sourced questions
       const q = questions[current];
       const childNode = q?.node;
-      if (!childNode || !childNode.namedChildren || childNode.namedChildren.length === 0) return;
-      const deeper = generateQuestions(childNode, breakdownTypes, code, { source: "expanded" });
+      if (
+        !childNode ||
+        !childNode.namedChildren ||
+        childNode.namedChildren.length === 0
+      )
+        return;
+      const deeper = generateQuestions(childNode, breakdownTypes, code, {
+        source: "expanded",
+      });
       if (!deeper.length) return;
       const before = questions.slice(0, current);
       const after = questions.slice(current + 1);
@@ -968,7 +985,13 @@ export const QuizViewer = ({
               const cls = !answered
                 ? `${base} ${idle}`
                 : `${base} ${
-                    isSelected ? (isCorrect ? correctCls : wrongCls) : isCorrect ? correctCls : idle
+                    isSelected
+                      ? isCorrect
+                        ? correctCls
+                        : wrongCls
+                      : isCorrect
+                      ? correctCls
+                      : idle
                   }`;
 
               const optionId = `${current}-${i}`;
@@ -1054,21 +1077,20 @@ export const QuizViewer = ({
 
     // Prefer block/suite if the span is exactly a block, else land on a statement anchor
     const resolveAnchor = (s: number, e: number) => {
-      const deepest = (language === "python" ? pyCuration.findDeepestNodeCoveringSpan : jsCuration.findDeepestNodeCoveringSpan)(
-        root,
-        s,
-        e
-      );
+      const deepest = (
+        language === "python"
+          ? pyCuration.findDeepestNodeCoveringSpan
+          : jsCuration.findDeepestNodeCoveringSpan
+      )(root, s, e);
       if (deepest && BLOCK_TYPES.has(deepest.type)) {
         // If user marked a body span exactly, keep the block as the anchor
         return deepest;
       }
-      const anchor = (language === "python" ? pyCuration.findNearestAnchorCoveringSpan : jsCuration.findNearestAnchorCoveringSpan)(
-        root,
-        s,
-        e,
-        CURATABLE_ANCHORS
-      );
+      const anchor = (
+        language === "python"
+          ? pyCuration.findNearestAnchorCoveringSpan
+          : jsCuration.findNearestAnchorCoveringSpan
+      )(root, s, e, CURATABLE_ANCHORS);
       return anchor ?? deepest;
     };
 
@@ -1077,10 +1099,7 @@ export const QuizViewer = ({
       typeof q.revealEndBeforeChild === "number" &&
       typeof q.revealEndAfterChild === "number"
     ) {
-      const n = resolveAnchor(
-        q.revealEndBeforeChild,
-        q.revealEndAfterChild
-      );
+      const n = resolveAnchor(q.revealEndBeforeChild, q.revealEndAfterChild);
       if (n) return n;
     }
 
@@ -1126,9 +1145,11 @@ export const QuizViewer = ({
     const effective = innerDef || anchor;
 
     const isFunc =
-      effective.type === "function_definition" || anchor.type === "function_definition";
+      effective.type === "function_definition" ||
+      anchor.type === "function_definition";
     const isClass =
-      effective.type === "class_definition" || anchor.type === "class_definition";
+      effective.type === "class_definition" ||
+      anchor.type === "class_definition";
     const hasBlock = !!findBlockChild(effective);
 
     // Optional stable group ordering for common statements (handle _stmt/_statement)
@@ -1138,29 +1159,30 @@ export const QuizViewer = ({
     const isFor = anchor.type === "for_statement" || anchor.type === "for_stmt";
     const isElif = anchor.type === "elif_clause";
     const isElse = anchor.type === "else_clause";
-    const groupOrder =
-      isFunc
-        ? ["type_params", "args", "returns", "body", "decorators"]
+    const groupOrder = isFunc
+      ? ["type_params", "args", "returns", "body", "decorators"]
       : isClass
-        ? ["type_params", "bases", "body", "decorators", "keywords"]
+      ? ["type_params", "bases", "body", "decorators", "keywords"]
       : isWhile
-        ? ["test", "body", "orelse"]
+      ? ["test", "body", "orelse"]
       : isIf
-        ? ["test", "body", "orelse"]
+      ? ["test", "body", "orelse"]
       : isElif
-        ? ["test", "body"]
+      ? ["test", "body"]
       : isElse
-        ? ["body"]
+      ? ["body"]
       : isFor
-        ? ["target", "iter", "body", "orelse"]
-        : anchor.type === "with_statement"
-        ? ["items", "body"]
-        : anchor.type === "try_statement"
-        ? ["body", "handlers", "orelse", "finalbody"]
-        : undefined;
+      ? ["target", "iter", "body", "orelse"]
+      : anchor.type === "with_statement"
+      ? ["items", "body"]
+      : anchor.type === "try_statement"
+      ? ["body", "handlers", "orelse", "finalbody"]
+      : undefined;
 
     let pieces =
-      (language === "python" ? pyCuration.cardsFromCuratedSections : jsCuration.cardsFromCuratedSections)(anchor, code, {
+      (language === "python"
+        ? pyCuration.cardsFromCuratedSections
+        : jsCuration.cardsFromCuratedSections)(anchor, code, {
         // Show a single "body" card whenever this node actually owns a block/suite
         includeBody: hasBlock || isFunc,
         groupOrder,
@@ -1273,7 +1295,9 @@ export const QuizViewer = ({
               nodeType: node.type,
               start: node.startIndex,
               end: node.endIndex,
-              path: (language === "python" ? pyQuiz.computeAstPath : jsQuiz.computeAstPath)(root, node),
+              path: (language === "python"
+                ? pyQuiz.computeAstPath
+                : jsQuiz.computeAstPath)(root, node),
               preview:
                 typeof code === "string"
                   ? code.substring(node.startIndex, node.endIndex).slice(0, 120)
@@ -1341,7 +1365,9 @@ export const QuizViewer = ({
               disabled={!questions.some((q) => q.source === "expanded")}
               onClick={async () => {
                 try {
-                  const onlyNew = questions.filter((q) => q.source === "expanded");
+                  const onlyNew = questions.filter(
+                    (q) => q.source === "expanded"
+                  );
                   if (onlyNew.length === 0) {
                     alert("No new cards to save.");
                     return;

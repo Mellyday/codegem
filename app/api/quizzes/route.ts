@@ -1,4 +1,4 @@
-export const runtime = 'nodejs';
+export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { getDb } from "../../../src/lib/mongodb";
 import { ObjectId } from "mongodb";
@@ -33,7 +33,13 @@ type QuizPayload = {
   name: string;
   // Schema/version discriminator
   type: string; // e.g. "CustomQuizV1.1"
-  rootNode: { type: string; text?: string; start?: number; end?: number; path?: number[] };
+  rootNode: {
+    type: string;
+    text?: string;
+    start?: number;
+    end?: number;
+    path?: number[];
+  };
   profile?: "shallow" | "normal" | "deep";
   cards: QuizCard[];
 };
@@ -52,25 +58,15 @@ export async function POST(request: Request) {
     }
     // Session is already validated by Clerk via auth(); no extra lookup needed
 
-    // Debug log payload summary
-    try {
-      console.log("[quizzes:POST] incoming", {
-        user: clerkUserId,
-        hasFileId: !!body.fileId,
-        fileKey: body.fileKey,
-        name: body.name,
-        type: body.type,
-        profile: body.profile,
-        cards: Array.isArray(body.cards) ? body.cards.length : 0,
-      });
-    } catch {}
-
     // Resolve fileId from fileKey if needed, supporting repo-backed files.
     let fileId: any = body.fileId;
     let origin: { kind: "repo" | "project"; id: any; path: string } | undefined;
     if (!fileId) {
       if (!body.fileKey) {
-        return NextResponse.json({ error: "Missing fileId or fileKey" }, { status: 400 });
+        return NextResponse.json(
+          { error: "Missing fileId or fileKey" },
+          { status: 400 }
+        );
       }
       // For repos, files are shared across users; do not filter by userId.
       // For projects, files are user-scoped; include userId in match.
@@ -97,14 +93,27 @@ export async function POST(request: Request) {
       const mRaw = buildMatch(false);
       let fileDoc: any | null = null;
       if (body.fileKey.kind === "repo") {
-        fileDoc = await reposCol.findOne(mObj, { projection: { _id: 1, path: 1, repoId: 1 } });
-        if (!fileDoc) fileDoc = await reposCol.findOne(mRaw, { projection: { _id: 1, path: 1, repoId: 1 } });
+        fileDoc = await reposCol.findOne(mObj, {
+          projection: { _id: 1, path: 1, repoId: 1 },
+        });
+        if (!fileDoc)
+          fileDoc = await reposCol.findOne(mRaw, {
+            projection: { _id: 1, path: 1, repoId: 1 },
+          });
       } else {
-        fileDoc = await files.findOne(mObj, { projection: { _id: 1, path: 1, projectId: 1 } });
-        if (!fileDoc) fileDoc = await files.findOne(mRaw, { projection: { _id: 1, path: 1, projectId: 1 } });
+        fileDoc = await files.findOne(mObj, {
+          projection: { _id: 1, path: 1, projectId: 1 },
+        });
+        if (!fileDoc)
+          fileDoc = await files.findOne(mRaw, {
+            projection: { _id: 1, path: 1, projectId: 1 },
+          });
       }
       if (!fileDoc) {
-        return NextResponse.json({ error: "File not found for provided key" }, { status: 404 });
+        return NextResponse.json(
+          { error: "File not found for provided key" },
+          { status: 404 }
+        );
       }
       fileId = (fileDoc as any)._id;
       origin = {
@@ -115,9 +124,12 @@ export async function POST(request: Request) {
     } else {
       // If fileId provided, attempt to infer origin for convenience (best-effort)
       try {
-        const fileDoc = await files.findOne({ _id: fileId as any }, {
-          projection: { repoId: 1, projectId: 1, path: 1 },
-        });
+        const fileDoc = await files.findOne(
+          { _id: fileId as any },
+          {
+            projection: { repoId: 1, projectId: 1, path: 1 },
+          }
+        );
         if (fileDoc) {
           const kind = (fileDoc as any).repoId ? "repo" : "project";
           const id = (fileDoc as any).repoId ?? (fileDoc as any).projectId;
@@ -143,38 +155,31 @@ export async function POST(request: Request) {
         ...(typeof body.rootNode.start === "number"
           ? { start: body.rootNode.start }
           : {}),
-        ...(typeof body.rootNode.end === "number" ? { end: body.rootNode.end } : {}),
-        ...(Array.isArray(body.rootNode.path) ? { path: body.rootNode.path } : {}),
+        ...(typeof body.rootNode.end === "number"
+          ? { end: body.rootNode.end }
+          : {}),
+        ...(Array.isArray(body.rootNode.path)
+          ? { path: body.rootNode.path }
+          : {}),
       },
       ...(body.profile ? { profile: body.profile } : {}),
-      cards: body.cards?.map((c) => ({
-        order: c.order,
-        type: c.type,
-        text: c.text,
-        action: c.action,
-        ...(c.question ? { question: c.question } : {}),
-        ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
-        ...(c.difficulty ? { difficulty: c.difficulty } : {}),
-        ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
-      })) ?? [],
+      cards:
+        body.cards?.map((c) => ({
+          order: c.order,
+          type: c.type,
+          text: c.text,
+          action: c.action,
+          ...(c.question ? { question: c.question } : {}),
+          ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
+          ...(c.difficulty ? { difficulty: c.difficulty } : {}),
+          ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
+        })) ?? [],
       createdAt: now,
     } as const;
     const result = await quizzes.insertOne(doc);
-    try {
-      console.log("[quizzes:POST] saved", {
-        user: clerkUserId,
-        quizId: String(result.insertedId),
-        fileId: String(fileId),
-        name: (doc as any).name,
-        cards: (doc as any).cards?.length ?? 0,
-      });
-    } catch {}
 
     return NextResponse.json({ id: String(result.insertedId) });
   } catch (error) {
-    try {
-      console.error("[quizzes:POST] error", error);
-    } catch {}
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
@@ -205,7 +210,11 @@ export async function GET(request: Request) {
     // For repos, do not filter by userId; for projects, include userId
     const baseMatch: any = { path };
     let idAsObject: any = id as any;
-    try { idAsObject = new ObjectId(String(id)); } catch { idAsObject = id as any; }
+    try {
+      idAsObject = new ObjectId(String(id));
+    } catch {
+      idAsObject = id as any;
+    }
     const buildMatch = (useObject: boolean) => {
       const m: any = { ...baseMatch };
       if (kind === "repo") {
@@ -221,10 +230,12 @@ export async function GET(request: Request) {
     let fileDoc: any | null = null;
     if (kind === "repo") {
       fileDoc = await reposCol.findOne(mObj, { projection: { _id: 1 } });
-      if (!fileDoc) fileDoc = await reposCol.findOne(mRaw, { projection: { _id: 1 } });
+      if (!fileDoc)
+        fileDoc = await reposCol.findOne(mRaw, { projection: { _id: 1 } });
     } else {
       fileDoc = await files.findOne(mObj, { projection: { _id: 1 } });
-      if (!fileDoc) fileDoc = await files.findOne(mRaw, { projection: { _id: 1 } });
+      if (!fileDoc)
+        fileDoc = await files.findOne(mRaw, { projection: { _id: 1 } });
     }
     const list: any[] = [];
     if (fileDoc) {
@@ -242,20 +253,8 @@ export async function GET(request: Request) {
         }));
       list.push(...(await cursor.toArray()));
     }
-    try {
-      console.log("[quizzes:GET] list", {
-        user: clerkUserId,
-        kind,
-        id,
-        path,
-        count: list.length,
-      });
-    } catch {}
     return NextResponse.json({ quizzes: list });
   } catch (error) {
-    try {
-      console.error("[quizzes:GET] error", error);
-    } catch {}
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
