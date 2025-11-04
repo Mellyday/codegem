@@ -3,6 +3,7 @@ import {
   buildCuratedSections,
   childrenOfType,
   firstChildOfType,
+  isDocstringNode,
 } from "./pyCuration";
 
 // -------- Shared helpers --------
@@ -626,7 +627,10 @@ export function buildHeuristicQuiz(
   };
 
   const walkBlock = (block: TreeSitterAstNode) => {
-    for (const stmt of block.namedChildren || []) walkStmt(stmt);
+    const kids = (block.namedChildren || []).filter(
+      (c) => c.type !== "comment" && !isDocstringNode(c, block)
+    );
+    for (const stmt of kids) walkStmt(stmt);
   };
 
   const walkStmt = (node: TreeSitterAstNode) => {
@@ -749,7 +753,12 @@ export function buildHeuristicQuiz(
     }
   };
 
-  for (const top of root.namedChildren || []) walkStmt(top);
+  {
+    const tops = (root.namedChildren || []).filter(
+      (c) => c.type !== "comment" && !isDocstringNode(c, root)
+    );
+    for (const top of tops) walkStmt(top);
+  }
   if (typeof opts?.maxQuestions === "number") {
     const n = Math.min(cards.length, opts.maxQuestions);
     cards.length = n;
@@ -766,4 +775,3 @@ export function buildHeuristicQuiz(
     cards,
   };
 }
-

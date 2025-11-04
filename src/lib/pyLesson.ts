@@ -1,4 +1,5 @@
 import type { TreeSitterAstNode } from "./treeSitter";
+import { isDocstringNode } from "./pyCuration";
 import { randomString } from "./utils";
 
 export type LessonStep = {
@@ -28,7 +29,9 @@ export const generateLessonPlan = (
 ): LessonStep[] => {
   const includeNames = options.includeNames ?? true;
   const steps: LessonStep[] = [];
-  const children = node.namedChildren || [];
+  const children = (node.namedChildren || []).filter(
+    (c) => c.type !== "comment" && !isDocstringNode(c, node)
+  );
 
   switch (node.type) {
     case "module": {

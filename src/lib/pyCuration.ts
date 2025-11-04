@@ -33,6 +33,48 @@ export const collectDescendants = (
   return out;
 };
 
+// Detect a Python docstring statement: a standalone string literal as the first
+// named child within a module or a block (function/class body).
+export const isDocstringNode = (
+  node: TreeSitterAstNode,
+  parent?: TreeSitterAstNode
+): boolean => {
+  if (!parent) return false;
+  // Only consider top-level (module) or indented blocks (function/class bodies)
+  if (parent.type !== "module" && parent.type !== "block") return false;
+
+  // It must be the first named child of the parent
+  const siblings = parent.namedChildren || [];
+  if (!siblings.length) return false;
+  const isFirst = siblings[0] === node;
+  if (!isFirst) return false;
+
+  // The docstring itself is typically an expression_statement whose first child
+  // is a string literal. Be permissive about string node type variants.
+  if (node.type === "expression_statement") {
+    const first = (node.namedChildren || [])[0];
+    if (!first) return false;
+    const stringTypes = new Set([
+      "string",
+      "string_literal",
+      "f_string",
+      "concatenated_string",
+      "interpolated_string",
+    ]);
+    return stringTypes.has(first.type);
+  }
+
+  // Some grammars could surface the string directly (defensive)
+  const directStringTypes = new Set([
+    "string",
+    "string_literal",
+    "f_string",
+    "concatenated_string",
+    "interpolated_string",
+  ]);
+  return directStringTypes.has(node.type);
+};
+
 const isYieldType = (type: string) =>
   type === "yield_expr" || type === "yield_expression" || type === "yield";
 
