@@ -10,6 +10,8 @@ import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
 import * as pyQuiz from "../lib/pyQuiz";
 import * as jsQuiz from "../lib/jsQuiz";
+import * as pyLesson from "../lib/pyLesson";
+import * as jsLesson from "../lib/jsLesson";
 
 // Constants moved inside component to depend on language
 type QuizMode = "setup" | "active" | "complete";
@@ -345,6 +347,17 @@ export const QuizViewer = ({
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([]);
+  // Multi-quiz generation (split by grouped sections)
+  const [multiQuizzes, setMultiQuizzes] = useState<
+    | undefined
+    | Array<{
+        id: string;
+        label: string;
+        count: number;
+        range: { start: number; end: number };
+        quiz: SavedCustomQuizV11;
+      }>
+  >(undefined);
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [score, setScore] = useState(0);
@@ -506,8 +519,154 @@ export const QuizViewer = ({
             >
               Deep (With Expression Detail)
             </button>
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => {
+                if (!root) return;
+                const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
+                  root,
+                  { includeNames: false, enableGrouping: "auto" as const }
+                );
+                const groups = plan.filter((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
+                if (!groups.length) {
+                  const single = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+                    root,
+                    code || "",
+                    "shallow"
+                  );
+                  setSelectedCustom(single as any);
+                  onStart();
+                  return;
+                }
+                const topLevel = (root.namedChildren || []).filter((c) => c.type !== "comment");
+                const buildGroupRoot = (start: number, end: number) => {
+                  const namedChildren = topLevel.filter(
+                    (n) => n.startIndex >= start && n.endIndex <= end
+                  );
+                  const vroot: any = {
+                    type: "group",
+                    named: true,
+                    startPosition: root.startPosition,
+                    endPosition: root.endPosition,
+                    startIndex: start,
+                    endIndex: end,
+                    text: undefined,
+                    children: [],
+                    namedChildren,
+                  } as TreeSitterAstNode;
+                  return vroot;
+                };
+                const grouped = groups.map((g: any, idx: number) => {
+                  const start = g.node.startIndex;
+                  const end = g.node.endIndex;
+                  const vroot = buildGroupRoot(start, end);
+                  const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+                    vroot,
+                    code || "",
+                    "shallow"
+                  );
+                  return {
+                    id: g.id || String(idx),
+                    label: g.prompt,
+                    count: quiz.totalCards,
+                    range: { start, end },
+                    quiz: quiz as any,
+                  };
+                });
+                setMultiQuizzes(grouped);
+              }}
+            >
+              Shallow (Split)
+            </button>
+            <button
+              type="button"
+              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              onClick={() => {
+                if (!root) return;
+                const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
+                  root,
+                  { includeNames: false, enableGrouping: "auto" as const }
+                );
+                const groups = plan.filter((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
+                if (!groups.length) {
+                  const single = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+                    root,
+                    code || "",
+                    "deep",
+                    { maxDeepPerStmt: 6 }
+                  );
+                  setSelectedCustom(single as any);
+                  onStart();
+                  return;
+                }
+                const topLevel = (root.namedChildren || []).filter((c) => c.type !== "comment");
+                const buildGroupRoot = (start: number, end: number) => {
+                  const namedChildren = topLevel.filter(
+                    (n) => n.startIndex >= start && n.endIndex <= end
+                  );
+                  const vroot: any = {
+                    type: "group",
+                    named: true,
+                    startPosition: root.startPosition,
+                    endPosition: root.endPosition,
+                    startIndex: start,
+                    endIndex: end,
+                    text: undefined,
+                    children: [],
+                    namedChildren,
+                  } as TreeSitterAstNode;
+                  return vroot;
+                };
+                const grouped = groups.map((g: any, idx: number) => {
+                  const start = g.node.startIndex;
+                  const end = g.node.endIndex;
+                  const vroot = buildGroupRoot(start, end);
+                  const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+                    vroot,
+                    code || "",
+                    "deep",
+                    { maxDeepPerStmt: 6 }
+                  );
+                  return {
+                    id: g.id || String(idx),
+                    label: g.prompt,
+                    count: quiz.totalCards,
+                    range: { start, end },
+                    quiz: quiz as any,
+                  };
+                });
+                setMultiQuizzes(grouped);
+              }}
+            >
+              Deep (Split)
+            </button>
           </div>
         </div>
+
+        {Array.isArray(multiQuizzes) && multiQuizzes.length > 0 && (
+          <div className="rounded-md border border-slate-200 bg-white p-3">
+            <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">Generated Quizzes</div>
+            <div className="space-y-2">
+              {multiQuizzes.map((q) => (
+                <button
+                  key={q.id}
+                  type="button"
+                  className="w-full text-left rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 hover:bg-slate-100"
+                  onClick={() => {
+                    setSelectedCustom(q.quiz as any);
+                    onStart();
+                  }}
+                >
+                  <div className="flex items-center justify-between">
+                    <span>{q.label}</span>
+                    <span className="text-xs text-slate-500">{q.count} cards</span>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
 
         <ErrorBoundary fallback={<div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">Failed to load quizzes.</div>}>
           <Suspense fallback={<div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Loading saved quizzes…</div>}>

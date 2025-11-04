@@ -1,16 +1,21 @@
 import type { TreeSitterAstNode } from "./treeSitter";
 import { randomString } from "./utils";
 
+type VirtualAstNode = TreeSitterAstNode & { isVirtual?: boolean };
+
 export type LessonStep = {
   id: string;
-  node: TreeSitterAstNode;
+  node: VirtualAstNode;
   semanticRole: string;
   prompt: string;
   isDigable: boolean;
+  childSteps?: LessonStep[];
 };
 
 export type LessonPlanOptions = {
   includeNames?: boolean;
+  enableGrouping?: boolean | "auto";
+  __noGroup?: boolean;
 };
 
 export type MaskRange = { start: number; end: number };
@@ -29,13 +34,27 @@ export const generateLessonPlan = (
   options: LessonPlanOptions = {}
 ): LessonStep[] => {
   const includeNames = options.includeNames ?? true;
+  const enableGrouping = options.enableGrouping ?? "auto";
   const steps: LessonStep[] = [];
   const children = node.namedChildren || [];
 
   switch (node.type) {
     case "File":
     case "Program": {
-      children.forEach((c) => steps.push(...generateLessonPlan(c, options)));
+      const shouldGroup = (() => {
+        if (options.__noGroup) return false;
+        if (enableGrouping === true) return true;
+        if (enableGrouping === false) return false;
+        const topCount = children.length;
+        const fileLen = Math.max(0, (node.endIndex ?? 0) - (node.startIndex ?? 0));
+        return topCount >= 12 || fileLen >= 5000;
+      })();
+
+      if (shouldGroup) {
+        steps.push(...groupTopLevelNodes(children, options));
+      } else {
+        children.forEach((c) => steps.push(...generateLessonPlan(c, options)));
+      }
       break;
     }
 
@@ -216,11 +235,119 @@ export const generateLessonPlan = (
   return steps;
 };
 
+// ---- Grouping for JS/TS (Babel-adapted types) ----
+
+type JsCategory =
+  | "import"
+  | "definition"
+  | "type"
+  | "constants"
+  | "configuration"
+  | "logic";
+
+function getSemanticCategory(node: TreeSitterAstNode): JsCategory {
+  switch (node.type) {
+    case "ImportDeclaration":
+      return "import";
+    case "TSInterfaceDeclaration":
+    case "TSTypeAliasDeclaration":
+    case "InterfaceDeclaration":
+    case "TypeAlias":
+      return "type";
+    case "ClassDeclaration":
+    case "ClassExpression":
+    case "FunctionDeclaration":
+    case "FunctionExpression":
+    case "ArrowFunctionExpression":
+      return "definition";
+    case "VariableDeclaration": {
+      // const UPPER_CASE = ... => constants heuristic is optional; default to configuration
+      return "configuration";
+    }
+    default:
+      return "logic";
+  }
+}
+
+function generateGroupPrompt(category: JsCategory, count: number): string {
+  switch (category) {
+    case "import":
+      return `This file starts with ${count} import statement(s) to bring in necessary libraries.`;
+    case "definition":
+      return `Next, we have a block of ${count} function and/or class definition(s).`;
+    case "type":
+      return `There are ${count} type definition(s).`;
+    case "constants":
+      return `A block of ${count} constant definition(s).`;
+    case "configuration":
+      return `A configuration block with ${count} statement(s).`;
+    case "logic":
+    default:
+      return `Here is a block of application logic consisting of ${count} statement(s).`;
+  }
+}
+
+function createGroupStep(
+  nodes: TreeSitterAstNode[],
+  category: JsCategory,
+  options: LessonPlanOptions
+): LessonStep {
+  const first = nodes[0];
+  const last = nodes[nodes.length - 1];
+  const virtualNode: VirtualAstNode = {
+    ...(first as any),
+    type: "group",
+    startIndex: first.startIndex,
+    endIndex: last.endIndex,
+    isVirtual: true,
+  };
+  const childSteps = nodes.flatMap((n) =>
+    generateLessonPlan(n, { ...options, __noGroup: true })
+  );
+  const isDigable = childSteps.length > 1 || nodes.length > 1;
+  return {
+    id: randomString(8),
+    node: virtualNode,
+    semanticRole: `group:${category}`,
+    prompt: generateGroupPrompt(category, nodes.length),
+    isDigable,
+    childSteps,
+  };
+}
+
+function groupTopLevelNodes(
+  topLevelNodes: TreeSitterAstNode[],
+  options: LessonPlanOptions
+): LessonStep[] {
+  if (!topLevelNodes.length) return [];
+  const out: LessonStep[] = [];
+  let currentCategory: JsCategory | null = null;
+  let currentGroup: TreeSitterAstNode[] = [];
+
+  for (const n of topLevelNodes) {
+    const cat = getSemanticCategory(n);
+    if (currentCategory && cat === currentCategory) {
+      currentGroup.push(n);
+    } else {
+      if (currentGroup.length) {
+        out.push(createGroupStep(currentGroup, currentCategory!, options));
+      }
+      currentCategory = cat;
+      currentGroup = [n];
+    }
+  }
+  if (currentGroup.length) out.push(createGroupStep(currentGroup, currentCategory!, options));
+  return out;
+}
+
 export function maskAndAnswerForStep(
   step: LessonStep,
   root: TreeSitterAstNode,
   code: string
 ): { masks: MaskRange[]; answerText: string } {
+  if ((step.node as any).isVirtual || step.node.type === "group") {
+    return { masks: [], answerText: textForNode(step.node, code) };
+  }
   const headerTypes = new Set([
     "IfStatement",
     "WhileStatement",
@@ -343,4 +470,3 @@ export function buildCustomQuizPayload(params: {
     })),
   };
 }
-
