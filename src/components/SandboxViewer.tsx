@@ -316,6 +316,13 @@ export const SandboxViewer = ({
     maskRanges,
   ]);
 
+  // Responsive, content-sized line number gutter width (in ch units)
+  const lineDigits = useMemo(() => {
+    const count = codeSlice.lines.length || 0;
+    const digits = Math.max(2, String(count).length);
+    return digits;
+  }, [codeSlice.lines.length]);
+
   // Character-range helpers (slice-relative) for precise highlighting
   const selectedCharRange = useMemo(() => {
     if (!selectedTsNode) return undefined;
@@ -658,7 +665,10 @@ export const SandboxViewer = ({
                             className="flex items-start cursor-pointer"
                             onClick={handleLineClick}
                           >
-                            <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
+                            <span
+                              className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                              style={{ width: `${lineDigits}ch` }}
+                            >
                               {i + 1}
                             </span>
                             <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
@@ -681,7 +691,10 @@ export const SandboxViewer = ({
                             )}`}
                             onClick={handleLineClick}
                           >
-                            <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
+                            <span
+                              className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                              style={{ width: `${lineDigits}ch` }}
+                            >
                               {i + 1}
                             </span>
                             <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
@@ -713,7 +726,10 @@ export const SandboxViewer = ({
                           className="flex items-start cursor-pointer"
                           onClick={handleLineClick}
                         >
-                          <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
+                          <span
+                            className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                            style={{ width: `${lineDigits}ch` }}
+                          >
                             {i + 1}
                           </span>
                           <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
