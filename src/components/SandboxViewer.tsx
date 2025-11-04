@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { FileText, ArrowLeft, Zap, BookOpen } from "lucide-react";
 
@@ -70,6 +70,8 @@ export const SandboxViewer = ({
   const [maskRanges, setMaskRanges] = useState<
     { start: number; end: number }[]
   >([]);
+  // Ref to the scrollable code container so we can control scroll position
+  const codeScrollRef = useRef<HTMLDivElement | null>(null);
   // Zoom state for Tree-sitter AST: stack of previous roots and current zoom root
   const [zoomStackTs, setZoomStackTs] = useState<TreeSitterAstNode[]>([]);
   const [zoomRootTs, setZoomRootTs] = useState<TreeSitterAstNode | undefined>(
@@ -203,6 +205,24 @@ export const SandboxViewer = ({
       // ignore persist errors
     }
   }, [storageKey, viewMode, revealEndIndex, maskRanges]);
+
+  // When in quiz mode, keep the code view scrolled to the bottom (show latest lines)
+  useEffect(() => {
+    if (
+      (viewMode === "quiz_active" || viewMode === "quiz_complete") &&
+      codeScrollRef.current
+    ) {
+      const el = codeScrollRef.current;
+      // Use requestAnimationFrame to ensure DOM updates are flushed
+      requestAnimationFrame(() => {
+        try {
+          el.scrollTop = el.scrollHeight;
+        } catch {
+          // ignore scroll errors
+        }
+      });
+    }
+  }, [viewMode, revealEndIndex]);
 
   // Helper: check if a Tree-sitter node covers a given row
   const nodeCoversRow = (node: TreeSitterAstNode, row: number): boolean =>
@@ -578,7 +598,10 @@ export const SandboxViewer = ({
               <h2 className="mb-4 text-lg font-semibold text-slate-800">
                 SOURCE CODE
               </h2>
-              <div className="max-h-[600px] overflow-auto rounded-lg bg-slate-50 p-4">
+              <div
+                ref={codeScrollRef}
+                className="min-h-[45vh] overflow-auto rounded-lg bg-slate-50 p-4 lg:min-h-0 lg:max-h-[600px]"
+              >
                 {/*
                   Use a normal div with explicit whitespace + monospace so the
                   inner line <div>s don't break <pre> semantics on some browsers.
