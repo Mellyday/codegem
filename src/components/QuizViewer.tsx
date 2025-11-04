@@ -347,17 +347,7 @@ export const QuizViewer = ({
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([]);
-  // Multi-quiz generation (split by grouped sections)
-  const [multiQuizzes, setMultiQuizzes] = useState<
-    | undefined
-    | Array<{
-        id: string;
-        label: string;
-        count: number;
-        range: { start: number; end: number };
-        quiz: SavedCustomQuizV11;
-      }>
-  >(undefined);
+  // Removed split preview list; split actions now save quizzes directly
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [score, setScore] = useState(0);
@@ -371,6 +361,130 @@ export const QuizViewer = ({
     () => questions.some((q) => q.source === "expanded"),
     [questions]
   );
+
+  // Save a generated heuristic quiz to the database via /api/quizzes
+  const saveHeuristicQuiz = async (
+    quiz: any,
+    vroot: TreeSitterAstNode,
+    name: string
+  ) => {
+    try {
+      console.log("[QuizViewer] saveHeuristicQuiz: payload preview", {
+        name,
+        profile: quiz?.profile,
+        root: { type: vroot.type, start: vroot.startIndex, end: vroot.endIndex },
+        fileKey,
+        cards: Array.isArray(quiz?.cards) ? quiz.cards.length : 0,
+        firstCard: quiz?.cards?.[0],
+      });
+    } catch {}
+    const payload = {
+      fileKey,
+      name,
+      type: "CustomQuizV1.1" as const,
+      profile: quiz.profile as any,
+      rootNode: {
+        type: vroot.type,
+        text:
+          typeof code === "string"
+            ? code.substring(vroot.startIndex, vroot.endIndex)
+            : undefined,
+        start: vroot.startIndex,
+        end: vroot.endIndex,
+      },
+      cards: (quiz.cards || []).map((c: any) => ({
+        order: c.order,
+        type: c.type,
+        text: String(c.text ?? ""),
+        action: c.action || "next",
+        question: c.question || c.stem,
+        generatorRule: c.generatorRule,
+        difficulty: c.difficulty,
+        sourceRef: c.sourceRef,
+      })),
+    };
+    const res = await fetch("/api/quizzes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data?.error) msg += ` — ${data.error}`;
+      } catch {}
+      throw new Error(msg);
+    }
+    try { console.log("[QuizViewer] saveHeuristicQuiz: success"); } catch {}
+  };
+
+  // Save split quizzes using the same grouping heuristic as Lesson
+  const saveSplitHeuristic = async (
+    profile: "shallow" | "deep",
+    opts?: { maxDeepPerStmt?: number }
+  ) => {
+    if (!root) return;
+    try { console.log("[QuizViewer] saveSplitHeuristic: start", { profile, opts }); } catch {}
+    const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
+      root,
+      { includeNames: false, enableGrouping: "auto" as const }
+    );
+    const groups = plan.filter(
+      (s: any) => (s.node as any)?.isVirtual || s.node.type === "group"
+    );
+    try { console.log("[QuizViewer] saveSplitHeuristic: groups", groups.map((g: any) => ({ prompt: g.prompt, start: g.node.startIndex, end: g.node.endIndex }))); } catch {}
+    if (!groups.length) {
+      // Fallback to single save
+      const single = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+        root,
+        code || "",
+        profile,
+        opts
+      );
+      await saveHeuristicQuiz(single, root, `Heuristic ${profile}`);
+      alert(`Saved 1 quiz (Heuristic ${profile}).`);
+      return;
+    }
+    const topLevel = (root.namedChildren || []).filter(
+      (c) => c.type !== "comment"
+    );
+    const buildGroupRoot = (start: number, end: number) => {
+      const namedChildren = topLevel.filter(
+        (n) => n.startIndex >= start && n.endIndex <= end
+      );
+      const vroot: any = {
+        type: "group",
+        named: true,
+        startPosition: root.startPosition,
+        endPosition: root.endPosition,
+        startIndex: start,
+        endIndex: end,
+        text: undefined,
+        children: [],
+        namedChildren,
+      } as TreeSitterAstNode;
+      return vroot;
+    };
+    let saved = 0;
+    for (let i = 0; i < groups.length; i++) {
+      const g: any = groups[i];
+      const start = g.node.startIndex;
+      const end = g.node.endIndex;
+      const vroot = buildGroupRoot(start, end);
+      const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
+        vroot,
+        code || "",
+        profile,
+        opts
+      );
+      const name = `${g.prompt}`.slice(0, 160) || `Heuristic ${profile} (${i + 1})`;
+      try { console.log("[QuizViewer] saveSplitHeuristic: saving group", { i: i + 1, name, start, end, cards: quiz?.cards?.length }); } catch {}
+      await saveHeuristicQuiz(quiz, vroot, name);
+      saved += 1;
+    }
+    alert(`Saved ${saved} quiz(es) for grouped sections.`);
+  };
 
   useEffect(() => {
     if (mode === "active") {
@@ -496,8 +610,9 @@ export const QuizViewer = ({
                   code || "",
                   "shallow"
                 );
-                setSelectedCustom(quiz as any);
-                onStart();
+                saveHeuristicQuiz(quiz, root, "Heuristic shallow")
+                  .then(() => alert("Saved heuristic shallow quiz."))
+                  .catch(() => alert("Failed to save heuristic shallow quiz."));
               }}
             >
               Shallow (Line-by-Line)
@@ -513,8 +628,9 @@ export const QuizViewer = ({
                   "deep",
                   { maxDeepPerStmt: 6 }
                 );
-                setSelectedCustom(quiz as any);
-                onStart();
+                saveHeuristicQuiz(quiz, root, "Heuristic deep")
+                  .then(() => alert("Saved heuristic deep quiz."))
+                  .catch(() => alert("Failed to save heuristic deep quiz."));
               }}
             >
               Deep (With Expression Detail)
@@ -523,58 +639,7 @@ export const QuizViewer = ({
               type="button"
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
-                if (!root) return;
-                const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
-                  root,
-                  { includeNames: false, enableGrouping: "auto" as const }
-                );
-                const groups = plan.filter((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
-                if (!groups.length) {
-                  const single = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-                    root,
-                    code || "",
-                    "shallow"
-                  );
-                  setSelectedCustom(single as any);
-                  onStart();
-                  return;
-                }
-                const topLevel = (root.namedChildren || []).filter((c) => c.type !== "comment");
-                const buildGroupRoot = (start: number, end: number) => {
-                  const namedChildren = topLevel.filter(
-                    (n) => n.startIndex >= start && n.endIndex <= end
-                  );
-                  const vroot: any = {
-                    type: "group",
-                    named: true,
-                    startPosition: root.startPosition,
-                    endPosition: root.endPosition,
-                    startIndex: start,
-                    endIndex: end,
-                    text: undefined,
-                    children: [],
-                    namedChildren,
-                  } as TreeSitterAstNode;
-                  return vroot;
-                };
-                const grouped = groups.map((g: any, idx: number) => {
-                  const start = g.node.startIndex;
-                  const end = g.node.endIndex;
-                  const vroot = buildGroupRoot(start, end);
-                  const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-                    vroot,
-                    code || "",
-                    "shallow"
-                  );
-                  return {
-                    id: g.id || String(idx),
-                    label: g.prompt,
-                    count: quiz.totalCards,
-                    range: { start, end },
-                    quiz: quiz as any,
-                  };
-                });
-                setMultiQuizzes(grouped);
+                saveSplitHeuristic("shallow");
               }}
             >
               Shallow (Split)
@@ -583,60 +648,7 @@ export const QuizViewer = ({
               type="button"
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
-                if (!root) return;
-                const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
-                  root,
-                  { includeNames: false, enableGrouping: "auto" as const }
-                );
-                const groups = plan.filter((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
-                if (!groups.length) {
-                  const single = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-                    root,
-                    code || "",
-                    "deep",
-                    { maxDeepPerStmt: 6 }
-                  );
-                  setSelectedCustom(single as any);
-                  onStart();
-                  return;
-                }
-                const topLevel = (root.namedChildren || []).filter((c) => c.type !== "comment");
-                const buildGroupRoot = (start: number, end: number) => {
-                  const namedChildren = topLevel.filter(
-                    (n) => n.startIndex >= start && n.endIndex <= end
-                  );
-                  const vroot: any = {
-                    type: "group",
-                    named: true,
-                    startPosition: root.startPosition,
-                    endPosition: root.endPosition,
-                    startIndex: start,
-                    endIndex: end,
-                    text: undefined,
-                    children: [],
-                    namedChildren,
-                  } as TreeSitterAstNode;
-                  return vroot;
-                };
-                const grouped = groups.map((g: any, idx: number) => {
-                  const start = g.node.startIndex;
-                  const end = g.node.endIndex;
-                  const vroot = buildGroupRoot(start, end);
-                  const quiz = (language === "python" ? pyQuiz.buildHeuristicQuiz : jsQuiz.buildHeuristicQuiz)(
-                    vroot,
-                    code || "",
-                    "deep",
-                    { maxDeepPerStmt: 6 }
-                  );
-                  return {
-                    id: g.id || String(idx),
-                    label: g.prompt,
-                    count: quiz.totalCards,
-                    range: { start, end },
-                    quiz: quiz as any,
-                  };
-                });
-                setMultiQuizzes(grouped);
+                saveSplitHeuristic("deep", { maxDeepPerStmt: 6 });
               }}
             >
               Deep (Split)
@@ -644,29 +656,7 @@ export const QuizViewer = ({
           </div>
         </div>
 
-        {Array.isArray(multiQuizzes) && multiQuizzes.length > 0 && (
-          <div className="rounded-md border border-slate-200 bg-white p-3">
-            <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">Generated Quizzes</div>
-            <div className="space-y-2">
-              {multiQuizzes.map((q) => (
-                <button
-                  key={q.id}
-                  type="button"
-                  className="w-full text-left rounded border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-800 hover:bg-slate-100"
-                  onClick={() => {
-                    setSelectedCustom(q.quiz as any);
-                    onStart();
-                  }}
-                >
-                  <div className="flex items-center justify-between">
-                    <span>{q.label}</span>
-                    <span className="text-xs text-slate-500">{q.count} cards</span>
-                  </div>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Heuristic split now saves quizzes directly to DB */}
 
         <ErrorBoundary fallback={<div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">Failed to load quizzes.</div>}>
           <Suspense fallback={<div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">Loading saved quizzes…</div>}>

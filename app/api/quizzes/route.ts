@@ -44,6 +44,7 @@ export async function POST(request: Request) {
     const db = await getDb();
     const quizzes = db.collection("quizzes");
     const files = db.collection("files");
+    const reposCol = db.collection("repos");
     const { userId: clerkUserId } = await auth();
 
     if (!clerkUserId) {
@@ -51,41 +52,68 @@ export async function POST(request: Request) {
     }
     // Session is already validated by Clerk via auth(); no extra lookup needed
 
-    // Resolve fileId if only fileKey is provided
+    // Debug log payload summary
+    try {
+      console.log("[quizzes:POST] incoming", {
+        user: clerkUserId,
+        hasFileId: !!body.fileId,
+        fileKey: body.fileKey,
+        name: body.name,
+        type: body.type,
+        profile: body.profile,
+        cards: Array.isArray(body.cards) ? body.cards.length : 0,
+      });
+    } catch {}
+
+    // Resolve fileId from fileKey if needed, supporting repo-backed files.
     let fileId: any = body.fileId;
-    // Capture origin metadata (repo/project and full path)
     let origin: { kind: "repo" | "project"; id: any; path: string } | undefined;
-    if (!fileId && body.fileKey) {
-      const match: any = { userId: clerkUserId, path: body.fileKey.path };
-      if (body.fileKey.kind === "repo") {
-        match.repoId = body.fileKey.id as any;
-        match.projectId = null;
-      } else {
-        match.projectId = body.fileKey.id as any;
+    if (!fileId) {
+      if (!body.fileKey) {
+        return NextResponse.json({ error: "Missing fileId or fileKey" }, { status: 400 });
       }
-      const fileDoc = await files.findOne(match, { projection: { _id: 1 } });
+      // For repos, files are shared across users; do not filter by userId.
+      // For projects, files are user-scoped; include userId in match.
+      const baseMatch: any = { path: body.fileKey.path };
+      const rawId = body.fileKey.id as any;
+      let idAsObject: any = rawId;
+      try {
+        idAsObject = new ObjectId(String(rawId));
+      } catch {
+        idAsObject = rawId;
+      }
+      const buildMatch = (useObject: boolean) => {
+        const match: any = { ...baseMatch };
+        if (body.fileKey!.kind === "repo") {
+          match.repoId = useObject ? idAsObject : rawId;
+          // Do not add userId for repos; repo docs are global/shared
+        } else {
+          match.projectId = useObject ? idAsObject : rawId;
+          match.userId = clerkUserId;
+        }
+        return match;
+      };
+      const mObj = buildMatch(true);
+      const mRaw = buildMatch(false);
+      let fileDoc: any | null = null;
+      if (body.fileKey.kind === "repo") {
+        fileDoc = await reposCol.findOne(mObj, { projection: { _id: 1, path: 1, repoId: 1 } });
+        if (!fileDoc) fileDoc = await reposCol.findOne(mRaw, { projection: { _id: 1, path: 1, repoId: 1 } });
+      } else {
+        fileDoc = await files.findOne(mObj, { projection: { _id: 1, path: 1, projectId: 1 } });
+        if (!fileDoc) fileDoc = await files.findOne(mRaw, { projection: { _id: 1, path: 1, projectId: 1 } });
+      }
       if (!fileDoc) {
-        return NextResponse.json(
-          { error: "File not found for user" },
-          { status: 400 }
-        );
+        return NextResponse.json({ error: "File not found for provided key" }, { status: 404 });
       }
       fileId = (fileDoc as any)._id;
       origin = {
         kind: body.fileKey.kind,
-        id: body.fileKey.id as any,
+        id: rawId,
         path: body.fileKey.path,
-      };
-    }
-    if (!fileId) {
-      return NextResponse.json(
-        { error: "Missing fileId or fileKey" },
-        { status: 400 }
-      );
-    }
-
-    // If origin wasn't provided via fileKey but we have fileId, try to infer from files collection
-    if (!origin) {
+      } as any;
+    } else {
+      // If fileId provided, attempt to infer origin for convenience (best-effort)
       try {
         const fileDoc = await files.findOne({ _id: fileId as any }, {
           projection: { repoId: 1, projectId: 1, path: 1 },
@@ -98,7 +126,7 @@ export async function POST(request: Request) {
           }
         }
       } catch {
-        // ignore; origin remains undefined if lookup fails
+        // no-op
       }
     }
 
@@ -132,9 +160,21 @@ export async function POST(request: Request) {
       createdAt: now,
     } as const;
     const result = await quizzes.insertOne(doc);
+    try {
+      console.log("[quizzes:POST] saved", {
+        user: clerkUserId,
+        quizId: String(result.insertedId),
+        fileId: String(fileId),
+        name: (doc as any).name,
+        cards: (doc as any).cards?.length ?? 0,
+      });
+    } catch {}
 
     return NextResponse.json({ id: String(result.insertedId) });
   } catch (error) {
+    try {
+      console.error("[quizzes:POST] error", error);
+    } catch {}
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
@@ -148,6 +188,7 @@ export async function GET(request: Request) {
     const db = await getDb();
     const quizzes = db.collection("quizzes");
     const files = db.collection("files");
+    const reposCol = db.collection("repos");
     const { userId: clerkUserId } = await auth();
 
     if (!clerkUserId) {
@@ -161,31 +202,60 @@ export async function GET(request: Request) {
       );
     }
 
-    const match: any = { userId: clerkUserId, path };
+    // For repos, do not filter by userId; for projects, include userId
+    const baseMatch: any = { path };
+    let idAsObject: any = id as any;
+    try { idAsObject = new ObjectId(String(id)); } catch { idAsObject = id as any; }
+    const buildMatch = (useObject: boolean) => {
+      const m: any = { ...baseMatch };
+      if (kind === "repo") {
+        m.repoId = useObject ? idAsObject : id;
+      } else {
+        m.projectId = useObject ? idAsObject : id;
+        m.userId = clerkUserId;
+      }
+      return m;
+    };
+    const mObj = buildMatch(true);
+    const mRaw = buildMatch(false);
+    let fileDoc: any | null = null;
     if (kind === "repo") {
-      match.repoId = id as any;
-      match.projectId = null;
+      fileDoc = await reposCol.findOne(mObj, { projection: { _id: 1 } });
+      if (!fileDoc) fileDoc = await reposCol.findOne(mRaw, { projection: { _id: 1 } });
     } else {
-      match.projectId = id as any;
+      fileDoc = await files.findOne(mObj, { projection: { _id: 1 } });
+      if (!fileDoc) fileDoc = await files.findOne(mRaw, { projection: { _id: 1 } });
     }
-    const fileDoc = await files.findOne(match, { projection: { _id: 1 } });
-    if (!fileDoc) return NextResponse.json({ quizzes: [] });
-    const fileId = (fileDoc as any)._id;
-
-    const cursor = quizzes
-      .find({ userId: clerkUserId, fileId }, { sort: { createdAt: -1 } })
-      .map((q) => ({
-        id: String((q as any)._id),
-        name: (q as any).name,
-        type: (q as any).type,
-        rootNode: (q as any).rootNode,
-        cards: (q as any).cards,
-        origin: (q as any).origin,
-        createdAt: (q as any).createdAt,
-      }));
-    const list = await cursor.toArray();
+    const list: any[] = [];
+    if (fileDoc) {
+      const fileId = (fileDoc as any)._id;
+      const cursor = quizzes
+        .find({ userId: clerkUserId, fileId }, { sort: { createdAt: -1 } })
+        .map((q) => ({
+          id: String((q as any)._id),
+          name: (q as any).name,
+          type: (q as any).type,
+          rootNode: (q as any).rootNode,
+          cards: (q as any).cards,
+          origin: (q as any).origin,
+          createdAt: (q as any).createdAt,
+        }));
+      list.push(...(await cursor.toArray()));
+    }
+    try {
+      console.log("[quizzes:GET] list", {
+        user: clerkUserId,
+        kind,
+        id,
+        path,
+        count: list.length,
+      });
+    } catch {}
     return NextResponse.json({ quizzes: list });
   } catch (error) {
+    try {
+      console.error("[quizzes:GET] error", error);
+    } catch {}
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
 }
