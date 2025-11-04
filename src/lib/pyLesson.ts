@@ -39,7 +39,19 @@ export const generateLessonPlan = (
     }
 
     case "decorated_definition": {
-      // Unwrap and plan the inner definition (class or function)
+      // Include decorator step(s) before unwrapping to the inner definition
+      const decorators = childrenOfType(node, "decorator");
+      decorators.forEach((dec) => {
+        steps.push({
+          id: randomString(8),
+          node: dec,
+          semanticRole: "decorator",
+          prompt: "This definition has a decorator:",
+          isDigable: (dec.namedChildren || []).length > 0,
+        });
+      });
+
+      // Then plan the inner class/function normally
       const inner = children.find(
         (c) => c.type === "class_definition" || c.type === "function_definition"
       );

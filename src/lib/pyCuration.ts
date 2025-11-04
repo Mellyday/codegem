@@ -476,12 +476,13 @@ export const buildCuratedSections = (
         (c) => c.type === "class_definition" || c.type === "function_definition"
       );
 
-      // Alternative approach: present an explicit wrapper structure
-      // rather than mutating the inner definition's sections.
-      return [
-        { key: "decorators", items: decorators },
-        { key: "definition", items: definition ? [definition] : [] },
-      ];
+      // Inline the inner definition's curated groups so callers can treat the wrapper
+      // like a regular function/class container, while still exposing decorators.
+      const innerGroups = definition ? buildCuratedSections(definition) : [];
+      // Avoid duplicating any decorator groups that an inner case might expose
+      const filteredInner = innerGroups.filter((g) => g.key !== "decorators");
+
+      return [{ key: "decorators", items: decorators }, ...filteredInner];
     }
 
     case "class_definition": {
@@ -538,6 +539,21 @@ export const buildCuratedSections = (
         { key: "body", items: body },
         { key: "decorators", items: childrenOfType(node, "decorator") },
         { key: "returns", items: returnType ? [returnType] : [] },
+      ];
+    }
+
+    case "decorator": {
+      // @name or @pkg.name(args...)
+      // Expose the qualified name and any argument list contents
+      const name =
+        firstChildOfType(node, "dotted_name") ||
+        firstChildOfType(node, "identifier") ||
+        firstChildOfType(node, "attribute");
+      const argList = firstChildOfType(node, "argument_list");
+      const args = argList ? argList.namedChildren || [] : [];
+      return [
+        { key: "name", items: name ? [name] : [] },
+        { key: "args", items: args },
       ];
     }
 

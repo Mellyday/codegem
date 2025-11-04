@@ -267,6 +267,7 @@ export const QuizViewer = ({
       language === "python"
         ? new Set([
             "function_definition",
+            "decorated_definition",
             "class_definition",
             "assignment",
             "expression_statement",
@@ -936,8 +937,21 @@ export const QuizViewer = ({
     anchor: TreeSitterAstNode,
     code: string
   ): any[] {
-    const isFunc = anchor.type === "function_definition";
-    const hasBlock = !!findBlockChild(anchor);
+    // Treat decorated_definition as function/class-like by peeking at its inner definition
+    const innerDef =
+      anchor.type === "decorated_definition"
+        ? (anchor.namedChildren || []).find(
+            (c) =>
+              c.type === "function_definition" || c.type === "class_definition"
+          )
+        : undefined;
+    const effective = innerDef || anchor;
+
+    const isFunc =
+      effective.type === "function_definition" || anchor.type === "function_definition";
+    const isClass =
+      effective.type === "class_definition" || anchor.type === "class_definition";
+    const hasBlock = !!findBlockChild(effective);
 
     // Optional stable group ordering for common statements (handle _stmt/_statement)
     const isWhile =
@@ -949,6 +963,8 @@ export const QuizViewer = ({
     const groupOrder =
       isFunc
         ? ["type_params", "args", "returns", "body", "decorators"]
+      : isClass
+        ? ["type_params", "bases", "body", "decorators", "keywords"]
       : isWhile
         ? ["test", "body", "orelse"]
       : isIf
@@ -975,7 +991,7 @@ export const QuizViewer = ({
     // Fallback: if for any reason we still didn't get a body card but this node owns one,
     // synthesize exactly one body card from the block/suite span.
     if (hasBlock && !hasBodyPiece(pieces)) {
-      const body = findBlockChild(anchor);
+      const body = findBlockChild(effective);
       if (body) {
         pieces = [
           ...pieces,
