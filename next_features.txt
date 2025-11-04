@@ -57,20 +57,7 @@ probably a job for the LLM although I suppose we could use a heuristic of using 
 
 ---
 
-4. BUG: Python Decorator prevents the lesson/quiz from breaking functions down correctly
-
----
-
 5. Make the "deep heuristic" for quiz generation works
-
----
-
-6. Skip comments on lesson/quiz view 
-
----
-
-7. Make the source code viewer on the mobile page better indented, always scrollable, and make it vertical position contant after each "next", also make it 
-scrolled all the way to the bottom always unless there's some manual change
 
 ---
 
