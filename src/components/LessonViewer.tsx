@@ -308,7 +308,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
           />
         </div>
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
-        <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto">
+        <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
           <code>{nextNode ? (language === "python" ? pyLesson.textForNode : jsLesson.textForNode)(nextNode, code) : ""}</code>
         </pre>
       </div>

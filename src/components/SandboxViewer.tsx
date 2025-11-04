@@ -608,7 +608,7 @@ export const SandboxViewer = ({
                   This fixes jagged line numbers and collapsed indentation,
                   especially on mobile Safari.
                 */}
-                <div className="text-xs leading-relaxed font-mono whitespace-pre tabular-nums [tab-size:4]">
+                <div className="text-xs leading-relaxed font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
                   {(() => {
                     let charIndex = 0; // slice-relative character index
                     const activeRange = selectedCharRange ?? hoveredCharRange;
@@ -655,13 +655,13 @@ export const SandboxViewer = ({
                         return (
                           <div
                             key={i}
-                            className="flex cursor-pointer"
+                            className="flex items-start cursor-pointer"
                             onClick={handleLineClick}
                           >
                             <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
                               {i + 1}
                             </span>
-                            <code className="flex-1 text-slate-800 whitespace-pre">
+                            <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                               {line || " "}
                             </code>
                           </div>
@@ -676,7 +676,7 @@ export const SandboxViewer = ({
                         return (
                           <div
                             key={i}
-                            className={`flex cursor-pointer ${getHighlightClasses(
+                            className={`flex items-start cursor-pointer ${getHighlightClasses(
                               true
                             )}`}
                             onClick={handleLineClick}
@@ -684,7 +684,7 @@ export const SandboxViewer = ({
                             <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
                               {i + 1}
                             </span>
-                            <code className="flex-1 text-slate-800 whitespace-pre">
+                            <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                               {line || " "}
                             </code>
                           </div>
@@ -710,13 +710,13 @@ export const SandboxViewer = ({
                       return (
                         <div
                           key={i}
-                          className="flex cursor-pointer"
+                          className="flex items-start cursor-pointer"
                           onClick={handleLineClick}
                         >
                           <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
                             {i + 1}
                           </span>
-                          <code className="flex-1 text-slate-800 whitespace-pre">
+                          <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                             {before && <span>{before}</span>}
                             {highlighted && (
                               <span className={getHighlightClasses(false)}>
