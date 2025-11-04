@@ -712,8 +712,8 @@ export const QuizViewer = ({
               />
             </div>
           </div>
-          {/* Mobile slider shown on its own row */}
-          <div className="flex items-center gap-2 sm:hidden px-1">
+          {/* Mobile slider shown on its own row - ensure always visible */}
+          <div className="flex items-center gap-2 sm:hidden px-2">
             <label
               htmlFor="q-range-mobile"
               className="text-xs text-slate-500 whitespace-nowrap"
@@ -727,10 +727,11 @@ export const QuizViewer = ({
               max={Math.max(0, total - 1)}
               value={current}
               onChange={(e) => jumpTo(Number(e.target.value))}
-              className="h-1.5 w-full cursor-pointer appearance-none rounded bg-slate-200 accent-amber-500"
+              className="h-2 w-full cursor-pointer appearance-none rounded bg-slate-200"
+              style={{ touchAction: "pan-y" }}
             />
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 w-full">
             <button
               type="button"
               className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
@@ -787,7 +788,7 @@ export const QuizViewer = ({
             </div>
             <button
               type="button"
-              className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0"
+              className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0 w-full sm:w-auto sm:ml-auto justify-center"
               onClick={next}
               disabled={!answered}
             >

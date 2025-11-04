@@ -24,3 +24,46 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Improve mobile visibility of range sliders (iOS/Android/Firefox) */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+input[type="range"]:focus {
+  outline: none;
+}
+/* WebKit track */
+input[type="range"]::-webkit-slider-runnable-track {
+  height: 8px;
+  background: #e2e8f0; /* slate-200 */
+  border-radius: 9999px;
+}
+/* WebKit thumb */
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 16px;
+  width: 16px;
+  border-radius: 9999px;
+  background: #f59e0b; /* amber-500 */
+  margin-top: -4px; /* center on 8px track */
+  border: 2px solid white;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
+/* Firefox track */
+input[type="range"]::-moz-range-track {
+  height: 8px;
+  background: #e2e8f0; /* slate-200 */
+  border-radius: 9999px;
+}
+/* Firefox thumb */
+input[type="range"]::-moz-range-thumb {
+  height: 16px;
+  width: 16px;
+  border-radius: 9999px;
+  background: #f59e0b; /* amber-500 */
+  border: 2px solid white;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.1);
+}
