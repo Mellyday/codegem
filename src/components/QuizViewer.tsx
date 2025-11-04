@@ -4,6 +4,7 @@ import { BookOpen, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
 import * as pyCuration from "../lib/pyCuration";
+import { isDocstringNode } from "../lib/pyCuration";
 import * as jsCuration from "../lib/jsCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
@@ -97,7 +98,9 @@ const generateQuestions = (
   opts?: { source?: "base" | "expanded" }
 ): Question[] => {
   const questions: Question[] = [];
-  const children = node.namedChildren || [];
+  const children = (node.namedChildren || []).filter(
+    (c) => c.type !== "comment" && !isDocstringNode(c, node)
+  );
   children.forEach((child, idx) => {
     if (
       breakdownTypes.has(child.type) &&
@@ -207,11 +210,36 @@ const generateQuestionsFromCustom = (
     const options = shuffleArray([correct, ...generateDistractors(correct)]);
     const stem = c.question || "What comes next?";
 
+    // Prefer anchored sourceRef positions when available to avoid accidental matches
+    if (
+      typeof code === "string" &&
+      rootStart >= 0 &&
+      c.sourceRef &&
+      typeof c.sourceRef.start === "number" &&
+      typeof c.sourceRef.end === "number"
+    ) {
+      const childStart = c.sourceRef.start;
+      const childEnd = c.sourceRef.end;
+      qs.push({
+        stem,
+        answerLabel: correct,
+        options,
+        kind: c.type,
+        generatorRule: c.generatorRule,
+        difficulty: c.difficulty,
+        sourceRefs: [c.sourceRef],
+        revealStart: rootStart,
+        revealEndBeforeChild: childStart,
+        revealEndAfterChild: childEnd,
+      });
+      cursor = childEnd;
+      continue;
+    }
+
     if (typeof code === "string" && rootStart >= 0) {
+      // Fallback: text search, biased to current cursor and then root
       let childStart = code.indexOf(correct, cursor);
-      if (childStart < 0) {
-        childStart = code.indexOf(correct, rootStart);
-      }
+      if (childStart < 0) childStart = code.indexOf(correct, rootStart);
       if (childStart >= 0) {
         const childEnd = childStart + correct.length;
         qs.push({

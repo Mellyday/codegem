@@ -56,19 +56,10 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   useEffect(() => {
     if (!lessonQueue.length) return;
 
-    if (currentStep === 0) {
-      onRevealEndIndexChange(root.startIndex);
-    } else {
-      const prevStep = lessonQueue[currentStep - 1];
-      const currStep = lessonQueue[currentStep];
-      if (prevStep) {
-        const safeReveal = Math.min(
-          prevStep.node.endIndex,
-          currStep?.node.startIndex ?? prevStep.node.endIndex
-        );
-        onRevealEndIndexChange(safeReveal);
-      }
-    }
+    const currStepObj = lessonQueue[currentStep];
+    // Show leading context up to the start of the current step's node
+    const targetIndex = currStepObj?.node?.startIndex ?? root.startIndex;
+    onRevealEndIndexChange(targetIndex);
 
     const curr = lessonQueue[currentStep];
     if (curr) {
