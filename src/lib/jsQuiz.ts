@@ -73,6 +73,9 @@ export function buildHeuristicQuiz(
     action: "next";
     stem: string;
     generatorRule?: string;
+    // v1.1 anchor + question for consistent reveal behavior in QuizViewer
+    sourceRef?: { nodeType: string; start: number; end: number; path: number[]; preview?: string };
+    question?: string;
   }[] = [];
   let order = 0;
 
@@ -89,6 +92,14 @@ export function buildHeuristicQuiz(
       action: "next",
       stem,
       generatorRule: kind,
+      question: stem,
+      sourceRef: {
+        nodeType: node.type,
+        start: node.startIndex,
+        end: node.endIndex,
+        path: computeAstPath(root, node),
+        preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
+      },
     });
   };
 
