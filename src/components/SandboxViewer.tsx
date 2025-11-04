@@ -579,7 +579,13 @@ export const SandboxViewer = ({
                 SOURCE CODE
               </h2>
               <div className="max-h-[600px] overflow-auto rounded-lg bg-slate-50 p-4">
-                <pre className="text-xs leading-relaxed">
+                {/*
+                  Use a normal div with explicit whitespace + monospace so the
+                  inner line <div>s don't break <pre> semantics on some browsers.
+                  This fixes jagged line numbers and collapsed indentation,
+                  especially on mobile Safari.
+                */}
+                <div className="text-xs leading-relaxed font-mono whitespace-pre tabular-nums [tab-size:4]">
                   {(() => {
                     let charIndex = 0; // slice-relative character index
                     const activeRange = selectedCharRange ?? hoveredCharRange;
@@ -629,10 +635,10 @@ export const SandboxViewer = ({
                             className="flex cursor-pointer"
                             onClick={handleLineClick}
                           >
-                            <span className="mr-4 w-8 select-none text-right text-slate-400">
+                            <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
                               {i + 1}
                             </span>
-                            <code className="flex-1 text-slate-800">
+                            <code className="flex-1 text-slate-800 whitespace-pre">
                               {line || " "}
                             </code>
                           </div>
@@ -652,10 +658,10 @@ export const SandboxViewer = ({
                             )}`}
                             onClick={handleLineClick}
                           >
-                            <span className="mr-4 w-8 select-none text-right text-slate-400">
+                            <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
                               {i + 1}
                             </span>
-                            <code className="flex-1 text-slate-800">
+                            <code className="flex-1 text-slate-800 whitespace-pre">
                               {line || " "}
                             </code>
                           </div>
@@ -684,10 +690,10 @@ export const SandboxViewer = ({
                           className="flex cursor-pointer"
                           onClick={handleLineClick}
                         >
-                          <span className="mr-4 w-8 select-none text-right text-slate-400">
+                          <span className="mr-4 w-10 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums">
                             {i + 1}
                           </span>
-                          <code className="flex-1 text-slate-800">
+                          <code className="flex-1 text-slate-800 whitespace-pre">
                             {before && <span>{before}</span>}
                             {highlighted && (
                               <span className={getHighlightClasses(false)}>
@@ -701,7 +707,7 @@ export const SandboxViewer = ({
                       );
                     });
                   })()}
-                </pre>
+                </div>
               </div>
             </div>
           </div>
