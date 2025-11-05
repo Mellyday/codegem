@@ -21,6 +21,13 @@ export type SavedCustomQuizCardV11 = {
   question?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
+  // multi-select (optional)
+  questionType?: "single" | "multi";
+  multiCorrect?: string[];
+  multiSelectHint?: number;
+  optionPool?: string[];
+  // optional LLM distractors pool
+  llmDistractors?: string[];
 };
 
 export type SavedCustomQuizV11 = {
@@ -79,6 +86,16 @@ async function fetchSavedCustomQuizzes(fileKey?: {
         question: c.question,
         generatorRule: c.generatorRule,
         difficulty: c.difficulty,
+        // pass through multi-select fields when present
+        questionType: c.questionType,
+        multiCorrect: Array.isArray(c.multiCorrect) ? c.multiCorrect : undefined,
+        multiSelectHint:
+          typeof c.multiSelectHint === "number" ? c.multiSelectHint : undefined,
+        optionPool: Array.isArray(c.optionPool) ? c.optionPool : undefined,
+        // optional LLM distractors
+        llmDistractors: Array.isArray(c.llmDistractors)
+          ? c.llmDistractors
+          : undefined,
       })),
     }));
     return out;
@@ -200,4 +217,3 @@ export function SavedCustomQuizzesPanel({
     </div>
   );
 }
-

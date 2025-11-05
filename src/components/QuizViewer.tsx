@@ -215,7 +215,19 @@ const generateQuestionsFromCustom = (
     const isMulti = c.questionType === "multi" && Array.isArray(c.multiCorrect);
     if (isMulti) {
       const stem = c.question || "Select all that apply.";
-      const options = shuffleArray((c.optionPool || []).slice());
+      // Prefer provided optionPool; fallback to a minimal pool containing correct answers
+      let options = Array.isArray(c.optionPool) ? (c.optionPool as string[]).slice() : [];
+      if (!options.length) {
+        const correct = Array.isArray(c.multiCorrect) ? c.multiCorrect : [];
+        // pad with harmless gibberish to reach at least 6 options
+        const pad: string[] = [];
+        while (pad.length < Math.max(0, 6 - correct.length)) {
+          const d = randomString(6);
+          if (!correct.includes(d) && !pad.includes(d)) pad.push(d);
+        }
+        options = [...correct, ...pad];
+      }
+      options = shuffleArray(options);
       qs.push({
         stem,
         answerLabel: "", // unused for multi
@@ -234,7 +246,20 @@ const generateQuestionsFromCustom = (
     // Single-choice fallback
     const correct = c.text;
     const stem = c.question || "What comes next?";
-    const options = shuffleArray([correct, ...generateDistractors(correct)]);
+    // Prefer saved LLM distractors when present; sample up to 3
+    const llm = Array.isArray(c.llmDistractors)
+      ? (c.llmDistractors as string[]).filter((d) => d && d !== correct)
+      : [];
+    const sample = (arr: string[], k: number) => {
+      const a = shuffleArray(arr.slice());
+      return a.slice(0, k);
+    };
+    const distractors = [...sample(llm, 3)];
+    while (distractors.length < 3) {
+      const d = randomString(Math.max(4, Math.min(8, String(correct || "").length || 6)));
+      if (d !== correct && !distractors.includes(d)) distractors.push(d);
+    }
+    const options = shuffleArray([correct, ...distractors]);
     qs.push({
       stem,
       answerLabel: correct,
