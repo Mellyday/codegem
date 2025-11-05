@@ -24,6 +24,13 @@ type QuizCard = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   sourceRef?: SourceRef;
+  // multi-select (optional)
+  questionType?: "single" | "multi";
+  multiCorrect?: string[];
+  multiSelectHint?: number;
+  optionPool?: string[];
+  // future: LLM distractor pool
+  llmDistractors?: string[];
 };
 
 type QuizPayload = {
@@ -173,6 +180,19 @@ export async function POST(request: Request) {
           ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
           ...(c.difficulty ? { difficulty: c.difficulty } : {}),
           ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
+          ...(c.questionType ? { questionType: c.questionType } : {}),
+          ...(Array.isArray(c.multiCorrect)
+            ? { multiCorrect: c.multiCorrect }
+            : {}),
+          ...(typeof (c as any).multiSelectHint === "number"
+            ? { multiSelectHint: (c as any).multiSelectHint }
+            : {}),
+          ...(Array.isArray((c as any).optionPool)
+            ? { optionPool: (c as any).optionPool }
+            : {}),
+          ...(Array.isArray((c as any).llmDistractors)
+            ? { llmDistractors: (c as any).llmDistractors }
+            : {}),
         })) ?? [],
       createdAt: now,
     } as const;

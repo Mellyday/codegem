@@ -40,6 +40,12 @@ type Question = {
   answerLabel: string;
   // Options to display
   options: string[];
+  // Multi-select support
+  questionType?: "single" | "multi";
+  // For multi-select questions, the set of correct labels
+  answerLabels?: string[];
+  // For multi-select questions, how many to select
+  numToSelect?: number;
   // Optional snippet text to show (used by custom quizzes)
   snippetText?: string;
   // Optional metadata for AST-sourced questions
@@ -165,6 +171,13 @@ type SavedCustomQuizCardV11 = {
   question?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
+  // multi-select (optional)
+  questionType?: "single" | "multi";
+  multiCorrect?: string[];
+  multiSelectHint?: number;
+  optionPool?: string[];
+  // optional LLM distractors pool (future enrichment)
+  llmDistractors?: string[];
 };
 
 type SavedCustomQuizV11 = {
@@ -191,85 +204,42 @@ const generateQuestionsFromCustom = (
   code?: string,
   astRootFallback?: TreeSitterAstNode
 ): Question[] => {
-  // Progressive “What comes next?” using saved card texts.
-  // Attempts to compute absolute reveal indices by searching within the file's code.
-  // Ignore any cards saved from a "dig deeper" action to prevent duplicates
+  // Trust saved cards; do not reconstruct answers for multi-select.
   const cards = quiz.cards
     .filter((c) => c.action !== "dig")
     .slice()
     .sort((a, b) => a.order - b.order);
   const qs: Question[] = [];
 
-  let rootStart = -1;
-  if (typeof code === "string") {
-    if (quiz.root.start !== undefined) rootStart = quiz.root.start;
-    else if (quiz.root.text) rootStart = code.indexOf(quiz.root.text);
-  }
-  if (rootStart < 0 && astRootFallback) {
-    rootStart = astRootFallback.startIndex;
-  }
-
-  let cursor = rootStart >= 0 ? rootStart : 0;
-
   for (const c of cards) {
-    const correct = c.text;
-    const options = shuffleArray([correct, ...generateDistractors(correct)]);
-    const stem = c.question || "What comes next?";
-
-    // Prefer anchored sourceRef positions when available to avoid accidental matches
-    if (
-      typeof code === "string" &&
-      rootStart >= 0 &&
-      c.sourceRef &&
-      typeof c.sourceRef.start === "number" &&
-      typeof c.sourceRef.end === "number"
-    ) {
-      const childStart = c.sourceRef.start;
-      const childEnd = c.sourceRef.end;
+    const isMulti = c.questionType === "multi" && Array.isArray(c.multiCorrect);
+    if (isMulti) {
+      const stem = c.question || "Select all that apply.";
+      const options = shuffleArray((c.optionPool || []).slice());
       qs.push({
         stem,
-        answerLabel: correct,
+        answerLabel: "", // unused for multi
         options,
+        questionType: "multi",
+        answerLabels: (c.multiCorrect as string[]) || [],
         kind: c.type,
         generatorRule: c.generatorRule,
         difficulty: c.difficulty,
-        sourceRefs: [c.sourceRef],
-        revealStart: rootStart,
-        revealEndBeforeChild: childStart,
-        revealEndAfterChild: childEnd,
+        sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
+        snippetText: c.text,
       });
-      cursor = childEnd;
       continue;
     }
 
-    if (typeof code === "string" && rootStart >= 0) {
-      // Fallback: text search, biased to current cursor and then root
-      let childStart = code.indexOf(correct, cursor);
-      if (childStart < 0) childStart = code.indexOf(correct, rootStart);
-      if (childStart >= 0) {
-        const childEnd = childStart + correct.length;
-        qs.push({
-          stem,
-          answerLabel: correct,
-          options,
-          kind: c.type,
-          generatorRule: c.generatorRule,
-          difficulty: c.difficulty,
-          sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
-          revealStart: rootStart,
-          revealEndBeforeChild: childStart,
-          revealEndAfterChild: childEnd,
-        });
-        cursor = childEnd;
-        continue;
-      }
-    }
-
-    // Fallback: no reveal indices if we cannot locate in source
+    // Single-choice fallback
+    const correct = c.text;
+    const stem = c.question || "What comes next?";
+    const options = shuffleArray([correct, ...generateDistractors(correct)]);
     qs.push({
       stem,
       answerLabel: correct,
       options,
+      questionType: "single",
       kind: c.type,
       generatorRule: c.generatorRule,
       difficulty: c.difficulty,
@@ -360,9 +330,13 @@ export const QuizViewer = ({
   // Removed split preview list; split actions now save quizzes directly
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState<string | undefined>(undefined);
+  const [selectedMulti, setSelectedMulti] = useState<Set<string>>(new Set());
   const [score, setScore] = useState(0);
   // Persist answers per question index so navigation retains choices
-  const [answers, setAnswers] = useState<Array<string | undefined>>([]);
+  const [answers, setAnswers] = useState<Array<string | string[] | undefined>>(
+    []
+  );
+  const [answeredFlags, setAnsweredFlags] = useState<boolean[]>([]);
   // Track per-option expansion state (keyed by question+option index)
   const [expandedOptions, setExpandedOptions] = useState<
     Record<string, boolean>
@@ -401,6 +375,11 @@ export const QuizViewer = ({
         generatorRule: c.generatorRule,
         difficulty: c.difficulty,
         sourceRef: c.sourceRef,
+        questionType: c.questionType,
+        multiCorrect: c.multiCorrect,
+        multiSelectHint: c.multiSelectHint,
+        optionPool: c.optionPool,
+        llmDistractors: c.llmDistractors,
       })),
     };
     const res = await fetch("/api/quizzes", {
@@ -490,8 +469,10 @@ export const QuizViewer = ({
       setQuestions(qs);
       setCurrent(0);
       setSelected(undefined);
+      setSelectedMulti(new Set());
       setScore(0);
       setAnswers(new Array(qs.length).fill(undefined));
+      setAnsweredFlags(new Array(qs.length).fill(false));
       setExpandedOptions({});
       // Initial reveal if available (applies to AST and custom)
       if (qs.length > 0 && typeof qs[0].revealEndBeforeChild === "number") {
@@ -693,21 +674,73 @@ export const QuizViewer = ({
       );
     }
 
-    const answered = selected !== undefined;
-    const correct = selected === currentQ.answerLabel;
+    const isMulti =
+      currentQ.questionType === "multi" && Array.isArray(currentQ.answerLabels);
+    const correctSet = new Set<string>(
+      isMulti ? (currentQ.answerLabels as string[]) : []
+    );
+    const isAnswered = answeredFlags[current] || false;
+    const correct = isMulti
+      ? isAnswered &&
+        ((): boolean => {
+          if (!isMulti) return false;
+          if (selectedMulti.size !== (currentQ.answerLabels?.length ?? 0))
+            return false;
+          for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+          return true;
+        })()
+      : isAnswered && selected === currentQ.answerLabel;
 
     const handleSelect = (opt: string) => {
-      if (answered) return;
-      setSelected(opt);
-      setAnswers((prev) => {
-        const next = prev.slice();
-        next[current] = opt;
-        return next;
-      });
-      if (opt === currentQ.answerLabel) setScore((s) => s + 1);
-      if (typeof currentQ.revealEndAfterChild === "number") {
-        onRevealChange?.(currentQ.revealEndAfterChild);
+      if (isAnswered) return;
+      if (isMulti) {
+        setSelectedMulti((prev) => {
+          const next = new Set(prev);
+          if (next.has(opt)) {
+            next.delete(opt);
+          } else {
+            next.add(opt);
+          }
+          return next;
+        });
+        setAnswers((prev) => {
+          const next = prev.slice();
+          next[current] = Array.from(new Set([...selectedMulti, opt]));
+          return next;
+        });
+      } else {
+        setSelected(opt);
+        setAnswers((prev) => {
+          const next = prev.slice();
+          next[current] = opt;
+          return next;
+        });
+        setAnsweredFlags((prev) => {
+          const n = prev.slice();
+          n[current] = true;
+          return n;
+        });
+        if (opt === currentQ.answerLabel) setScore((s) => s + 1);
+        if (typeof currentQ.revealEndAfterChild === "number") {
+          onRevealChange?.(currentQ.revealEndAfterChild);
+        }
       }
+    };
+
+    const handleSubmitMulti = () => {
+      if (isAnswered) return;
+      setAnsweredFlags((prev) => {
+        const n = prev.slice();
+        n[current] = true;
+        return n;
+      });
+      const isRight = (() => {
+        if (selectedMulti.size !== (currentQ.answerLabels?.length ?? 0))
+          return false;
+        for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+        return true;
+      })();
+      if (isRight) setScore((s) => s + 1);
     };
 
     const next = () => {
@@ -716,7 +749,14 @@ export const QuizViewer = ({
       } else {
         const nextIdx = current + 1;
         setCurrent(nextIdx);
-        setSelected(answers[nextIdx]);
+        const ans = answers[nextIdx];
+        if (Array.isArray(ans)) {
+          setSelected(undefined);
+          setSelectedMulti(new Set(ans));
+        } else {
+          setSelected(ans as string | undefined);
+          setSelectedMulti(new Set());
+        }
         // Update reveal window for the next question if available (AST or custom)
         const nextQ = questions[current + 1];
         if (nextQ && typeof nextQ.revealEndBeforeChild === "number") {
@@ -731,7 +771,14 @@ export const QuizViewer = ({
       if (current > 0) {
         const idx = current - 1;
         setCurrent(idx);
-        setSelected(answers[idx]);
+        const ans = answers[idx];
+        if (Array.isArray(ans)) {
+          setSelected(undefined);
+          setSelectedMulti(new Set(ans));
+        } else {
+          setSelected(ans as string | undefined);
+          setSelectedMulti(new Set());
+        }
         const q = questions[idx];
         if (q && typeof q.revealEndBeforeChild === "number") {
           onRevealChange?.(q.revealEndBeforeChild);
@@ -748,7 +795,14 @@ export const QuizViewer = ({
         Math.max(0, total - 1)
       );
       setCurrent(clamped);
-      setSelected(answers[clamped]);
+      const ans = answers[clamped];
+      if (Array.isArray(ans)) {
+        setSelected(undefined);
+        setSelectedMulti(new Set(ans));
+      } else {
+        setSelected(ans as string | undefined);
+        setSelectedMulti(new Set());
+      }
       const q = questions[clamped];
       if (q && typeof q.revealEndBeforeChild === "number") {
         onRevealChange?.(q.revealEndBeforeChild);
@@ -795,6 +849,7 @@ export const QuizViewer = ({
       const nextQs = [...before, ...deeper, ...after];
       setQuestions(nextQs);
       setAnswers(new Array(nextQs.length).fill(undefined));
+      setAnsweredFlags(new Array(nextQs.length).fill(false));
       setSelected(undefined);
       setCurrent(before.length);
       const first = deeper[0];
@@ -952,11 +1007,20 @@ export const QuizViewer = ({
                 Go
               </button>
             </div>
+            {isMulti && !isAnswered && (
+              <button
+                type="button"
+                className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0"
+                onClick={handleSubmitMulti}
+              >
+                Check Answer
+              </button>
+            )}
             <button
               type="button"
               className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0 w-full sm:w-auto sm:ml-auto justify-center"
               onClick={next}
-              disabled={!answered}
+              disabled={isMulti ? !isAnswered : !isAnswered}
             >
               {current + 1 >= total ? "Finish" : "Next"}
               <ChevronsRight className="h-4 w-4" />
@@ -967,22 +1031,26 @@ export const QuizViewer = ({
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
           <p className="text-sm text-slate-800">{currentQ.stem}</p>
           <p className="text-xs text-slate-500">
-            Choose the next part of the code.
+            {isMulti
+              ? `Select all that apply.`
+              : "Choose the next part of the code."}
           </p>
 
           <ul className="mt-3 grid gap-2">
             {currentQ.options.map((opt, i) => {
-              const isCorrect = opt === currentQ.answerLabel;
-              const isSelected = selected === opt;
+              const isCorrect = isMulti
+                ? correctSet.has(opt)
+                : opt === currentQ.answerLabel;
+              const isSelected = isMulti
+                ? selectedMulti.has(opt)
+                : selected === opt;
               const base =
                 "w-full rounded-md border px-3 py-2 text-left text-sm shadow-sm";
               const idle =
                 "border-slate-200 bg-white hover:bg-slate-50 text-slate-700";
               const correctCls = "border-green-200 bg-green-50 text-green-700";
               const wrongCls = "border-rose-200 bg-rose-50 text-rose-700";
-              const answered = selected !== undefined;
-
-              const cls = !answered
+              const cls = !isAnswered
                 ? `${base} ${idle}`
                 : `${base} ${
                     isSelected
@@ -1047,7 +1115,7 @@ export const QuizViewer = ({
             })}
           </ul>
 
-          {answered && (
+          {isAnswered && (
             <div
               className={`mt-3 rounded-md px-3 py-2 text-sm ${
                 correct
@@ -1057,6 +1125,10 @@ export const QuizViewer = ({
             >
               {correct
                 ? "Correct!"
+                : isMulti
+                ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(
+                    ", "
+                  )}`
                 : `Incorrect — answer: ${currentQ.answerLabel}`}
             </div>
           )}

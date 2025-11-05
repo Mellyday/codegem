@@ -4,6 +4,7 @@ import {
   childrenOfType,
   firstChildOfType,
   isDocstringNode,
+  collectDescendants,
 } from "./pyCuration";
 
 // -------- Shared helpers --------
@@ -57,7 +58,11 @@ const extractOperatorBetween = (
   return raw.replace(/\s+/g, " ");
 };
 
-type ChainLink = { kind: "attr" | "call"; name?: string; args?: TreeSitterAstNode[] };
+type ChainLink = {
+  kind: "attr" | "call";
+  name?: string;
+  args?: TreeSitterAstNode[];
+};
 const extractCallChain = (
   node: TreeSitterAstNode,
   code?: string
@@ -72,7 +77,8 @@ const extractCallChain = (
     const kids = n.namedChildren || [];
     const nameNode = kids[kids.length - 1];
     const name = nameNode
-      ? textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type
+      ? textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+        nameNode.type
       : undefined;
     links.push({ kind: "attr", name });
   };
@@ -130,6 +136,41 @@ function buildDistractors(correct: string, _ctx?: { code?: string }): string[] {
   return Array.from(out);
 }
 
+// Global lightweight distractor pool for padding option lists
+const GENERIC_DISTRACTORS = [
+  "i",
+  "j",
+  "k",
+  "x",
+  "y",
+  "z",
+  "val",
+  "item",
+  "result",
+  "data",
+  "temp",
+  "count",
+  "index",
+  "key",
+  "value",
+  "error",
+  "response",
+  "request",
+  "config",
+  "settings",
+];
+
+const shuffle = <T>(arr: T[]): T[] => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+  }
+  return a;
+};
+
 // -------- Rules + generator (v1.1) --------
 type DecompositionLevel = "shallow" | "normal" | "deep";
 
@@ -159,6 +200,11 @@ type Q11 = {
   sourceRefs: SourceRef[];
   generatorRule: string;
   difficulty?: "easy" | "medium" | "hard";
+  // optional multi-select support for deep rules
+  questionType?: "single" | "multi";
+  multiCorrect?: string[];
+  optionPool?: string[];
+  multiSelectHint?: number;
 };
 
 type Rule = (ctx: RuleCtx) => Q11[] | undefined;
@@ -170,8 +216,10 @@ const rules: Record<string, Rule[]> = {
       const left = kids[0];
       const right = kids[kids.length - 1];
       if (!left || !right) return;
-      const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
-      const rightText = textForRange(right.startIndex, right.endIndex, code) || right.type;
+      const leftText =
+        textForRange(left.startIndex, left.endIndex, code) || left.type;
+      const rightText =
+        textForRange(right.startIndex, right.endIndex, code) || right.type;
       return [
         {
           kind: "identify-field",
@@ -180,7 +228,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(leftText, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: left.type, start: left.startIndex, end: left.endIndex, path: computeAstPath(root, left) },
+            {
+              nodeType: left.type,
+              start: left.startIndex,
+              end: left.endIndex,
+              path: computeAstPath(root, left),
+            },
           ],
           generatorRule: "assignment.lhs",
         },
@@ -191,7 +244,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(rightText, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: right.type, start: right.startIndex, end: right.endIndex, path: computeAstPath(root, right) },
+            {
+              nodeType: right.type,
+              start: right.startIndex,
+              end: right.endIndex,
+              path: computeAstPath(root, right),
+            },
           ],
           generatorRule: "assignment.rhs",
         },
@@ -226,7 +284,8 @@ const rules: Record<string, Rule[]> = {
           if (a.type === "keyword_argument") {
             const nameNode = (a.namedChildren || [])[0];
             const nameText =
-              nameNode && textForRange(nameNode.startIndex, nameNode.endIndex, code);
+              nameNode &&
+              textForRange(nameNode.startIndex, nameNode.endIndex, code);
             if (nameText) {
               qs.push({
                 kind: "call-arg-keyword",
@@ -235,14 +294,20 @@ const rules: Record<string, Rule[]> = {
                 options: buildDistractors(nameText, { code }),
                 sourceRefs: [
                   sourceRef,
-                  { nodeType: a.type, start: a.startIndex, end: a.endIndex, path: computeAstPath(root, a) },
+                  {
+                    nodeType: a.type,
+                    start: a.startIndex,
+                    end: a.endIndex,
+                    path: computeAstPath(root, a),
+                  },
                 ],
                 generatorRule: "call.kwarg-name",
               });
             }
           } else {
             pos += 1;
-            const argText = textForRange(a.startIndex, a.endIndex, code) || a.type;
+            const argText =
+              textForRange(a.startIndex, a.endIndex, code) || a.type;
             qs.push({
               kind: "call-arg-positional",
               stem: `What is positional argument #${pos}?`,
@@ -250,7 +315,12 @@ const rules: Record<string, Rule[]> = {
               options: buildDistractors(argText, { code }),
               sourceRefs: [
                 sourceRef,
-                { nodeType: a.type, start: a.startIndex, end: a.endIndex, path: computeAstPath(root, a) },
+                {
+                  nodeType: a.type,
+                  start: a.startIndex,
+                  end: a.endIndex,
+                  path: computeAstPath(root, a),
+                },
               ],
               generatorRule: "call.pos-arg",
             });
@@ -285,10 +355,13 @@ const rules: Record<string, Rule[]> = {
     ({ root, node, code, sourceRef }) => {
       const children = node.namedChildren || [];
       const left = childByField(node, "left") || children[0];
-      const right = childByField(node, "right") || children[children.length - 1];
+      const right =
+        childByField(node, "right") || children[children.length - 1];
       if (!left || !right) return;
-      const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
-      const rightText = textForRange(right.startIndex, right.endIndex, code) || right.type;
+      const leftText =
+        textForRange(left.startIndex, left.endIndex, code) || left.type;
+      const rightText =
+        textForRange(right.startIndex, right.endIndex, code) || right.type;
       const op = extractOperatorBetween(code, left.endIndex, right.startIndex);
       const qs: Q11[] = [
         {
@@ -298,7 +371,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(leftText, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: left.type, start: left.startIndex, end: left.endIndex, path: computeAstPath(root, left) },
+            {
+              nodeType: left.type,
+              start: left.startIndex,
+              end: left.endIndex,
+              path: computeAstPath(root, left),
+            },
           ],
           generatorRule: "binary.left",
         },
@@ -309,7 +387,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(rightText, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: right.type, start: right.startIndex, end: right.endIndex, path: computeAstPath(root, right) },
+            {
+              nodeType: right.type,
+              start: right.startIndex,
+              end: right.endIndex,
+              path: computeAstPath(root, right),
+            },
           ],
           generatorRule: "binary.right",
         },
@@ -333,7 +416,8 @@ const rules: Record<string, Rule[]> = {
       if (kids.length < 2) return;
       const left = kids[0];
       const qs: Q11[] = [];
-      const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
+      const leftText =
+        textForRange(left.startIndex, left.endIndex, code) || left.type;
       qs.push({
         kind: "identify-field",
         stem: "What is the left operand?",
@@ -341,13 +425,19 @@ const rules: Record<string, Rule[]> = {
         options: buildDistractors(leftText, { code }),
         sourceRefs: [
           sourceRef,
-          { nodeType: left.type, start: left.startIndex, end: left.endIndex, path: computeAstPath(root, left) },
+          {
+            nodeType: left.type,
+            start: left.startIndex,
+            end: left.endIndex,
+            path: computeAstPath(root, left),
+          },
         ],
         generatorRule: "comparison.left",
       });
       for (let i = 1; i < kids.length; i++) {
         const comp = kids[i];
-        const compText = textForRange(comp.startIndex, comp.endIndex, code) || comp.type;
+        const compText =
+          textForRange(comp.startIndex, comp.endIndex, code) || comp.type;
         const prev = kids[i - 1];
         const op = extractOperatorBetween(code, prev.endIndex, comp.startIndex);
         if (op && op.length <= 6) {
@@ -367,7 +457,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(compText, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: comp.type, start: comp.startIndex, end: comp.endIndex, path: computeAstPath(root, comp) },
+            {
+              nodeType: comp.type,
+              start: comp.startIndex,
+              end: comp.endIndex,
+              path: computeAstPath(root, comp),
+            },
           ],
           generatorRule: "comparison.comparator",
         });
@@ -375,12 +470,64 @@ const rules: Record<string, Rule[]> = {
       return qs;
     },
   ],
+  dictionary: [
+    ({ node, code, sourceRef }) => {
+      // Collect keys from pairs: {k: v, **d} → only include explicit keys
+      const keys: string[] = [];
+      for (const c of node.namedChildren || []) {
+        if (c.type === "pair") {
+          const [k] = c.namedChildren || [];
+          if (k)
+            keys.push(textForRange(k.startIndex, k.endIndex, code) || k.type);
+        }
+      }
+      // Build a simple option pool by scanning nearby code for identifiers and strings
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      const idPool: string[] = [];
+      const strPool: string[] = [];
+      try {
+        const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+        const reStr = /(['"])((?:\\.|(?!\1).)*)\1/g;
+        const snippet = (code || "").slice(spanStart, spanEnd);
+        let m: RegExpExecArray | null;
+        while ((m = reId.exec(snippet))) idPool.push(m[0]);
+        while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
+      } catch {}
+      let pool = Array.from(new Set<string>([...keys, ...idPool, ...strPool]));
+      if (pool.length < 10) {
+        const needed = 10 - pool.length;
+        const pad = shuffle(GENERIC_DISTRACTORS)
+          .filter((d) => !pool.includes(d))
+          .slice(0, needed);
+        pool.push(...pad);
+      }
+      const optionPool = shuffle(pool).slice(0, 10);
+      return [
+        {
+          kind: "dict-keys",
+          stem: `Which keys are present in this dict?`,
+          answerLabel: keys[0], // unused for multi
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "dict.keys",
+          questionType: "multi",
+          multiCorrect: keys,
+          optionPool,
+        },
+      ];
+    },
+  ],
   subscript: [
     ({ root, node, code, sourceRef }) => {
-      const valueNode = childByField(node, "value") || (node.namedChildren || [])[0];
-      const second = childByField(node, "slice") || (node.namedChildren || [])[1];
+      const valueNode =
+        childByField(node, "value") || (node.namedChildren || [])[0];
+      const second =
+        childByField(node, "slice") || (node.namedChildren || [])[1];
       if (!valueNode) return;
-      const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
+      const valueText =
+        textForRange(valueNode.startIndex, valueNode.endIndex, code) ||
+        valueNode.type;
       const qs: Q11[] = [
         {
           kind: "identify-field",
@@ -389,7 +536,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(valueText, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: valueNode.type, start: valueNode.startIndex, end: valueNode.endIndex, path: computeAstPath(root, valueNode) },
+            {
+              nodeType: valueNode.type,
+              start: valueNode.startIndex,
+              end: valueNode.endIndex,
+              path: computeAstPath(root, valueNode),
+            },
           ],
           generatorRule: "subscript.base",
         },
@@ -407,13 +559,20 @@ const rules: Record<string, Rule[]> = {
               options: buildDistractors(txt, { code }),
               sourceRefs: [
                 sourceRef,
-                { nodeType: p.type, start: p.startIndex, end: p.endIndex, path: computeAstPath(root, p) },
+                {
+                  nodeType: p.type,
+                  start: p.startIndex,
+                  end: p.endIndex,
+                  path: computeAstPath(root, p),
+                },
               ],
               generatorRule: `slice.${labels[idx]}`,
             });
           });
         } else {
-          const idxText = textForRange(second.startIndex, second.endIndex, code) || second.type;
+          const idxText =
+            textForRange(second.startIndex, second.endIndex, code) ||
+            second.type;
           qs.push({
             kind: "identify-field",
             stem: "What is the index?",
@@ -421,7 +580,12 @@ const rules: Record<string, Rule[]> = {
             options: buildDistractors(idxText, { code }),
             sourceRefs: [
               sourceRef,
-              { nodeType: second.type, start: second.startIndex, end: second.endIndex, path: computeAstPath(root, second) },
+              {
+                nodeType: second.type,
+                start: second.startIndex,
+                end: second.endIndex,
+                path: computeAstPath(root, second),
+              },
             ],
             generatorRule: "subscript.index",
           });
@@ -445,7 +609,12 @@ const rules: Record<string, Rule[]> = {
           options: buildDistractors(txt, { code }),
           sourceRefs: [
             sourceRef,
-            { nodeType: p.type, start: p.startIndex, end: p.endIndex, path: computeAstPath(root, p) },
+            {
+              nodeType: p.type,
+              start: p.startIndex,
+              end: p.endIndex,
+              path: computeAstPath(root, p),
+            },
           ],
           generatorRule: `slice.${labels[idx]}`,
         });
@@ -455,12 +624,18 @@ const rules: Record<string, Rule[]> = {
   ],
   function_definition: [
     ({ root, node, code, sourceRef, profile }) => {
-      const params = (node.namedChildren || []).find((c) => c.type === "parameters")?.namedChildren || [];
+      const params =
+        (node.namedChildren || []).find((c) => c.type === "parameters")
+          ?.namedChildren || [];
       const qs: Q11[] = [];
       params.forEach((p, idx) => {
-        const nameNode = (p.namedChildren || []).find((c) => c.type === "identifier");
+        const nameNode = (p.namedChildren || []).find(
+          (c) => c.type === "identifier"
+        );
         if (nameNode) {
-          const nameText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || "param";
+          const nameText =
+            textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+            "param";
           qs.push({
             kind: "param-name",
             stem: `What is the name of parameter #${idx + 1}?`,
@@ -468,7 +643,12 @@ const rules: Record<string, Rule[]> = {
             options: buildDistractors(nameText, { code }),
             sourceRefs: [
               sourceRef,
-              { nodeType: p.type, start: p.startIndex, end: p.endIndex, path: computeAstPath(root, p) },
+              {
+                nodeType: p.type,
+                start: p.startIndex,
+                end: p.endIndex,
+                path: computeAstPath(root, p),
+              },
             ],
             generatorRule: "func.param-name",
           });
@@ -478,7 +658,9 @@ const rules: Record<string, Rule[]> = {
             (c) => c.type === "type" || c.type === "type_annotation"
           );
           if (typeNode) {
-            const typText = textForRange(typeNode.startIndex, typeNode.endIndex, code) || "type";
+            const typText =
+              textForRange(typeNode.startIndex, typeNode.endIndex, code) ||
+              "type";
             qs.push({
               kind: "param-type",
               stem: `What is the type of parameter #${idx + 1}?`,
@@ -486,7 +668,12 @@ const rules: Record<string, Rule[]> = {
               options: buildDistractors(typText, { code }),
               sourceRefs: [
                 sourceRef,
-                { nodeType: typeNode.type, start: typeNode.startIndex, end: typeNode.endIndex, path: computeAstPath(root, typeNode) },
+                {
+                  nodeType: typeNode.type,
+                  start: typeNode.startIndex,
+                  end: typeNode.endIndex,
+                  path: computeAstPath(root, typeNode),
+                },
               ],
               generatorRule: "func.param-type",
             });
@@ -495,10 +682,14 @@ const rules: Record<string, Rule[]> = {
       });
       if (profile !== "shallow") {
         const ret = (node.namedChildren || []).find(
-          (c) => c.type === "type" || c.type === "type_annotation" || c.fieldName === "return_type"
+          (c) =>
+            c.type === "type" ||
+            c.type === "type_annotation" ||
+            c.fieldName === "return_type"
         );
         if (ret) {
-          const retText = textForRange(ret.startIndex, ret.endIndex, code) || ret.type;
+          const retText =
+            textForRange(ret.startIndex, ret.endIndex, code) || ret.type;
           qs.push({
             kind: "return-type",
             stem: "What is the return type of this function?",
@@ -506,7 +697,12 @@ const rules: Record<string, Rule[]> = {
             options: buildDistractors(retText, { code }),
             sourceRefs: [
               sourceRef,
-              { nodeType: ret.type, start: ret.startIndex, end: ret.endIndex, path: computeAstPath(root, ret) },
+              {
+                nodeType: ret.type,
+                start: ret.startIndex,
+                end: ret.endIndex,
+                path: computeAstPath(root, ret),
+              },
             ],
             generatorRule: "func.return-type",
           });
@@ -544,7 +740,9 @@ type Profile = "shallow" | "deep";
 function headerAnswer(stmt: TreeSitterAstNode, code: string): string {
   const full = code.substring(stmt.startIndex, stmt.endIndex);
   const colonIdx = full.indexOf(":");
-  return (colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]).trimEnd();
+  return (
+    colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
+  ).trimEnd();
 }
 
 export function buildHeuristicQuiz(
@@ -621,9 +819,36 @@ export function buildHeuristicQuiz(
     });
   };
 
+  const makeIdentifierPool = (spanStart: number, spanEnd: number): string[] => {
+    const snippet = code.slice(spanStart, spanEnd);
+    const re = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const out = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(snippet))) out.add(m[0]);
+    return Array.from(out);
+  };
+
+  const makeStringPool = (spanStart: number, spanEnd: number): string[] => {
+    const snippet = code.slice(spanStart, spanEnd);
+    const re = /(['"])((?:\\.|(?!\1).)*)\1/g;
+    const out = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(snippet))) {
+      const s = m[2];
+      if (s.trim().length > 0) out.add(s);
+    }
+    return Array.from(out);
+  };
+
   const emitHeader = (stmt: TreeSitterAstNode) => {
     const answerText = headerAnswer(stmt, code);
-    emitCard(answerText, "Write the full header line", stmt, stmt.type, "header");
+    emitCard(
+      answerText,
+      "Write the full header line",
+      stmt,
+      stmt.type,
+      "header"
+    );
   };
 
   const walkBlock = (block: TreeSitterAstNode) => {
@@ -644,34 +869,148 @@ export function buildHeuristicQuiz(
           emitCard(modTxt, "What is the module?", mod, "module");
         }
         const namesGroup = groups.find((g) => g.key === "names");
-        for (const name of namesGroup?.items || []) {
-          const txt = code.slice(name.startIndex, name.endIndex);
-          emitCard(txt, "Which name is imported?", name, "imported_name");
+        const items = namesGroup?.items || [];
+        const correct = items
+          .map((n) => code.slice(n.startIndex, n.endIndex))
+          .filter(Boolean);
+        // Build padded option pool (always up to 10)
+        const idPool = makeIdentifierPool(
+          root.startIndex,
+          root.endIndex
+        ).filter((s) => !correct.includes(s));
+        let pool = Array.from(new Set<string>([...correct, ...idPool]));
+        if (pool.length < 10) {
+          const needed = 10 - pool.length;
+          const pad = shuffle(GENERIC_DISTRACTORS)
+            .filter((d) => !pool.includes(d))
+            .slice(0, needed);
+          pool.push(...pad);
         }
+        const optionPool = shuffle(pool).slice(0, 10);
+        const snippet = code.slice(node.startIndex, node.endIndex);
+        cards.push({
+          order: order++,
+          type: "imported_names_multi",
+          text: snippet,
+          action: "next",
+          question: `Which names are imported?`,
+          generatorRule: "import_from.names",
+          sourceRef: {
+            nodeType: node.type,
+            start: node.startIndex,
+            end: node.endIndex,
+            path: computeAstPath(root, node),
+            preview: snippet.slice(0, 120),
+          },
+          questionType: "multi",
+          multiCorrect: correct,
+          optionPool,
+        } as any);
         break;
       }
       case "import_statement": {
         const groups = buildCuratedSections(node);
         const namesGroup = groups.find((g) => g.key === "names");
-        for (const name of namesGroup?.items || []) {
-          const txt = code.slice(name.startIndex, name.endIndex);
-          emitCard(txt, "Which name is imported?", name, "imported_name");
+        const items = namesGroup?.items || [];
+        const correct = items
+          .map((n) => code.slice(n.startIndex, n.endIndex))
+          .filter(Boolean);
+        const idPool = makeIdentifierPool(
+          root.startIndex,
+          root.endIndex
+        ).filter((s) => !correct.includes(s));
+        let pool = Array.from(new Set<string>([...correct, ...idPool]));
+        if (pool.length < 10) {
+          const needed = 10 - pool.length;
+          const pad = shuffle(GENERIC_DISTRACTORS)
+            .filter((d) => !pool.includes(d))
+            .slice(0, needed);
+          pool.push(...pad);
         }
+        const optionPool = shuffle(pool).slice(0, 10);
+        const snippet = code.slice(node.startIndex, node.endIndex);
+        cards.push({
+          order: order++,
+          type: "imported_names_multi",
+          text: snippet,
+          action: "next",
+          question: `Which names are imported?`,
+          generatorRule: "import.names",
+          sourceRef: {
+            nodeType: node.type,
+            start: node.startIndex,
+            end: node.endIndex,
+            path: computeAstPath(root, node),
+            preview: snippet.slice(0, 120),
+          },
+          questionType: "multi",
+          multiCorrect: correct,
+          optionPool,
+        } as any);
         break;
       }
       case "function_definition": {
         const sections = buildCuratedSections(node);
         const argsGroup = sections.find((s) => s.key === "args");
         const returnsGroup = sections.find((s) => s.key === "returns");
-        const ordered = [argsGroup, returnsGroup].filter(Boolean) as typeof sections;
-        for (const group of ordered) {
-          for (let i = 0; i < group.items.length; i++) {
-            const item = group.items[i];
+
+        if (argsGroup) {
+          const params = argsGroup.items || [];
+          const names: string[] = [];
+          for (const p of params) {
+            const nameNode = (p.namedChildren || []).find(
+              (c) => c.type === "identifier"
+            );
+            if (nameNode)
+              names.push(code.slice(nameNode.startIndex, nameNode.endIndex));
+            else names.push(code.slice(p.startIndex, p.endIndex));
+          }
+          const block = firstChildOfType(node, "block");
+          const spanStart = block ? block.startIndex : node.startIndex;
+          const spanEnd = block ? block.endIndex : node.endIndex;
+          const idPool = makeIdentifierPool(spanStart, spanEnd).filter(
+            (s) => !names.includes(s)
+          );
+          let pool = Array.from(new Set<string>([...names, ...idPool]));
+          if (pool.length < 10) {
+            const needed = 10 - pool.length;
+            const pad = shuffle(GENERIC_DISTRACTORS)
+              .filter((d) => !pool.includes(d))
+              .slice(0, needed);
+            pool.push(...pad);
+          }
+          const optionPool = shuffle(pool).slice(0, 10);
+          const header = headerAnswer(node, code);
+          cards.push({
+            order: order++,
+            type: "function_params_multi",
+            text: header,
+            action: "next",
+            question: `Which of the following are parameters of this function?`,
+            generatorRule: "func.params-multi",
+            sourceRef: {
+              nodeType: node.type,
+              start: node.startIndex,
+              end: node.endIndex,
+              path: computeAstPath(root, node),
+              preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
+            },
+            questionType: "multi",
+            multiCorrect: names,
+            optionPool,
+          } as any);
+        }
+        if (returnsGroup) {
+          for (let i = 0; i < returnsGroup.items.length; i++) {
+            const item = returnsGroup.items[i];
             const text = code.substring(item.startIndex, item.endIndex);
-            const question = group.key === "args"
-              ? `What is the name or text of parameter #${i + 1}?`
-              : "What is the return type?";
-            emitCard(text, question, item, item.type, group.key);
+            emitCard(
+              text,
+              "What is the return type?",
+              item,
+              item.type,
+              "returns"
+            );
           }
         }
         const block = firstChildOfType(node, "block");
@@ -723,7 +1062,9 @@ export function buildHeuristicQuiz(
         emitHeader(node);
         const body = firstChildOfType(node, "block");
         if (body) walkBlock(body);
-        for (const h of (node.namedChildren || []).filter((c) => c.type.includes("except"))) {
+        for (const h of (node.namedChildren || []).filter((c) =>
+          c.type.includes("except")
+        )) {
           emitHeader(h);
           const b = firstChildOfType(h, "block");
           if (b) walkBlock(b);
@@ -746,8 +1087,40 @@ export function buildHeuristicQuiz(
         const text = code.slice(node.startIndex, node.endIndex);
         emitCard(text, "What comes next?", node);
         if (profile === "deep") {
-          const deepQs = generateQuestionsV11(root, node, "deep", code).slice(0, opts?.maxDeepPerStmt ?? 6);
-          for (const q of deepQs) emitCard(q.answerLabel, q.stem, node, q.kind);
+          const deepQs = generateQuestionsV11(root, node, "deep", code).slice(
+            0,
+            opts?.maxDeepPerStmt ?? 6
+          );
+          for (const q of deepQs) {
+            if (
+              q.questionType === "multi" &&
+              Array.isArray(q.multiCorrect) &&
+              q.multiCorrect.length
+            ) {
+              const snippet = code.slice(node.startIndex, node.endIndex);
+              cards.push({
+                order: order++,
+                type: q.kind,
+                text: snippet,
+                action: "next",
+                question: q.stem,
+                generatorRule: q.generatorRule,
+                sourceRef: {
+                  nodeType: node.type,
+                  start: node.startIndex,
+                  end: node.endIndex,
+                  path: computeAstPath(root, node),
+                  preview: snippet.slice(0, 120),
+                },
+                questionType: "multi",
+                multiCorrect: q.multiCorrect,
+                multiSelectHint: q.multiSelectHint ?? q.multiCorrect.length,
+                optionPool: q.optionPool,
+              } as any);
+            } else {
+              emitCard(q.answerLabel, q.stem, node, q.kind);
+            }
+          }
         }
       }
     }
