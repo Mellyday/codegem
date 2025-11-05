@@ -502,7 +502,13 @@ const rules: Record<string, Rule[]> = {
           .slice(0, needed);
         pool.push(...pad);
       }
-      const optionPool = shuffle(pool).slice(0, 10);
+      // Ensure all correct keys are included, then fill up to max
+      const MAX = 10;
+      const extras = shuffle(pool.filter((p) => !keys.includes(p)));
+      const optionPool = shuffle([
+        ...keys,
+        ...extras.slice(0, Math.max(0, MAX - keys.length)),
+      ]).slice(0, MAX);
       return [
         {
           kind: "dict-keys",
@@ -886,7 +892,12 @@ export function buildHeuristicQuiz(
             .slice(0, needed);
           pool.push(...pad);
         }
-        const optionPool = shuffle(pool).slice(0, 10);
+        const MAX = 10;
+        const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+        const optionPool = shuffle([
+          ...correct,
+          ...extras.slice(0, Math.max(0, MAX - correct.length)),
+        ]).slice(0, MAX);
         const snippet = code.slice(node.startIndex, node.endIndex);
         cards.push({
           order: order++,
@@ -927,7 +938,12 @@ export function buildHeuristicQuiz(
             .slice(0, needed);
           pool.push(...pad);
         }
-        const optionPool = shuffle(pool).slice(0, 10);
+        const MAX = 10;
+        const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+        const optionPool = shuffle([
+          ...correct,
+          ...extras.slice(0, Math.max(0, MAX - correct.length)),
+        ]).slice(0, MAX);
         const snippet = code.slice(node.startIndex, node.endIndex);
         cards.push({
           order: order++,
@@ -979,7 +995,12 @@ export function buildHeuristicQuiz(
               .slice(0, needed);
             pool.push(...pad);
           }
-          const optionPool = shuffle(pool).slice(0, 10);
+          const MAX = 10;
+          const extras = shuffle(pool.filter((p) => !names.includes(p)));
+          const optionPool = shuffle([
+            ...names,
+            ...extras.slice(0, Math.max(0, MAX - names.length)),
+          ]).slice(0, MAX);
           const header = headerAnswer(node, code);
           cards.push({
             order: order++,

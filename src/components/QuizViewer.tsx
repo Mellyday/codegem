@@ -721,16 +721,14 @@ export const QuizViewer = ({
       if (isMulti) {
         setSelectedMulti((prev) => {
           const next = new Set(prev);
-          if (next.has(opt)) {
-            next.delete(opt);
-          } else {
-            next.add(opt);
-          }
-          return next;
-        });
-        setAnswers((prev) => {
-          const next = prev.slice();
-          next[current] = Array.from(new Set([...selectedMulti, opt]));
+          if (next.has(opt)) next.delete(opt);
+          else next.add(opt);
+          // keep persisted answers in sync with the toggled set
+          setAnswers((prevAns) => {
+            const n = prevAns.slice();
+            n[current] = Array.from(next);
+            return n;
+          });
           return next;
         });
       } else {
@@ -1073,10 +1071,12 @@ export const QuizViewer = ({
                 "w-full rounded-md border px-3 py-2 text-left text-sm shadow-sm";
               const idle =
                 "border-slate-200 bg-white hover:bg-slate-50 text-slate-700";
+              const selectedCls =
+                "border-amber-300 bg-amber-50 text-slate-800";
               const correctCls = "border-green-200 bg-green-50 text-green-700";
               const wrongCls = "border-rose-200 bg-rose-50 text-rose-700";
               const cls = !isAnswered
-                ? `${base} ${idle}`
+                ? `${base} ${isSelected ? selectedCls : idle}`
                 : `${base} ${
                     isSelected
                       ? isCorrect
