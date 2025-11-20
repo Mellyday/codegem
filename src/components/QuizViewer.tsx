@@ -178,6 +178,10 @@ type SavedCustomQuizCardV11 = {
   optionPool?: string[];
   // optional LLM distractors pool (future enrichment)
   llmDistractors?: string[];
+  // optional progressive reveal anchors
+  revealStart?: number;
+  revealEndBeforeChild?: number;
+  revealEndAfterChild?: number;
 };
 
 type SavedCustomQuizV11 = {
@@ -239,6 +243,16 @@ const generateQuestionsFromCustom = (
         difficulty: c.difficulty,
         sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
         snippetText: c.text,
+        // carry reveal anchors if present (enables initial progressive reveal)
+        revealStart: typeof c.revealStart === "number" ? c.revealStart : undefined,
+        revealEndBeforeChild:
+          typeof c.revealEndBeforeChild === "number"
+            ? c.revealEndBeforeChild
+            : undefined,
+        revealEndAfterChild:
+          typeof c.revealEndAfterChild === "number"
+            ? c.revealEndAfterChild
+            : undefined,
       });
       continue;
     }
@@ -269,6 +283,16 @@ const generateQuestionsFromCustom = (
       generatorRule: c.generatorRule,
       difficulty: c.difficulty,
       sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
+      // carry reveal anchors if present
+      revealStart: typeof c.revealStart === "number" ? c.revealStart : undefined,
+      revealEndBeforeChild:
+        typeof c.revealEndBeforeChild === "number"
+          ? c.revealEndBeforeChild
+          : undefined,
+      revealEndAfterChild:
+        typeof c.revealEndAfterChild === "number"
+          ? c.revealEndAfterChild
+          : undefined,
     });
   }
 
@@ -405,6 +429,10 @@ export const QuizViewer = ({
         multiSelectHint: c.multiSelectHint,
         optionPool: c.optionPool,
         llmDistractors: c.llmDistractors,
+        // persist reveal anchors when present on generated cards
+        revealStart: c.revealStart,
+        revealEndBeforeChild: c.revealEndBeforeChild,
+        revealEndAfterChild: c.revealEndAfterChild,
       })),
     };
     const res = await fetch("/api/quizzes", {

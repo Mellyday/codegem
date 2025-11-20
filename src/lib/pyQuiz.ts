@@ -205,6 +205,10 @@ type Q11 = {
   multiCorrect?: string[];
   optionPool?: string[];
   multiSelectHint?: number;
+  // reveal ranges for progressive reveal (absolute indices)
+  revealStart?: number;
+  revealEndBeforeChild?: number;
+  revealEndAfterChild?: number;
 };
 
 type Rule = (ctx: RuleCtx) => Q11[] | undefined;
@@ -474,11 +478,14 @@ const rules: Record<string, Rule[]> = {
     ({ node, code, sourceRef }) => {
       // Collect keys from pairs: {k: v, **d} → only include explicit keys
       const keys: string[] = [];
+      const keyNodes: { start: number; end: number }[] = [];
       for (const c of node.namedChildren || []) {
         if (c.type === "pair") {
           const [k] = c.namedChildren || [];
-          if (k)
+          if (k) {
             keys.push(textForRange(k.startIndex, k.endIndex, code) || k.type);
+            keyNodes.push({ start: k.startIndex, end: k.endIndex });
+          }
         }
       }
       // Build a simple option pool by scanning nearby code for identifiers and strings
@@ -509,6 +516,21 @@ const rules: Record<string, Rule[]> = {
         ...keys,
         ...extras.slice(0, Math.max(0, MAX - keys.length)),
       ]).slice(0, MAX);
+      // Compute reveal anchors: show dict prefix up to first key, then reveal through last key
+      let revealStart: number | undefined = node.startIndex;
+      let revealEndBeforeChild: number | undefined = undefined;
+      let revealEndAfterChild: number | undefined = undefined;
+      if (keyNodes.length > 0) {
+        revealEndBeforeChild = keyNodes.reduce(
+          (min, n) => Math.min(min, n.start),
+          keyNodes[0].start
+        );
+        revealEndAfterChild = keyNodes.reduce(
+          (max, n) => Math.max(max, n.end),
+          keyNodes[0].end
+        );
+      }
+
       return [
         {
           kind: "dict-keys",
@@ -520,6 +542,9 @@ const rules: Record<string, Rule[]> = {
           questionType: "multi",
           multiCorrect: keys,
           optionPool,
+          revealStart,
+          revealEndBeforeChild,
+          revealEndAfterChild,
         },
       ];
     },
@@ -780,6 +805,9 @@ export function buildHeuristicQuiz(
     question?: string;
     generatorRule?: string;
     difficulty?: "easy" | "medium" | "hard";
+    // optional progressive reveal anchors
+    revealEndBeforeChild?: number;
+    revealEndAfterChild?: number;
   }>;
 } {
   const cards: Array<{
@@ -798,6 +826,8 @@ export function buildHeuristicQuiz(
     question?: string;
     generatorRule?: string;
     difficulty?: "easy" | "medium" | "hard";
+    revealEndBeforeChild?: number;
+    revealEndAfterChild?: number;
   }> = [];
   let order = 0;
 
@@ -822,6 +852,9 @@ export function buildHeuristicQuiz(
         path: computeAstPath(root, node),
         preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
       },
+      // progressive reveal anchors for line-by-line shallow/normal quizzes
+      revealEndBeforeChild: node.startIndex,
+      revealEndAfterChild: node.endIndex,
     });
   };
 
@@ -899,6 +932,13 @@ export function buildHeuristicQuiz(
           ...extras.slice(0, Math.max(0, MAX - correct.length)),
         ]).slice(0, MAX);
         const snippet = code.slice(node.startIndex, node.endIndex);
+        // Reveal anchors for import-from: show header up to first imported name, then reveal through last name
+        const firstStart = items.length
+          ? items.reduce((m, it) => Math.min(m, it.startIndex), items[0].startIndex)
+          : undefined;
+        const lastEnd = items.length
+          ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
+          : undefined;
         cards.push({
           order: order++,
           type: "imported_names_multi",
@@ -916,6 +956,10 @@ export function buildHeuristicQuiz(
           questionType: "multi",
           multiCorrect: correct,
           optionPool,
+          // progressive reveal anchors
+          revealStart: node.startIndex,
+          revealEndBeforeChild: firstStart,
+          revealEndAfterChild: lastEnd,
         } as any);
         break;
       }
@@ -945,6 +989,14 @@ export function buildHeuristicQuiz(
           ...extras.slice(0, Math.max(0, MAX - correct.length)),
         ]).slice(0, MAX);
         const snippet = code.slice(node.startIndex, node.endIndex);
+        const namesGroup2 = groups.find((g) => g.key === "names");
+        const items2 = namesGroup2?.items || [];
+        const firstStart2 = items2.length
+          ? items2.reduce((m, it) => Math.min(m, it.startIndex), items2[0].startIndex)
+          : undefined;
+        const lastEnd2 = items2.length
+          ? items2.reduce((m, it) => Math.max(m, it.endIndex), items2[0].endIndex)
+          : undefined;
         cards.push({
           order: order++,
           type: "imported_names_multi",
@@ -962,6 +1014,9 @@ export function buildHeuristicQuiz(
           questionType: "multi",
           multiCorrect: correct,
           optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: firstStart2,
+          revealEndAfterChild: lastEnd2,
         } as any);
         break;
       }
@@ -1002,6 +1057,13 @@ export function buildHeuristicQuiz(
             ...extras.slice(0, Math.max(0, MAX - names.length)),
           ]).slice(0, MAX);
           const header = headerAnswer(node, code);
+          // Reveal anchors for params: prefix through first param, then through last param
+          const firstParamStart = params.length
+            ? params.reduce((m, it) => Math.min(m, it.startIndex), params[0].startIndex)
+            : undefined;
+          const lastParamEnd = params.length
+            ? params.reduce((m, it) => Math.max(m, it.endIndex), params[0].endIndex)
+            : undefined;
           cards.push({
             order: order++,
             type: "function_params_multi",
@@ -1019,6 +1081,9 @@ export function buildHeuristicQuiz(
             questionType: "multi",
             multiCorrect: names,
             optionPool,
+            revealStart: node.startIndex,
+            revealEndBeforeChild: firstParamStart,
+            revealEndAfterChild: lastParamEnd,
           } as any);
         }
         if (returnsGroup) {
@@ -1137,6 +1202,10 @@ export function buildHeuristicQuiz(
                 multiCorrect: q.multiCorrect,
                 multiSelectHint: q.multiSelectHint ?? q.multiCorrect.length,
                 optionPool: q.optionPool,
+                // propagate reveal anchors when provided by rule
+                revealStart: q.revealStart,
+                revealEndBeforeChild: q.revealEndBeforeChild,
+                revealEndAfterChild: q.revealEndAfterChild,
               } as any);
             } else {
               emitCard(q.answerLabel, q.stem, node, q.kind);

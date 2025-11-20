@@ -28,6 +28,10 @@ export type SavedCustomQuizCardV11 = {
   optionPool?: string[];
   // optional LLM distractors pool
   llmDistractors?: string[];
+  // optional progressive reveal anchors
+  revealStart?: number;
+  revealEndBeforeChild?: number;
+  revealEndAfterChild?: number;
 };
 
 export type SavedCustomQuizV11 = {
@@ -96,6 +100,17 @@ async function fetchSavedCustomQuizzes(fileKey?: {
         llmDistractors: Array.isArray(c.llmDistractors)
           ? c.llmDistractors
           : undefined,
+        // pass through reveal anchors when present
+        revealStart:
+          typeof c.revealStart === "number" ? (c.revealStart as number) : undefined,
+        revealEndBeforeChild:
+          typeof c.revealEndBeforeChild === "number"
+            ? (c.revealEndBeforeChild as number)
+            : undefined,
+        revealEndAfterChild:
+          typeof c.revealEndAfterChild === "number"
+            ? (c.revealEndAfterChild as number)
+            : undefined,
       })),
     }));
     return out;
