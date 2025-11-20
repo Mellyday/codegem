@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { type TreeSitterAstNode } from "../lib/treeSitter";
 import { BookOpen, ChevronsRight, ChevronsLeft, FileJson } from "lucide-react";
-import * as pyLesson from "../lib/pyLesson";
+import * as pyEngine from "../lib/pyEngine";
 import * as jsLesson from "../lib/jsLesson";
-import type { LessonStep as PyLessonStep, LessonHistoryItem as PyLessonHistoryItem } from "../lib/pyLesson";
+import type {
+  EngineStep as PyEngineStep,
+  LessonHistoryItem as PyEngineHistoryItem,
+} from "../lib/pyEngine";
 import type { LessonStep as JsLessonStep, LessonHistoryItem as JsLessonHistoryItem } from "../lib/jsLesson";
 
 export type LessonViewerProps = {
@@ -35,8 +38,8 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   onRevealEndIndexChange,
   onMaskRangesChange,
 }) => {
-  type LessonStep = PyLessonStep | JsLessonStep;
-  type LessonHistoryItem = PyLessonHistoryItem | JsLessonHistoryItem;
+  type LessonStep = PyEngineStep | JsLessonStep;
+  type LessonHistoryItem = PyEngineHistoryItem | JsLessonHistoryItem;
   const [lessonQueue, setLessonQueue] = useState<LessonStep[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [history, setHistory] = useState<LessonHistoryItem[]>([]);
@@ -45,11 +48,36 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const [tocSteps, setTocSteps] = useState<LessonStep[] | null>(null);
   const inToc = !!tocSteps;
 
+  const getPrompt = (step: LessonStep | null | undefined): string =>
+    ((step as any)?.prompt ??
+      (step as any)?.lesson?.prompt ??
+      "") as string;
+
+  const getIsDigable = (step: LessonStep | null | undefined): boolean =>
+    ((step as any)?.isDigable ??
+      (step as any)?.lesson?.isDigable ??
+      false) as boolean;
+
+  const getChildSteps = (step: LessonStep | null | undefined): LessonStep[] =>
+    (((step as any)?.childSteps ??
+      (step as any)?.lesson?.childSteps) ||
+      []) as LessonStep[];
+
   useEffect(() => {
     if (root) {
       // Prefer semantic steps over raw namedChildren
       // Hide function/class names by default for more useful prompts
-      const plan = (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(root, { includeNames: false, enableGrouping: "auto" });
+      const plan: LessonStep[] =
+        language === "python"
+          ? (pyEngine.generateEngineSteps(root, root, code, {
+              profile: "shallow",
+              grouping: "auto",
+              includeNames: false,
+            }) as unknown as LessonStep[])
+          : (jsLesson.generateLessonPlan(root, {
+              includeNames: false,
+              enableGrouping: "auto",
+            }) as LessonStep[]);
       // If the plan is grouped (virtual group steps) and there are multiple groups,
       // show a TOC first. If only one group, jump straight into that group's child steps.
       const hasGroups = plan.some((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
@@ -87,7 +115,9 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
     const curr = lessonQueue[currentStep];
     if (curr) {
-      const { masks } = (language === "python" ? pyLesson.maskAndAnswerForStep : jsLesson.maskAndAnswerForStep)(curr as any, root, code);
+      const { masks } = (language === "python"
+        ? pyEngine.maskAndAnswerForStep
+        : jsLesson.maskAndAnswerForStep)(curr as any, root, code);
       onMaskRangesChange(masks);
     } else {
       onMaskRangesChange([]);
@@ -137,13 +167,20 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const handleDigDeeper = () => {
     if (currentStep < lessonQueue.length) {
       const stepToExpand = lessonQueue[currentStep];
-      const childrenSteps = (stepToExpand as any).childSteps ||
-        (language === "python" ? pyLesson.generateLessonPlan : jsLesson.generateLessonPlan)(
-          stepToExpand.node,
-          {
-            includeNames: false,
-          }
-        );
+      const existingChildren = getChildSteps(stepToExpand);
+      const childrenSteps =
+        existingChildren.length > 0
+          ? existingChildren
+          : (language === "python"
+              ? (pyEngine.generateEngineSteps(root, stepToExpand.node as any, code, {
+                  profile: "shallow",
+                  grouping: false,
+                  includeNames: false,
+                  __noGroup: true,
+                }) as unknown as LessonStep[])
+              : (jsLesson.generateLessonPlan(stepToExpand.node as any, {
+                  includeNames: false,
+                }) as LessonStep[]));
 
       if (childrenSteps.length > 0) {
         setHistory((prev) => [...prev, { ...stepToExpand, action: "dig" }]);
@@ -158,7 +195,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
   const handleSaveCustomQuiz = async () => {
     try {
-      const payload = (language === "python" ? pyLesson.buildCustomQuizPayload : jsLesson.buildCustomQuizPayload)({
+      const payload = (language === "python" ? pyEngine.buildCustomQuizPayload : jsLesson.buildCustomQuizPayload)({
         fileKey,
         root,
         code,
@@ -257,7 +294,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
                 type="button"
                 className="w-full text-left rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm hover:bg-slate-50"
                 onClick={() => {
-                  const kids = (s as any).childSteps || [];
+                  const kids = getChildSteps(s);
                   setLessonQueue(kids);
                   setCurrentStep(0);
                   setHistory([]);
@@ -309,7 +346,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         </div>
         <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
         <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-          <code>{nextNode ? (language === "python" ? pyLesson.textForNode : jsLesson.textForNode)(nextNode, code) : ""}</code>
+          <code>{nextNode ? (language === "python" ? pyEngine.textForNode : jsLesson.textForNode)(nextNode, code) : ""}</code>
         </pre>
       </div>
 
@@ -416,7 +453,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
               type="button"
               className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
               onClick={handleDigDeeper}
-              disabled={!nextStep?.isDigable}
+              disabled={!getIsDigable(nextStep)}
             >
               <BookOpen className="h-4 w-4" />
               Dig Deeper

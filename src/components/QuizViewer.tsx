@@ -8,9 +8,8 @@ import { isDocstringNode } from "../lib/pyCuration";
 import * as jsCuration from "../lib/jsCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
-import * as pyQuiz from "../lib/pyQuiz";
+import * as pyEngine from "../lib/pyEngine";
 import * as jsQuiz from "../lib/jsQuiz";
-import * as pyLesson from "../lib/pyLesson";
 import * as jsLesson from "../lib/jsLesson";
 
 // Constants moved inside component to depend on language
@@ -299,7 +298,7 @@ const generateQuestionsFromCustom = (
   return qs;
 };
 
-// Heuristic helpers removed; using buildHeuristicQuiz from src/lib/pyQuiz.
+// Heuristic helpers use buildHeuristicQuiz from src/lib/pyEngine (Python) and src/lib/jsQuiz (JS).
 
 export const QuizViewer = ({
   root,
@@ -450,27 +449,32 @@ export const QuizViewer = ({
     }
   };
 
-  // Save split quizzes using the same grouping heuristic as Lesson
+  // Save split quizzes using the same grouping heuristic as Lesson (Python via pyEngine, JS via jsQuiz)
   const saveSplitHeuristic = async (
     profile: "shallow" | "deep",
     opts?: { maxDeepPerStmt?: number }
   ) => {
     if (!root) return;
-    const plan = (
+    const plan =
       language === "python"
-        ? pyLesson.generateLessonPlan
-        : jsLesson.generateLessonPlan
-    )(root, { includeNames: false, enableGrouping: "auto" as const });
+        ? (pyEngine.generateEngineSteps(root, root, code || "", {
+            profile: "shallow",
+            grouping: "auto",
+            includeNames: false,
+          }) as any[])
+        : (jsLesson.generateLessonPlan(root, {
+            includeNames: false,
+            enableGrouping: "auto" as const,
+          }) as any[]);
     const groups = plan.filter(
       (s: any) => (s.node as any)?.isVirtual || s.node.type === "group"
     );
     if (!groups.length) {
       // Fallback to single save
-      const single = (
+      const single =
         language === "python"
-          ? pyQuiz.buildHeuristicQuiz
-          : jsQuiz.buildHeuristicQuiz
-      )(root, code || "", profile, opts);
+          ? pyEngine.buildHeuristicQuiz(root, code || "", profile, opts)
+          : jsQuiz.buildHeuristicQuiz(root, code || "", profile, opts);
       await saveHeuristicQuiz(single, root, `Heuristic ${profile}`);
       alert(`Saved 1 quiz (Heuristic ${profile}).`);
       return;
@@ -501,13 +505,15 @@ export const QuizViewer = ({
       const start = g.node.startIndex;
       const end = g.node.endIndex;
       const vroot = buildGroupRoot(start, end);
-      const quiz = (
+      const quiz =
         language === "python"
-          ? pyQuiz.buildHeuristicQuiz
-          : jsQuiz.buildHeuristicQuiz
-      )(vroot, code || "", profile, opts);
+          ? pyEngine.buildHeuristicQuiz(vroot, code || "", profile, opts)
+          : jsQuiz.buildHeuristicQuiz(vroot, code || "", profile, opts);
       const name =
-        `${g.prompt}`.slice(0, 160) || `Heuristic ${profile} (${i + 1})`;
+        `${(g as any).prompt ?? (g as any).lesson?.prompt ?? ""}`.slice(
+          0,
+          160
+        ) || `Heuristic ${profile} (${i + 1})`;
       await saveHeuristicQuiz(quiz, vroot, name);
       saved += 1;
     }
@@ -638,11 +644,10 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz = (
+                const quiz =
                   language === "python"
-                    ? pyQuiz.buildHeuristicQuiz
-                    : jsQuiz.buildHeuristicQuiz
-                )(root, code || "", "shallow");
+                    ? pyEngine.buildHeuristicQuiz(root, code || "", "shallow")
+                    : jsQuiz.buildHeuristicQuiz(root, code || "", "shallow");
                 saveHeuristicQuiz(quiz, root, "Heuristic shallow")
                   .then(() => alert("Saved heuristic shallow quiz."))
                   .catch(() => alert("Failed to save heuristic shallow quiz."));
@@ -655,11 +660,14 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz = (
+                const quiz =
                   language === "python"
-                    ? pyQuiz.buildHeuristicQuiz
-                    : jsQuiz.buildHeuristicQuiz
-                )(root, code || "", "deep", { maxDeepPerStmt: 6 });
+                    ? pyEngine.buildHeuristicQuiz(root, code || "", "deep", {
+                        maxDeepPerStmt: 6,
+                      })
+                    : jsQuiz.buildHeuristicQuiz(root, code || "", "deep", {
+                        maxDeepPerStmt: 6,
+                      });
                 saveHeuristicQuiz(quiz, root, "Heuristic deep")
                   .then(() => alert("Saved heuristic deep quiz."))
                   .catch(() => alert("Failed to save heuristic deep quiz."));
@@ -1421,7 +1429,7 @@ export const QuizViewer = ({
               start: node.startIndex,
               end: node.endIndex,
               path: (language === "python"
-                ? pyQuiz.computeAstPath
+                ? pyEngine.computeAstPath
                 : jsQuiz.computeAstPath)(root, node),
               preview:
                 typeof code === "string"

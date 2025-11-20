@@ -1,9 +1,10 @@
 import type { TreeSitterAstNode } from "./treeSitter";
 import {
-    isDocstringNode,
-    childrenOfType,
-    firstChildOfType,
-    childByField,
+  isDocstringNode,
+  childrenOfType,
+  firstChildOfType,
+  childByField,
+  buildCuratedSections,
 } from "./pyCuration";
 import { randomString } from "./utils";
 
@@ -82,8 +83,8 @@ export const textForRange = (
 };
 
 export const computeAstPath = (
-    root: TreeSitterAstNode,
-    target: TreeSitterAstNode
+  root: TreeSitterAstNode,
+  target: TreeSitterAstNode
 ): number[] => {
     const path: number[] = [];
     let found = false;
@@ -105,15 +106,39 @@ export const computeAstPath = (
 };
 
 const shuffle = <T>(arr: T[]): T[] => {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) {
-        const j = Math.floor(Math.random() * (i + 1));
-        const t = a[i];
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
         a[i] = a[j];
         a[j] = t;
     }
-    return a;
+  return a;
 };
+
+// Global lightweight distractor pool for padding option lists
+const GENERIC_DISTRACTORS = [
+  "i",
+  "j",
+  "k",
+  "x",
+  "y",
+  "z",
+  "val",
+  "item",
+  "result",
+  "data",
+  "temp",
+  "count",
+  "index",
+  "key",
+  "value",
+  "error",
+  "response",
+  "request",
+  "config",
+  "settings",
+];
 
 // ============================================================================
 // Deep Drill Logic (Replaces legacy quizRules)
@@ -669,62 +694,440 @@ export function buildCustomQuizPayload(params: {
     };
 }
 
+function headerAnswer(stmt: TreeSitterAstNode, code: string): string {
+  const full = code.substring(stmt.startIndex, stmt.endIndex);
+  const colonIdx = full.indexOf(":");
+  return (
+    colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
+  ).trimEnd();
+}
+
 export function buildHeuristicQuiz(
-    root: TreeSitterAstNode,
-    code: string,
-    profile: "shallow" | "deep",
-    opts?: { maxDeepPerStmt?: number; maxQuestions?: number }
+  root: TreeSitterAstNode,
+  code: string,
+  profile: "shallow" | "deep",
+  opts?: { maxDeepPerStmt?: number; maxQuestions?: number }
 ): {
-    id: string;
-    kind: "custom-quiz";
-    createdAt: string;
-    typeLabel?: string;
-    profile?: "shallow" | "normal" | "deep";
-    root: { type: string; start?: number; end?: number };
-    totalCards: number;
-    cards: Array<{
-        order: number;
-        type: string;
-        text: string;
-        action: "next" | "dig";
-        sourceRef?: SourceRef;
-        question?: string;
-        options?: string[];
-        answerLabel?: string;
-    }>;
-} {
-    // Generate all steps with quiz questions
-    const steps = generateEngineSteps(root, root, code, {
-        profile,
-        grouping: false,
-        __noGroup: true,
-    });
-
-    // Flatten questions
-    const allQuestions = steps.flatMap((s) => s.quiz?.questions || []);
-
-    // Shuffle and limit
-    const shuffled = shuffle(allQuestions);
-    const max = opts?.maxQuestions || 20;
-    const selected = shuffled.slice(0, max);
-
-    return {
-        id: randomString(12),
-        kind: "custom-quiz",
-        createdAt: new Date().toISOString(),
-        typeLabel: "Generated Quiz",
-        profile,
-        root: { type: root.type, start: root.startIndex, end: root.endIndex },
-        totalCards: selected.length,
-        cards: selected.map((q, i) => ({
-            order: i,
-            type: "quiz_question",
-            text: q.stem, // Using stem as text for now
-            action: "next",
-            sourceRef: q.sourceRefs[0],
-            question: q.stem,
-            options: q.options,
-            answerLabel: q.answerLabel,
-        })),
+  id: string;
+  kind: "custom-quiz";
+  createdAt: string;
+  typeLabel?: string;
+  profile?: "shallow" | "normal" | "deep";
+  root: { type: string; start?: number; end?: number };
+  totalCards: number;
+  cards: Array<{
+    order: number;
+    type: string;
+    text: string;
+    action: "next" | "dig";
+    sourceRef?: {
+      nodeType: string;
+      start: number;
+      end: number;
+      path: number[];
+      preview?: string;
     };
+    semanticRole?: string;
+    question?: string;
+    generatorRule?: string;
+    difficulty?: "easy" | "medium" | "hard";
+    // optional progressive reveal anchors
+    revealEndBeforeChild?: number;
+    revealEndAfterChild?: number;
+  }>;
+} {
+  if (profile === "deep") {
+    throw new Error("pyEngine.buildHeuristicQuiz: deep profile not implemented");
+  }
+
+  const cards: Array<{
+    order: number;
+    type: string;
+    text: string;
+    action: "next" | "dig";
+    sourceRef?: {
+      nodeType: string;
+      start: number;
+      end: number;
+      path: number[];
+      preview?: string;
+    };
+    semanticRole?: string;
+    question?: string;
+    generatorRule?: string;
+    difficulty?: "easy" | "medium" | "hard";
+    revealEndBeforeChild?: number;
+    revealEndAfterChild?: number;
+  }> = [];
+  let order = 0;
+
+  const emitCard = (
+    text: string,
+    q: string,
+    node: TreeSitterAstNode,
+    kind?: string,
+    semanticRole?: string
+  ) => {
+    cards.push({
+      order: order++,
+      type: kind || node.type,
+      text,
+      action: "next",
+      question: q,
+      semanticRole,
+      sourceRef: {
+        nodeType: node.type,
+        start: node.startIndex,
+        end: node.endIndex,
+        path: computeAstPath(root, node),
+        preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
+      },
+      // progressive reveal anchors for line-by-line shallow/normal quizzes
+      revealEndBeforeChild: node.startIndex,
+      revealEndAfterChild: node.endIndex,
+    });
+  };
+
+  const makeIdentifierPool = (spanStart: number, spanEnd: number): string[] => {
+    const snippet = code.slice(spanStart, spanEnd);
+    const re = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const out = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(snippet))) out.add(m[0]);
+    return Array.from(out);
+  };
+
+  const makeStringPool = (spanStart: number, spanEnd: number): string[] => {
+    const snippet = code.slice(spanStart, spanEnd);
+    const re = /(['"])((?:\\.|(?!\1).)*)\1/g;
+    const out = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(snippet))) {
+      const s = m[2];
+      if (s.trim().length > 0) out.add(s);
+    }
+    return Array.from(out);
+  };
+
+  const emitHeader = (stmt: TreeSitterAstNode) => {
+    const answerText = headerAnswer(stmt, code);
+    emitCard(
+      answerText,
+      "Write the full header line",
+      stmt,
+      stmt.type,
+      "header"
+    );
+  };
+
+  const walkBlock = (block: TreeSitterAstNode) => {
+    const kids = (block.namedChildren || []).filter(
+      (c) => c.type !== "comment" && !isDocstringNode(c, block)
+    );
+    for (const stmt of kids) walkStmt(stmt);
+  };
+
+  const walkStmt = (node: TreeSitterAstNode) => {
+    switch (node.type) {
+      case "import_from_statement": {
+        const groups = buildCuratedSections(node);
+        const moduleGroup = groups.find((g) => g.key === "module");
+        if (moduleGroup?.items?.[0]) {
+          const mod = moduleGroup.items[0];
+          const modTxt = code.slice(mod.startIndex, mod.endIndex);
+          emitCard(modTxt, "What is the module?", mod, "module");
+        }
+        const namesGroup = groups.find((g) => g.key === "names");
+        const items = namesGroup?.items || [];
+        const correct = items
+          .map((n) => code.slice(n.startIndex, n.endIndex))
+          .filter(Boolean);
+        // Build padded option pool (always up to 10)
+        const idPool = makeIdentifierPool(
+          root.startIndex,
+          root.endIndex
+        ).filter((s) => !correct.includes(s));
+        let pool = Array.from(new Set<string>([...correct, ...idPool]));
+        if (pool.length < 10) {
+          const needed = 10 - pool.length;
+          const pad = shuffle(GENERIC_DISTRACTORS)
+            .filter((d) => !pool.includes(d))
+            .slice(0, needed);
+          pool.push(...pad);
+        }
+        const MAX = 10;
+        const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+        const optionPool = shuffle([
+          ...correct,
+          ...extras.slice(0, Math.max(0, MAX - correct.length)),
+        ]).slice(0, MAX);
+        const snippet = code.slice(node.startIndex, node.endIndex);
+        // Reveal anchors for import-from: show header up to first imported name, then reveal through last name
+        const firstStart = items.length
+          ? items.reduce((m, it) => Math.min(m, it.startIndex), items[0].startIndex)
+          : undefined;
+        const lastEnd = items.length
+          ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
+          : undefined;
+        cards.push({
+          order: order++,
+          type: "imported_names_multi",
+          text: snippet,
+          action: "next",
+          question: `Which names are imported?`,
+          generatorRule: "import_from.names",
+          sourceRef: {
+            nodeType: node.type,
+            start: node.startIndex,
+            end: node.endIndex,
+            path: computeAstPath(root, node),
+            preview: snippet.slice(0, 120),
+          },
+          questionType: "multi",
+          multiCorrect: correct,
+          optionPool,
+          // progressive reveal anchors
+          revealStart: node.startIndex,
+          revealEndBeforeChild: firstStart,
+          revealEndAfterChild: lastEnd,
+        } as any);
+        break;
+      }
+      case "import_statement": {
+        const groups = buildCuratedSections(node);
+        const namesGroup = groups.find((g) => g.key === "names");
+        const items = namesGroup?.items || [];
+        const correct = items
+          .map((n) => code.slice(n.startIndex, n.endIndex))
+          .filter(Boolean);
+        const idPool = makeIdentifierPool(
+          root.startIndex,
+          root.endIndex
+        ).filter((s) => !correct.includes(s));
+        let pool = Array.from(new Set<string>([...correct, ...idPool]));
+        if (pool.length < 10) {
+          const needed = 10 - pool.length;
+          const pad = shuffle(GENERIC_DISTRACTORS)
+            .filter((d) => !pool.includes(d))
+            .slice(0, needed);
+          pool.push(...pad);
+        }
+        const MAX = 10;
+        const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+        const optionPool = shuffle([
+          ...correct,
+          ...extras.slice(0, Math.max(0, MAX - correct.length)),
+        ]).slice(0, MAX);
+        const snippet = code.slice(node.startIndex, node.endIndex);
+        const namesGroup2 = groups.find((g) => g.key === "names");
+        const items2 = namesGroup2?.items || [];
+        const firstStart2 = items2.length
+          ? items2.reduce((m, it) => Math.min(m, it.startIndex), items2[0].startIndex)
+          : undefined;
+        const lastEnd2 = items2.length
+          ? items2.reduce((m, it) => Math.max(m, it.endIndex), items2[0].endIndex)
+          : undefined;
+        cards.push({
+          order: order++,
+          type: "imported_names_multi",
+          text: snippet,
+          action: "next",
+          question: `Which names are imported?`,
+          generatorRule: "import.names",
+          sourceRef: {
+            nodeType: node.type,
+            start: node.startIndex,
+            end: node.endIndex,
+            path: computeAstPath(root, node),
+            preview: snippet.slice(0, 120),
+          },
+          questionType: "multi",
+          multiCorrect: correct,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: firstStart2,
+          revealEndAfterChild: lastEnd2,
+        } as any);
+        break;
+      }
+      case "function_definition": {
+        const sections = buildCuratedSections(node);
+        const argsGroup = sections.find((s) => s.key === "args");
+        const returnsGroup = sections.find((s) => s.key === "returns");
+
+        if (argsGroup) {
+          const params = argsGroup.items || [];
+          const names: string[] = [];
+          for (const p of params) {
+            const nameNode = (p.namedChildren || []).find(
+              (c) => c.type === "identifier"
+            );
+            if (nameNode)
+              names.push(code.slice(nameNode.startIndex, nameNode.endIndex));
+            else names.push(code.slice(p.startIndex, p.endIndex));
+          }
+          const block = firstChildOfType(node, "block");
+          const spanStart = block ? block.startIndex : node.startIndex;
+          const spanEnd = block ? block.endIndex : node.endIndex;
+          const idPool = makeIdentifierPool(spanStart, spanEnd).filter(
+            (s) => !names.includes(s)
+          );
+          let pool = Array.from(new Set<string>([...names, ...idPool]));
+          if (pool.length < 10) {
+            const needed = 10 - pool.length;
+            const pad = shuffle(GENERIC_DISTRACTORS)
+              .filter((d) => !pool.includes(d))
+              .slice(0, needed);
+            pool.push(...pad);
+          }
+          const MAX = 10;
+          const extras = shuffle(pool.filter((p) => !names.includes(p)));
+          const optionPool = shuffle([
+            ...names,
+            ...extras.slice(0, Math.max(0, MAX - names.length)),
+          ]).slice(0, MAX);
+          const header = headerAnswer(node, code);
+          // Reveal anchors for params: prefix through first param, then through last param
+          const firstParamStart = params.length
+            ? params.reduce((m, it) => Math.min(m, it.startIndex), params[0].startIndex)
+            : undefined;
+          const lastParamEnd = params.length
+            ? params.reduce((m, it) => Math.max(m, it.endIndex), params[0].endIndex)
+            : undefined;
+          cards.push({
+            order: order++,
+            type: "function_params_multi",
+            text: header,
+            action: "next",
+            question: `Which of the following are parameters of this function?`,
+            generatorRule: "func.params-multi",
+            sourceRef: {
+              nodeType: node.type,
+              start: node.startIndex,
+              end: node.endIndex,
+              path: computeAstPath(root, node),
+              preview: code
+                .slice(node.startIndex, node.endIndex)
+                .slice(0, 120),
+            },
+            questionType: "multi",
+            multiCorrect: names,
+            optionPool,
+            revealStart: node.startIndex,
+            revealEndBeforeChild: firstParamStart,
+            revealEndAfterChild: lastParamEnd,
+          } as any);
+        }
+        if (returnsGroup) {
+          for (let i = 0; i < returnsGroup.items.length; i++) {
+            const item = returnsGroup.items[i];
+            const text = code.substring(item.startIndex, item.endIndex);
+            emitCard(
+              text,
+              "What is the return type?",
+              item,
+              item.type,
+              "returns"
+            );
+          }
+        }
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "class_definition": {
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "while_statement":
+      case "for_statement": {
+        emitHeader(node);
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        const elseCl = firstChildOfType(node, "else_clause");
+        if (elseCl) {
+          emitHeader(elseCl);
+          const eb = firstChildOfType(elseCl, "block");
+          if (eb) walkBlock(eb);
+        }
+        break;
+      }
+      case "if_statement": {
+        emitHeader(node);
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        for (const e of childrenOfType(node, "elif_clause")) {
+          emitHeader(e);
+          const b = firstChildOfType(e, "block");
+          if (b) walkBlock(b);
+        }
+        const elseCl = firstChildOfType(node, "else_clause");
+        if (elseCl) {
+          emitHeader(elseCl);
+          const eb = firstChildOfType(elseCl, "block");
+          if (eb) walkBlock(eb);
+        }
+        break;
+      }
+      case "with_statement": {
+        emitHeader(node);
+        const block = firstChildOfType(node, "block");
+        if (block) walkBlock(block);
+        break;
+      }
+      case "try_statement": {
+        emitHeader(node);
+        const body = firstChildOfType(node, "block");
+        if (body) walkBlock(body);
+        for (const h of (node.namedChildren || []).filter((c) =>
+          c.type.includes("except")
+        )) {
+          emitHeader(h);
+          const b = firstChildOfType(h, "block");
+          if (b) walkBlock(b);
+        }
+        const elseCl = firstChildOfType(node, "else_clause");
+        if (elseCl) {
+          emitHeader(elseCl);
+          const eb = firstChildOfType(elseCl, "block");
+          if (eb) walkBlock(eb);
+        }
+        const finCl = firstChildOfType(node, "finally_clause");
+        if (finCl) {
+          emitHeader(finCl);
+          const fb = firstChildOfType(finCl, "block");
+          if (fb) walkBlock(fb);
+        }
+        break;
+      }
+      default: {
+        const text = code.slice(node.startIndex, node.endIndex);
+        emitCard(text, "What comes next?", node);
+        break;
+      }
+    }
+  };
+
+  {
+    const tops = (root.namedChildren || []).filter(
+      (c) => c.type !== "comment" && !isDocstringNode(c, root)
+    );
+    for (const top of tops) walkStmt(top);
+  }
+  if (typeof opts?.maxQuestions === "number") {
+    const n = Math.min(cards.length, opts.maxQuestions);
+    cards.length = n;
+  }
+
+  return {
+    id: "",
+    kind: "custom-quiz",
+    createdAt: new Date().toISOString(),
+    typeLabel: "CustomQuizV1.1",
+    profile,
+    root: { type: root.type, start: root.startIndex, end: root.endIndex },
+    totalCards: cards.length,
+    cards,
+  };
 }
