@@ -197,9 +197,9 @@ function drillDown(node: TreeSitterAstNode, context: string = ""): DrillPart[] {
     } else if (node.type === "subscript") {
         const children = node.namedChildren || [];
         const value = childByField(node, "value") || children[0];
-        const subscript = childByField(node, "subscript") || children[1];
+        const slice = childByField(node, "slice") || children[1];
         if (value) parts.push(...drillDown(value, "subscript_base"));
-        if (subscript) parts.push(...drillDown(subscript, "subscript_index"));
+        if (slice) parts.push(...drillDown(slice, "subscript_index"));
     } else if (node.type === "dictionary") {
         for (const child of node.namedChildren || []) {
             if (child.type === "pair") {
