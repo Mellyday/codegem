@@ -158,8 +158,8 @@ type SourceRef = {
   preview?: string;
 };
 
-// Saved Custom Quiz structures (v1 and v1.1)
-type SavedCustomQuizCardV11 = {
+  // Saved Custom Quiz structures (v1 and v1.1)
+  type SavedCustomQuizCardV11 = {
   order: number;
   type: string;
   text: string;
@@ -296,6 +296,27 @@ const generateQuestionsFromCustom = (
   }
 
   return qs;
+};
+
+// Compute reveal anchors for a question, with robust fallbacks so that
+// older quizzes (that only have sourceRefs) still drive the code viewer.
+const revealBeforeForQuestion = (q: Question | undefined): number | undefined => {
+  if (!q) return undefined;
+  if (typeof q.revealEndBeforeChild === "number") return q.revealEndBeforeChild;
+  if (typeof q.revealStart === "number") return q.revealStart;
+  const firstRef = Array.isArray(q.sourceRefs) ? q.sourceRefs[0] : undefined;
+  if (firstRef && typeof firstRef.start === "number") return firstRef.start;
+  return undefined;
+};
+
+const revealAfterForQuestion = (q: Question | undefined): number | undefined => {
+  if (!q) return undefined;
+  if (typeof q.revealEndAfterChild === "number") return q.revealEndAfterChild;
+  const firstRef = Array.isArray(q.sourceRefs) ? q.sourceRefs[0] : undefined;
+  if (firstRef && typeof firstRef.end === "number") return firstRef.end;
+  if (typeof q.revealEndBeforeChild === "number") return q.revealEndBeforeChild;
+  if (typeof q.revealStart === "number") return q.revealStart;
+  return undefined;
 };
 
 // Heuristic helpers use buildHeuristicQuiz from src/lib/pyEngine (Python) and src/lib/jsQuiz (JS).
@@ -533,12 +554,9 @@ export const QuizViewer = ({
       setAnswers(new Array(qs.length).fill(undefined));
       setAnsweredFlags(new Array(qs.length).fill(false));
       setExpandedOptions({});
-      // Initial reveal if available (applies to AST and custom)
-      if (qs.length > 0 && typeof qs[0].revealEndBeforeChild === "number") {
-        onRevealChange?.(qs[0].revealEndBeforeChild);
-      } else {
-        onRevealChange?.(undefined);
-      }
+      // Initial reveal window for the first question (AST, heuristic, or custom).
+      const initialReveal = qs.length > 0 ? revealBeforeForQuestion(qs[0]) : undefined;
+      onRevealChange?.(initialReveal);
     }
   }, [mode, root, breakdownTypes, code, selectedCustom]);
 
@@ -780,9 +798,7 @@ export const QuizViewer = ({
           return n;
         });
         if (opt === currentQ.answerLabel) setScore((s) => s + 1);
-        if (typeof currentQ.revealEndAfterChild === "number") {
-          onRevealChange?.(currentQ.revealEndAfterChild);
-        }
+        onRevealChange?.(revealAfterForQuestion(currentQ));
       }
     };
 
@@ -800,6 +816,7 @@ export const QuizViewer = ({
         return true;
       })();
       if (isRight) setScore((s) => s + 1);
+      onRevealChange?.(revealAfterForQuestion(currentQ));
     };
 
     const next = () => {
@@ -817,12 +834,8 @@ export const QuizViewer = ({
           setSelectedMulti(new Set());
         }
         // Update reveal window for the next question if available (AST or custom)
-        const nextQ = questions[current + 1];
-        if (nextQ && typeof nextQ.revealEndBeforeChild === "number") {
-          onRevealChange?.(nextQ.revealEndBeforeChild);
-        } else {
-          onRevealChange?.(undefined);
-        }
+        const nextQ = questions[nextIdx];
+        onRevealChange?.(revealBeforeForQuestion(nextQ));
       }
     };
 
@@ -839,11 +852,7 @@ export const QuizViewer = ({
           setSelectedMulti(new Set());
         }
         const q = questions[idx];
-        if (q && typeof q.revealEndBeforeChild === "number") {
-          onRevealChange?.(q.revealEndBeforeChild);
-        } else {
-          onRevealChange?.(undefined);
-        }
+        onRevealChange?.(revealBeforeForQuestion(q));
       }
     };
 
@@ -863,11 +872,7 @@ export const QuizViewer = ({
         setSelectedMulti(new Set());
       }
       const q = questions[clamped];
-      if (q && typeof q.revealEndBeforeChild === "number") {
-        onRevealChange?.(q.revealEndBeforeChild);
-      } else {
-        onRevealChange?.(undefined);
-      }
+      onRevealChange?.(revealBeforeForQuestion(q));
     };
 
     const stepNavItems = (() => {
@@ -912,11 +917,7 @@ export const QuizViewer = ({
       setSelected(undefined);
       setCurrent(before.length);
       const first = deeper[0];
-      if (first && typeof first.revealEndBeforeChild === "number") {
-        onRevealChange?.(first.revealEndBeforeChild);
-      } else {
-        onRevealChange?.(undefined);
-      }
+      onRevealChange?.(revealBeforeForQuestion(first));
     };
 
     return (

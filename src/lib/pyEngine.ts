@@ -640,7 +640,22 @@ export function buildCustomQuizPayload(params: {
             question = "Write the full header line";
         }
 
-        const { answerText } = maskAndAnswerForStep(step, root, code);
+        const { masks, answerText } = maskAndAnswerForStep(step, root, code);
+
+        // Compute progressive reveal anchors for this step.
+        // Default: reveal nothing of this node before the question,
+        // then reveal the full node after it is answered.
+        const revealStart = step.node.startIndex;
+        let revealEndBeforeChild: number | undefined = step.node.startIndex;
+        let revealEndAfterChild: number | undefined = step.node.endIndex;
+
+        // For header-like nodes (if/elif/while/for headers), maskAndAnswerForStep
+        // returns a prefix mask. Show that prefix before asking, then reveal the rest.
+        if (masks.length > 0) {
+            revealEndBeforeChild = masks[0].end;
+            revealEndAfterChild = step.node.endIndex;
+        }
+
         const sourceRef = {
             nodeType: step.node.type,
             start: step.node.startIndex,
@@ -657,6 +672,9 @@ export function buildCustomQuizPayload(params: {
             question,
             sourceRef,
             source,
+            revealStart,
+            revealEndBeforeChild,
+            revealEndAfterChild,
         };
     };
 
@@ -690,6 +708,10 @@ export function buildCustomQuizPayload(params: {
             question: c.question,
             semanticRole: c.semanticRole,
             sourceRef: (c as any).sourceRef,
+            // progressive reveal anchors used by QuizViewer for custom quizzes
+            revealStart: (c as any).revealStart,
+            revealEndBeforeChild: (c as any).revealEndBeforeChild,
+            revealEndAfterChild: (c as any).revealEndAfterChild,
         })),
     };
 }
