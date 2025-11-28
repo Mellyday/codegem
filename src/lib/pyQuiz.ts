@@ -934,7 +934,10 @@ export function buildHeuristicQuiz(
         const snippet = code.slice(node.startIndex, node.endIndex);
         // Reveal anchors for import-from: show header up to first imported name, then reveal through last name
         const firstStart = items.length
-          ? items.reduce((m, it) => Math.min(m, it.startIndex), items[0].startIndex)
+          ? items.reduce(
+              (m, it) => Math.min(m, it.startIndex),
+              items[0].startIndex
+            )
           : undefined;
         const lastEnd = items.length
           ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
@@ -992,10 +995,16 @@ export function buildHeuristicQuiz(
         const namesGroup2 = groups.find((g) => g.key === "names");
         const items2 = namesGroup2?.items || [];
         const firstStart2 = items2.length
-          ? items2.reduce((m, it) => Math.min(m, it.startIndex), items2[0].startIndex)
+          ? items2.reduce(
+              (m, it) => Math.min(m, it.startIndex),
+              items2[0].startIndex
+            )
           : undefined;
         const lastEnd2 = items2.length
-          ? items2.reduce((m, it) => Math.max(m, it.endIndex), items2[0].endIndex)
+          ? items2.reduce(
+              (m, it) => Math.max(m, it.endIndex),
+              items2[0].endIndex
+            )
           : undefined;
         cards.push({
           order: order++,
@@ -1059,10 +1068,16 @@ export function buildHeuristicQuiz(
           const header = headerAnswer(node, code);
           // Reveal anchors for params: prefix through first param, then through last param
           const firstParamStart = params.length
-            ? params.reduce((m, it) => Math.min(m, it.startIndex), params[0].startIndex)
+            ? params.reduce(
+                (m, it) => Math.min(m, it.startIndex),
+                params[0].startIndex
+              )
             : undefined;
           const lastParamEnd = params.length
-            ? params.reduce((m, it) => Math.max(m, it.endIndex), params[0].endIndex)
+            ? params.reduce(
+                (m, it) => Math.max(m, it.endIndex),
+                params[0].endIndex
+              )
             : undefined;
           cards.push({
             order: order++,

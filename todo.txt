@@ -1,0 +1,45 @@
+1. Missing Logic: Decorator
+Original: pyLesson explicitly handles decorated_definition. It iterates over decorators first, creating steps for them, before unwrapping the inner function/class.
+Current pyEngine: There is no case for decorated_definition. The engine will likely hit the default case or treat the decorator block as one giant unknown step, losing the granular lesson walk-through of decorators.
+2. Missing Logic: Import parsing
+Original: pyQuiz uses buildCuratedSections to create sophisticated Multi-Select questions ("Which names are imported?"). pyLesson also uses grouping for imports.
+Current pyEngine: The generateEngineSteps function has no specific handling for import_statement or import_from_statement.
+Consequence: You lose the specific "Select all imported names" quiz type.
+Note: buildCuratedSections is imported in pyEngine but only used in the legacy copy-pasted function at the bottom, not in the main generateEngineSteps.
+3. Missing Logic: Call chains
+Original: extractCallChain allowed specifically quizzing on methods in a chain (e.g., df.groupby().mean()).
+Current pyEngine: The drillDown logic for attribute is shallow (object/attribute). It does not flatten a long chain into distinct steps, so deep chaining quizzes are lost.
+4. Missing Logic: Distractors generation
+pyQuiz has buildDistractors, pyEngine has no such thing 
+5. Dictionary Quiz 
+pyQuiz has Multi-Select: "Which keys are present?" (Checks specifically for keys).
+pyEngine has individual drill with each pair, asking about dict_key and dict_value
+6. Function params
+pyQuiz has Multi-Select: "Which of the following are parameters?"
+pyEngine has Individual Drill: Drills down into generic argument_i or parameter.
+7. Progressive Reveal difference 
+Original pyQuiz: Calculated revealEndBeforeChild very carefully inside specific rules. For example, in a Dictionary, it would reveal the opening brace { but stop before the first key to ask "What keys are here?".
+Current pyEngine:
+maskAndAnswerForStep handles headers (if/while/for) correctly.
+However, for Deep Drills (the quiz portion), the reveal logic is generic. buildCustomQuizPayload defaults to revealing the specific node. You lose the specific "Reveal the list brackets but hide the items" nuance unless you add logic to drillDown to return reveal anchors.
+
+DIFFERENCES (INVESTIGATE)
+1. pyQuiz is rule based, and pyEngine id drillDown based
+I'm not sure what this means in terms of logic but well there's difference.
+Is it only the question stem though? Or things more important?
+
+ZOMBIE CODE 
+At the bottom of your pyEngine.ts, you have re-exported buildHeuristicQuiz.
+The Issue: This function is a near-exact copy of the logic from pyQuiz.ts. It uses the old generateQuestionsV11 (which is not defined in pyEngine.ts except inside the body of that legacy function if you copied dependencies, but based on your imports, generateQuestionsV11 is missing).
+The Conflict:
+generateEngineSteps creates EngineStep objects (New Architecture).
+buildHeuristicQuiz creates cards directly (Old Architecture).
+Recommendation: You should likely delete buildHeuristicQuiz from pyEngine.ts entirely and rely on buildCustomQuizPayload (which converts EngineSteps to cards), OR you need to port the sophisticated logic (imports, multi-selects) from buildHeuristicQuiz into generateEngineSteps.
+
+
+LATER
+1. getprompt etc is an adapter layer for the js bcs the shape is now different, ie. when we are done refactoring the python part,
+let's make sure when we are refactoring the js part to get this cases right
+2. the "back to sandbox" button need improvements
+* should be return to ast/to the parent folder depending on the view
+
