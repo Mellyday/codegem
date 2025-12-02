@@ -482,6 +482,7 @@ export const QuizViewer = ({
             profile: "shallow",
             grouping: "auto",
             includeNames: false,
+            generateQuiz: false,
           }) as any[])
         : (jsLesson.generateLessonPlan(root, {
             includeNames: false,

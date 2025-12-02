@@ -73,6 +73,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
               profile: "shallow",
               grouping: "auto",
               includeNames: false,
+              generateQuiz: false,
             }) as unknown as LessonStep[])
           : (jsLesson.generateLessonPlan(root, {
               includeNames: false,
@@ -176,6 +177,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
                   profile: "shallow",
                   grouping: false,
                   includeNames: false,
+                  generateQuiz: false,
                   __noGroup: true,
                 }) as unknown as LessonStep[])
               : (jsLesson.generateLessonPlan(stepToExpand.node as any, {
