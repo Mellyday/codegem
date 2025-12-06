@@ -87,6 +87,92 @@ const generateDistractors = (correct: string): string[] => {
   return Array.from(out);
 };
 
+const normalizePool = (pool: string[] | undefined, correct: Set<string>) => {
+  if (!Array.isArray(pool)) return [];
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const item of pool) {
+    const v = String(item ?? "").trim();
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (correct.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(v);
+  }
+  return cleaned;
+};
+
+const sampleDistractors = (
+  pool: string[],
+  count: number,
+  correct: Set<string>
+) => {
+  const shuffled = shuffleArray(pool.slice());
+  const seen = new Set<string>();
+  const picks: string[] = [];
+  for (const item of shuffled) {
+    const v = String(item ?? "").trim();
+    if (!v) continue;
+    const key = v.toLowerCase();
+    if (correct.has(key) || seen.has(key)) continue;
+    seen.add(key);
+    picks.push(v);
+    if (picks.length >= count) break;
+  }
+  return picks;
+};
+
+const buildSingleChoiceOptions = (
+  correct: string,
+  llmPool?: string[] | null
+) => {
+  const correctKey = correct.toLowerCase();
+  const correctSet = new Set([correctKey]);
+  const pool = normalizePool(llmPool ?? undefined, correctSet);
+  const distractors = sampleDistractors(pool, 3, correctSet);
+  while (distractors.length < 3) {
+    const d = randomString(
+      Math.max(4, Math.min(8, String(correct || "").length || 6))
+    );
+    const key = d.toLowerCase();
+    if (
+      !correctSet.has(key) &&
+      !distractors.some((x) => x.toLowerCase() === key)
+    ) {
+      distractors.push(d);
+    }
+  }
+  return shuffleArray([correct, ...distractors]);
+};
+
+const MULTI_OPTION_TARGET = 10;
+const buildMultiChoiceOptions = (
+  correct: string[],
+  llmPool?: string[] | null,
+  fallbackPool?: string[] | null
+) => {
+  const correctSet = new Set(correct.map((c) => c.toLowerCase()));
+  const falseNeeded = Math.max(0, MULTI_OPTION_TARGET - correct.length);
+  const poolSource = [
+    ...(Array.isArray(llmPool) ? llmPool : []),
+    ...(Array.isArray(fallbackPool) ? fallbackPool : []),
+  ];
+  const pool = normalizePool(poolSource, correctSet);
+  const distractors = sampleDistractors(pool, falseNeeded, correctSet);
+  while (distractors.length < falseNeeded) {
+    const d = randomString(6);
+    const key = d.toLowerCase();
+    if (
+      !correctSet.has(key) &&
+      !distractors.some((x) => x.toLowerCase() === key)
+    ) {
+      distractors.push(d);
+    }
+  }
+  const options = shuffleArray([...correct, ...distractors]);
+  return options;
+};
+
 const textForNode = (
   node: TreeSitterAstNode,
   code?: string
@@ -218,25 +304,16 @@ const generateQuestionsFromCustom = (
     const isMulti = c.questionType === "multi" && Array.isArray(c.multiCorrect);
     if (isMulti) {
       const stem = c.question || "Select all that apply.";
-      // Prefer provided optionPool; fallback to a minimal pool containing correct answers
-      let options = Array.isArray(c.optionPool) ? (c.optionPool as string[]).slice() : [];
-      if (!options.length) {
-        const correct = Array.isArray(c.multiCorrect) ? c.multiCorrect : [];
-        // pad with harmless gibberish to reach at least 6 options
-        const pad: string[] = [];
-        while (pad.length < Math.max(0, 6 - correct.length)) {
-          const d = randomString(6);
-          if (!correct.includes(d) && !pad.includes(d)) pad.push(d);
-        }
-        options = [...correct, ...pad];
-      }
-      options = shuffleArray(options);
+      const correct = Array.isArray(c.multiCorrect) ? c.multiCorrect : [];
+      const llmPool = Array.isArray(c.llmDistractors) ? c.llmDistractors : undefined;
+      const optionPool = Array.isArray(c.optionPool) ? c.optionPool : undefined;
+      const options = buildMultiChoiceOptions(correct, llmPool, optionPool);
       qs.push({
         stem,
         answerLabel: "", // unused for multi
         options,
         questionType: "multi",
-        answerLabels: (c.multiCorrect as string[]) || [],
+        answerLabels: correct || [],
         kind: c.type,
         generatorRule: c.generatorRule,
         difficulty: c.difficulty,
@@ -257,22 +334,10 @@ const generateQuestionsFromCustom = (
     }
 
     // Single-choice fallback
-    const correct = c.text;
+    const correct = c.text || "";
     const stem = c.question || "What comes next?";
-    // Prefer saved LLM distractors when present; sample up to 3
-    const llm = Array.isArray(c.llmDistractors)
-      ? (c.llmDistractors as string[]).filter((d) => d && d !== correct)
-      : [];
-    const sample = (arr: string[], k: number) => {
-      const a = shuffleArray(arr.slice());
-      return a.slice(0, k);
-    };
-    const distractors = [...sample(llm, 3)];
-    while (distractors.length < 3) {
-      const d = randomString(Math.max(4, Math.min(8, String(correct || "").length || 6)));
-      if (d !== correct && !distractors.includes(d)) distractors.push(d);
-    }
-    const options = shuffleArray([correct, ...distractors]);
+    const llmPool = Array.isArray(c.llmDistractors) ? c.llmDistractors : undefined;
+    const options = buildSingleChoiceOptions(correct, llmPool);
     qs.push({
       stem,
       answerLabel: correct,

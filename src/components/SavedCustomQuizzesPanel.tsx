@@ -129,6 +129,8 @@ export function SavedCustomQuizzesPanel({
   const [list, setList] = useState<SavedCustomQuizV11[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
+  const [generatingId, setGeneratingId] = useState<string | undefined>(undefined);
+  const [status, setStatus] = useState<string | undefined>(undefined);
 
   const load = async () => {
     try {
@@ -163,6 +165,37 @@ export function SavedCustomQuizzesPanel({
     // reload when fileKey changes
   }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
+  const handleGenerateDistractors = async (quizId: string) => {
+    try {
+      setGeneratingId(quizId);
+      setStatus(undefined);
+      const res = await fetch(
+        `/api/quizzes/${encodeURIComponent(quizId)}/distractors`,
+        {
+          method: "POST",
+          cache: "no-store",
+          headers: { "Content-Type": "application/json" },
+        }
+      );
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status}: ${txt || "failed"}`);
+      }
+      const data = await res.json().catch(() => ({}));
+      const updated = Array.isArray(data.updatedCards)
+        ? data.updatedCards.length
+        : 0;
+      setStatus(
+        `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
+      );
+    } catch (e: any) {
+      setStatus(e?.message || "Failed to generate distractors.");
+    } finally {
+      setGeneratingId(undefined);
+      await load();
+    }
+  };
+
   return (
     <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
       <div className="mb-2 flex items-center justify-between">
@@ -176,6 +209,11 @@ export function SavedCustomQuizzesPanel({
           {loading ? "Loading…" : "Refresh"}
         </button>
       </div>
+      {status && (
+        <div className="mb-2 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+          {status}
+        </div>
+      )}
       {error && (
         <div className="mb-2 rounded border border-rose-200 bg-rose-50 p-2 text-xs text-rose-600">
           {error}
@@ -185,48 +223,74 @@ export function SavedCustomQuizzesPanel({
         <p className="text-xs italic text-slate-400">No custom quizzes saved</p>
       ) : (
         <ul className="space-y-2">
-          {list.map((q) => (
-            <li
-              key={q.id}
-              className="flex items-center justify-between rounded bg-white px-3 py-2 text-xs shadow-sm"
-            >
-              <div className="flex-1">
-                <div className="text-slate-700">
-                  {q.root.type}
-                  <span className="ml-2 text-slate-400">· {q.totalCards} cards</span>
+          {list.map((q) => {
+            const hasDistractors =
+              q.cards.length > 0 &&
+              q.cards.every(
+                (c) =>
+                  Array.isArray(c.llmDistractors) &&
+                  (c.llmDistractors as string[]).length > 0
+              );
+            return (
+              <li
+                key={q.id}
+                className="flex items-center justify-between rounded bg-white px-3 py-2 text-xs shadow-sm"
+              >
+                <div className="flex-1">
+                  <div className="text-slate-700">
+                    {q.root.type}
+                    <span className="ml-2 text-slate-400">· {q.totalCards} cards</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-slate-400">
+                    <span>{new Date(q.createdAt).toLocaleString()}</span>
+                    <span
+                      className={
+                        hasDistractors
+                          ? "text-green-600 font-semibold"
+                          : "text-amber-600 font-semibold"
+                      }
+                    >
+                      {hasDistractors ? "Distractors ready" : "Not generated"}
+                    </span>
+                  </div>
                 </div>
-                <div className="text-slate-400">
-                  {new Date(q.createdAt).toLocaleString()}
+                <div className="ml-3 flex gap-2">
+                  <button
+                    type="button"
+                    className="rounded-md bg-amber-500 px-2.5 py-1 text-white shadow hover:bg-amber-600"
+                    onClick={() => onStartSaved(q)}
+                    disabled={loading}
+                  >
+                    Start
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+                    onClick={() => handleGenerateDistractors(q.id)}
+                    disabled={loading || generatingId === q.id}
+                  >
+                    {generatingId === q.id ? "Generating…" : "Generate"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
+                    onClick={async () => {
+                      try {
+                        await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, {
+                          method: "DELETE",
+                          cache: "no-store",
+                        });
+                      } catch {}
+                      await load();
+                    }}
+                    disabled={loading}
+                  >
+                    Delete
+                  </button>
                 </div>
-              </div>
-              <div className="ml-3 flex gap-2">
-                <button
-                  type="button"
-                  className="rounded-md bg-amber-500 px-2.5 py-1 text-white shadow hover:bg-amber-600"
-                  onClick={() => onStartSaved(q)}
-                  disabled={loading}
-                >
-                  Start
-                </button>
-                <button
-                  type="button"
-                  className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
-                  onClick={async () => {
-                    try {
-                      await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, {
-                        method: "DELETE",
-                        cache: "no-store",
-                      });
-                    } catch {}
-                    await load();
-                  }}
-                  disabled={loading}
-                >
-                  Delete
-                </button>
-              </div>
-            </li>
-          ))}
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>
