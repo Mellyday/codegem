@@ -48,20 +48,27 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const [tocSteps, setTocSteps] = useState<LessonStep[] | null>(null);
   const inToc = !!tocSteps;
 
-  const getPrompt = (step: LessonStep | null | undefined): string =>
-    ((step as any)?.prompt ??
-      (step as any)?.lesson?.prompt ??
-      "") as string;
+  const isJsLessonStep = (
+    step: LessonStep | null | undefined
+  ): step is JsLessonStep => Boolean(step && "prompt" in step);
 
-  const getIsDigable = (step: LessonStep | null | undefined): boolean =>
-    ((step as any)?.isDigable ??
-      (step as any)?.lesson?.isDigable ??
-      false) as boolean;
+  const getPrompt = (step: LessonStep | null | undefined): string => {
+    if (!step) return "";
+    if (isJsLessonStep(step)) return step.prompt ?? "";
+    return step.lesson?.prompt ?? "";
+  };
 
-  const getChildSteps = (step: LessonStep | null | undefined): LessonStep[] =>
-    (((step as any)?.childSteps ??
-      (step as any)?.lesson?.childSteps) ||
-      []) as LessonStep[];
+  const getIsDigable = (step: LessonStep | null | undefined): boolean => {
+    if (!step) return false;
+    if (isJsLessonStep(step)) return step.isDigable;
+    return step.lesson?.isDigable ?? false;
+  };
+
+  const getChildSteps = (step: LessonStep | null | undefined): LessonStep[] => {
+    if (!step) return [];
+    if (isJsLessonStep(step)) return step.childSteps ?? [];
+    return step.lesson?.childSteps ?? [];
+  };
 
   useEffect(() => {
     if (root) {
@@ -197,14 +204,24 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
   const handleSaveCustomQuiz = async () => {
     try {
-      const payload = (language === "python" ? pyEngine.buildCustomQuizPayload : jsLesson.buildCustomQuizPayload)({
-        fileKey,
-        root,
-        code,
-        history,
-        lessonQueue,
-        currentStep,
-      });
+      const payload =
+        language === "python"
+          ? pyEngine.buildCustomQuizPayload({
+              fileKey,
+              root,
+              code,
+              history: history as PyEngineHistoryItem[],
+              lessonQueue: lessonQueue as PyEngineStep[],
+              currentStep,
+            })
+          : jsLesson.buildCustomQuizPayload({
+              fileKey,
+              root,
+              code,
+              history: history as JsLessonHistoryItem[],
+              lessonQueue: lessonQueue as JsLessonStep[],
+              currentStep,
+            });
 
       const res = await fetch("/api/quizzes", {
         method: "POST",
@@ -304,8 +321,8 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
                 }}
               >
                 <div className="flex items-center justify-between">
-                  <span>{s.prompt}</span>
-                  <span className="text-xs text-slate-500">{(s as any).childSteps?.length ?? 0} steps</span>
+                  <span>{getPrompt(s)}</span>
+                  <span className="text-xs text-slate-500">{getChildSteps(s).length} steps</span>
                 </div>
               </button>
             ))}
@@ -346,8 +363,8 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
             }}
           />
         </div>
-        <p className="text-sm text-slate-800">{nextStep?.prompt}</p>
-        <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+        <p className="text-sm text-slate-800">{getPrompt(nextStep)}</p>
+        <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto whitespace-pre-wrap wrap-anywhere">
           <code>{nextNode ? (language === "python" ? pyEngine.textForNode : jsLesson.textForNode)(nextNode, code) : ""}</code>
         </pre>
       </div>
