@@ -171,23 +171,82 @@ export function SavedCustomQuizzesPanel({
   }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
   const handleGenerateDistractors = async (quizId: string) => {
+    // Import debug store functions dynamically to avoid SSR issues
+    const {
+      createRun,
+      addBatchToRun,
+      updateBatch,
+      completeRun,
+    } = await import("@/src/lib/distractorDebugStore");
+
     const decoder = new TextDecoder();
     let buffer = "";
+    let runId: string | undefined;
+    let batchSize = 20; // default
+    let totalCards = 0;
+
     const handleLine = (line: string) => {
       if (!line) return;
       const evt = JSON.parse(line);
       if (evt.type === "start") {
+        totalCards = evt.total ?? 0;
+        batchSize = evt.batchSize ?? 20;
         setProgress({
           total: evt.total ?? 0,
           completed: 0,
           failed: 0,
         });
+        // Create debug run
+        const run = createRun({
+          quizId,
+          totalCards,
+          batchSize,
+          provider: "deepseek",
+          model: "deepseek-chat",
+        });
+        runId = run.runId;
       } else if (evt.type === "progress") {
         setProgress({
           total: evt.total ?? 0,
           completed: evt.completed ?? 0,
           failed: evt.failed ?? 0,
         });
+      } else if (evt.type === "batch-detail" && runId) {
+        // Save batch detail to debug log
+        console.log("[SavedCustomQuizzesPanel] batch-detail event:", evt.phase, "batch:", evt.batchIndex);
+        if (evt.phase === "start") {
+          addBatchToRun(runId, {
+            batchIndex: evt.batchIndex,
+            batchTotal: evt.batchTotal,
+            startedAt: evt.startedAt,
+            requests: (evt.requests || []).map((r: any) => ({
+              cardIndex: r.index,
+              question: r.question || "",
+              correctAnswers: r.correctAnswers || [],
+              snippet: r.snippet || "",
+              preview: r.preview,
+            })),
+            prompt: evt.prompt,
+            fullPromptPayload: evt.fullPromptPayload,
+          });
+        } else if (evt.phase === "complete") {
+          console.log("[SavedCustomQuizzesPanel] Updating batch", evt.batchIndex, "with", (evt.responses || []).length, "responses");
+          updateBatch(runId, evt.batchIndex, {
+            status: (evt.responses || []).some((r: any) => r.error)
+              ? "error"
+              : "success",
+            responses: (evt.responses || []).map((r: any) => ({
+              cardIndex: r.index,
+              distractors: r.distractors || [],
+              error: r.error,
+              rawResponse: r.raw,
+              promptPayload: r.promptPayload,
+              usage: r.usage,
+            })),
+            completedAt: evt.completedAt,
+            fullPromptPayload: evt.fullPromptPayload,
+          });
+        }
       } else if (evt.type === "complete") {
         const updated = Array.isArray(evt.updatedCards)
           ? evt.updatedCards.length
@@ -195,7 +254,13 @@ export function SavedCustomQuizzesPanel({
         setStatus(
           `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
         );
+        if (runId) {
+          completeRun(runId, "completed");
+        }
       } else if (evt.type === "error") {
+        if (runId) {
+          completeRun(runId, "failed");
+        }
         throw new Error(evt.error || "Failed to generate distractors.");
       }
     };
@@ -203,8 +268,9 @@ export function SavedCustomQuizzesPanel({
       setGeneratingId(quizId);
       setStatus(undefined);
       setProgress(null);
+      // Add debug=1 to capture batch details for the debug page
       const res = await fetch(
-        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1`,
+        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1&debug=1`,
         {
           method: "POST",
           cache: "no-store",
@@ -245,6 +311,9 @@ export function SavedCustomQuizzesPanel({
       }
     } catch (e: any) {
       setStatus(e?.message || "Failed to generate distractors.");
+      if (runId) {
+        completeRun(runId, "failed");
+      }
     } finally {
       setGeneratingId(undefined);
       setProgress(null);
@@ -283,14 +352,13 @@ export function SavedCustomQuizzesPanel({
             <div
               className="h-2 rounded-full bg-amber-500 transition-all"
               style={{
-                width: `${
-                  progress.total > 0
-                    ? Math.min(
-                        100,
-                        Math.round((progress.completed / progress.total) * 100)
-                      )
-                    : 0
-                }%`,
+                width: `${progress.total > 0
+                  ? Math.min(
+                    100,
+                    Math.round((progress.completed / progress.total) * 100)
+                  )
+                  : 0
+                  }%`,
               }}
             />
           </div>
@@ -362,7 +430,7 @@ export function SavedCustomQuizzesPanel({
                           method: "DELETE",
                           cache: "no-store",
                         });
-                      } catch {}
+                      } catch { }
                       await load();
                     }}
                     disabled={loading}

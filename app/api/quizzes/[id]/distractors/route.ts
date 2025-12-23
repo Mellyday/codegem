@@ -6,6 +6,7 @@ import { getDb } from "../../../../../src/lib/mongodb";
 import {
   generateDistractorsInBatches,
   LLM_DISTRACTOR_BATCH_SIZE,
+  BatchLogEvent,
 } from "../../../../../src/lib/llmDistractorProvider";
 
 type SourceRef = {
@@ -78,6 +79,7 @@ export async function POST(
       ? body.fullCode
       : undefined;
   const wantsProgress = url.searchParams.get("progress") === "1";
+  const wantsDebug = url.searchParams.get("debug") === "1";
 
   const updatedCards: number[] = [];
   const failures: Array<{ order: number; error: string }> = [];
@@ -99,8 +101,8 @@ export async function POST(
     const correctAnswers =
       card.questionType === "multi"
         ? (Array.isArray(card.multiCorrect)
-            ? card.multiCorrect.map((c) => String(c ?? "")).filter(Boolean)
-            : [])
+          ? card.multiCorrect.map((c) => String(c ?? "")).filter(Boolean)
+          : [])
         : [String(card.text ?? "")].filter(Boolean);
     const targetCount = card.questionType === "multi" ? 10 : 6;
 
@@ -133,7 +135,8 @@ export async function POST(
       failed: number;
       batchIndex: number;
       batchTotal: number;
-    }) => void
+    }) => void,
+    onBatchLog?: (event: BatchLogEvent) => void
   ) => {
     if (!totalToGenerate) return;
     const results = await generateDistractorsInBatches(
@@ -153,6 +156,7 @@ export async function POST(
         batchSize: LLM_DISTRACTOR_BATCH_SIZE,
         onProgress,
         sharedCodeContext: fullCode,
+        onBatchLog,
       }
     );
 
@@ -184,8 +188,11 @@ export async function POST(
             total: totalToGenerate,
             batchSize: LLM_DISTRACTOR_BATCH_SIZE,
           });
-          await runGeneration((progress) =>
-            emit({ type: "progress", ...progress })
+          await runGeneration(
+            (progress) => emit({ type: "progress", ...progress }),
+            wantsDebug
+              ? (batchEvent) => emit({ type: "batch-detail", ...batchEvent })
+              : undefined
           );
           if (changed) {
             await quizzes.updateOne(
