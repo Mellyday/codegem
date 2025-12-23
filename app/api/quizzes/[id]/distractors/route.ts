@@ -3,7 +3,10 @@ import { NextResponse } from "next/server";
 import { ObjectId } from "mongodb";
 import { auth } from "@clerk/nextjs/server";
 import { getDb } from "../../../../../src/lib/mongodb";
-import { generateDistractors } from "../../../../../src/lib/llmDistractorProvider";
+import {
+  generateDistractorsInBatches,
+  LLM_DISTRACTOR_BATCH_SIZE,
+} from "../../../../../src/lib/llmDistractorProvider";
 
 type SourceRef = {
   preview?: string;
@@ -70,10 +73,26 @@ export async function POST(
     process.env.LLM_DISTRACTOR_PROVIDER ||
     "deepseek") as any;
   const model = body?.model || process.env.DEEPSEEK_MODEL || "deepseek-chat";
+  const fullCode =
+    typeof body?.fullCode === "string" && body.fullCode.trim()
+      ? body.fullCode
+      : undefined;
+  const wantsProgress = url.searchParams.get("progress") === "1";
 
   const updatedCards: number[] = [];
   const failures: Array<{ order: number; error: string }> = [];
   let changed = false;
+
+  const generationQueue: Array<{
+    order: number;
+    index: number;
+    correctAnswers: string[];
+    targetCount: number;
+    questionType?: QuizCard["questionType"];
+    preview?: string;
+    question?: string;
+    snippet?: string;
+  }> = [];
 
   for (let i = 0; i < (quiz.cards || []).length; i++) {
     const card = quiz.cards[i] as QuizCard;
@@ -93,29 +112,113 @@ export async function POST(
       continue;
     }
 
-    try {
-      const result = await generateDistractors({
-        correctAnswers,
-        question: card.question,
-        snippet: String(card.text ?? ""),
-        preview: card.sourceRef?.preview,
-        targetCount,
-        questionType: card.questionType,
+    generationQueue.push({
+      order: card.order ?? i,
+      index: i,
+      correctAnswers,
+      targetCount,
+      questionType: card.questionType,
+      preview: card.sourceRef?.preview,
+      question: card.question,
+      snippet: String(card.text ?? ""),
+    });
+  }
+
+  const totalToGenerate = generationQueue.length;
+
+  const runGeneration = async (
+    onProgress?: (progress: {
+      total: number;
+      completed: number;
+      failed: number;
+      batchIndex: number;
+      batchTotal: number;
+    }) => void
+  ) => {
+    if (!totalToGenerate) return;
+    const results = await generateDistractorsInBatches(
+      generationQueue.map((item) => ({
+        correctAnswers: item.correctAnswers,
+        question: item.question,
+        snippet: item.snippet,
+        preview: item.preview,
+        targetCount: item.targetCount,
+        questionType: item.questionType,
         provider,
         model,
-      });
-      if (result.distractors?.length) {
-        card.llmDistractors = result.distractors;
-        updatedCards.push(card.order ?? i);
+        fullCode,
+        signal: request.signal,
+      })),
+      {
+        batchSize: LLM_DISTRACTOR_BATCH_SIZE,
+        onProgress,
+        sharedCodeContext: fullCode,
+      }
+    );
+
+    results.forEach((res, idx) => {
+      const { order, index } = generationQueue[idx];
+      if (res.error) {
+        failures.push({ order, error: res.error });
+        return;
+      }
+      if (res.distractors?.length) {
+        quiz.cards[index].llmDistractors = res.distractors;
+        updatedCards.push(order);
         changed = true;
       }
-    } catch (err: any) {
-      failures.push({
-        order: card.order ?? i,
-        error: err?.message || String(err),
-      });
-    }
+    });
+  };
+
+  if (wantsProgress) {
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        const emit = (payload: unknown) => {
+          controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
+        };
+
+        try {
+          emit({
+            type: "start",
+            total: totalToGenerate,
+            batchSize: LLM_DISTRACTOR_BATCH_SIZE,
+          });
+          await runGeneration((progress) =>
+            emit({ type: "progress", ...progress })
+          );
+          if (changed) {
+            await quizzes.updateOne(
+              { _id: quizId, userId },
+              { $set: { cards: quiz.cards } }
+            );
+          }
+          emit({
+            type: "complete",
+            provider,
+            model,
+            updatedCards,
+            failures,
+          });
+        } catch (err: any) {
+          emit({
+            type: "error",
+            error: err?.message || String(err),
+          });
+        } finally {
+          controller.close();
+        }
+      },
+    });
+    return new Response(stream, {
+      headers: {
+        "Content-Type": "application/x-ndjson",
+        "Cache-Control": "no-cache",
+      },
+    });
   }
+
+  await runGeneration();
 
   if (changed) {
     await quizzes.updateOne(

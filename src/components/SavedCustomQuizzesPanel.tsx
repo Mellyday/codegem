@@ -131,6 +131,11 @@ export function SavedCustomQuizzesPanel({
   const [error, setError] = useState<string | undefined>(undefined);
   const [generatingId, setGeneratingId] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<string | undefined>(undefined);
+  const [progress, setProgress] = useState<{
+    total: number;
+    completed: number;
+    failed: number;
+  } | null>(null);
 
   const load = async () => {
     try {
@@ -166,32 +171,83 @@ export function SavedCustomQuizzesPanel({
   }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
   const handleGenerateDistractors = async (quizId: string) => {
+    const decoder = new TextDecoder();
+    let buffer = "";
+    const handleLine = (line: string) => {
+      if (!line) return;
+      const evt = JSON.parse(line);
+      if (evt.type === "start") {
+        setProgress({
+          total: evt.total ?? 0,
+          completed: 0,
+          failed: 0,
+        });
+      } else if (evt.type === "progress") {
+        setProgress({
+          total: evt.total ?? 0,
+          completed: evt.completed ?? 0,
+          failed: evt.failed ?? 0,
+        });
+      } else if (evt.type === "complete") {
+        const updated = Array.isArray(evt.updatedCards)
+          ? evt.updatedCards.length
+          : 0;
+        setStatus(
+          `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
+        );
+      } else if (evt.type === "error") {
+        throw new Error(evt.error || "Failed to generate distractors.");
+      }
+    };
     try {
       setGeneratingId(quizId);
       setStatus(undefined);
+      setProgress(null);
       const res = await fetch(
-        `/api/quizzes/${encodeURIComponent(quizId)}/distractors`,
+        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1`,
         {
           method: "POST",
           cache: "no-store",
-          headers: { "Content-Type": "application/json" },
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/x-ndjson",
+          },
         }
       );
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const txt = await res.text();
         throw new Error(`HTTP ${res.status}: ${txt || "failed"}`);
       }
-      const data = await res.json().catch(() => ({}));
-      const updated = Array.isArray(data.updatedCards)
-        ? data.updatedCards.length
-        : 0;
-      setStatus(
-        `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
-      );
+      const reader = res.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          handleLine(line);
+        }
+      }
+      const final = decoder.decode();
+      buffer += final;
+      let idx: number;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        handleLine(line);
+      }
+      if (buffer.trim()) {
+        handleLine(buffer.trim());
+      }
     } catch (e: any) {
       setStatus(e?.message || "Failed to generate distractors.");
     } finally {
       setGeneratingId(undefined);
+      setProgress(null);
       await load();
     }
   };
@@ -212,6 +268,32 @@ export function SavedCustomQuizzesPanel({
       {status && (
         <div className="mb-2 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
           {status}
+        </div>
+      )}
+      {progress && progress.total > 0 && (
+        <div className="mb-2 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+          <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
+            <span>Generating distractors</span>
+            <span>
+              {progress.completed}/{progress.total}
+              {progress.failed ? ` · ${progress.failed} failed` : ""}
+            </span>
+          </div>
+          <div className="mt-2 h-2 rounded-full bg-slate-200">
+            <div
+              className="h-2 rounded-full bg-amber-500 transition-all"
+              style={{
+                width: `${
+                  progress.total > 0
+                    ? Math.min(
+                        100,
+                        Math.round((progress.completed / progress.total) * 100)
+                      )
+                    : 0
+                }%`,
+              }}
+            />
+          </div>
         </div>
       )}
       {error && (
