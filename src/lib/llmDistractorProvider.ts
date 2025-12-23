@@ -195,7 +195,6 @@ const buildBatchPrompt = (requests: DistractorRequest[]): string => {
 const parseBatchResponse = (content: string): string[][] => {
   const trimmed = stripCodeFence(content || "").trim();
   if (!trimmed) {
-    console.log("[parseBatchResponse] Empty content");
     return [];
   }
 
@@ -203,7 +202,6 @@ const parseBatchResponse = (content: string): string[][] => {
   try {
     const parsed = JSON.parse(trimmed);
     if (Array.isArray(parsed) && parsed.length > 0) {
-      console.log("[parseBatchResponse] Strategy 1 success, items:", parsed.length);
       return parsed.map((inner) => {
         if (Array.isArray(inner)) {
           return inner.map((v) => String(v ?? "").trim()).filter(Boolean);
@@ -215,8 +213,8 @@ const parseBatchResponse = (content: string): string[][] => {
         return [];
       });
     }
-  } catch (e) {
-    console.log("[parseBatchResponse] Strategy 1 failed:", (e as Error).message);
+  } catch {
+    // Strategy 1 failed, try next
   }
 
   // Strategy 2: Find [[ ]] pattern
@@ -226,7 +224,6 @@ const parseBatchResponse = (content: string): string[][] => {
     if (start >= 0 && end > start) {
       const parsed = JSON.parse(trimmed.slice(start, end + 2));
       if (Array.isArray(parsed)) {
-        console.log("[parseBatchResponse] Strategy 2 success, items:", parsed.length);
         return parsed.map((inner) =>
           Array.isArray(inner)
             ? inner.map((v) => String(v ?? "").trim()).filter(Boolean)
@@ -234,8 +231,8 @@ const parseBatchResponse = (content: string): string[][] => {
         );
       }
     }
-  } catch (e) {
-    console.log("[parseBatchResponse] Strategy 2 failed:", (e as Error).message);
+  } catch {
+    // Strategy 2 failed, try next
   }
 
   // Strategy 3: Find first [ and last ] (single-level array that might contain nested)
@@ -245,7 +242,6 @@ const parseBatchResponse = (content: string): string[][] => {
     if (start >= 0 && end > start) {
       const parsed = JSON.parse(trimmed.slice(start, end + 1));
       if (Array.isArray(parsed)) {
-        console.log("[parseBatchResponse] Strategy 3 success, items:", parsed.length);
         // Check if it's a flat array of strings (single question response)
         if (parsed.every(item => typeof item === "string")) {
           // Return as single array
@@ -258,11 +254,11 @@ const parseBatchResponse = (content: string): string[][] => {
         );
       }
     }
-  } catch (e) {
-    console.log("[parseBatchResponse] Strategy 3 failed:", (e as Error).message);
+  } catch {
+    // Strategy 3 failed
   }
 
-  console.log("[parseBatchResponse] All strategies failed, content preview:", trimmed.slice(0, 200));
+  // All strategies failed
   return [];
 };
 
@@ -323,14 +319,7 @@ async function callDeepSeekBatch(
   const data = await res.json();
   const content = data?.choices?.[0]?.message?.content ?? "";
 
-  // Debug logging
-  console.log("[callDeepSeekBatch] Raw content length:", content.length);
-  console.log("[callDeepSeekBatch] Raw content preview:", content.slice(0, 500));
-
   const batchResults = parseBatchResponse(content);
-
-  console.log("[callDeepSeekBatch] Parsed results count:", batchResults.length);
-  console.log("[callDeepSeekBatch] First result sample:", batchResults[0]?.slice(0, 3));
 
   // Extract usage data from response
   const rawUsage = data?.usage;
@@ -350,10 +339,6 @@ async function callDeepSeekBatch(
     const targetCount = isMulti ? 10 : 6;
     const candidates = batchResults[i] || [];
     const distractors = sanitizeCandidates(candidates, req.correctAnswers, targetCount);
-
-    if (candidates.length === 0) {
-      console.log(`[callDeepSeekBatch] Warning: No candidates for request ${i}`);
-    }
 
     return { distractors };
   });
@@ -521,19 +506,22 @@ export async function generateDistractorsInBatches(
   const batchSize = Math.max(1, opts?.batchSize || LLM_DISTRACTOR_BATCH_SIZE);
   const maxRetries = opts?.maxRetries ?? 2;
   const total = requests.length;
-  let completed = 0;
-  let failed = 0;
+
+  // Fix #1: Track finalized cards (success or exhausted retries) to avoid completed > total
+  const finalizedCards = new Set<number>();
+  let failedCount = 0;
 
   const baseMessages = buildBaseMessages(
     opts?.sharedCodeContext || requests[0]?.fullCode
   );
 
-  // Track requests that need retry with their original indices
+  // Track requests that need retry with their original indices and attempts
   type RetryItem = { originalIndex: number; request: DistractorRequest; attempts: number };
   let retryQueue: RetryItem[] = [];
 
   /**
    * Validate a distractor result - returns true if valid
+   * Fix #3: Require full target count (10 for multi, 6 for MCQ)
    */
   const validateResult = (
     result: BatchResult | undefined,
@@ -543,7 +531,7 @@ export async function generateDistractorsInBatches(
     if (result.error) return false;
 
     const isMulti = request.questionType === "multi";
-    const minRequired = isMulti ? 5 : 3; // At least 5 for multi, 3 for MCQ
+    const minRequired = isMulti ? 10 : 6; // Full target count required
 
     if (!result.distractors || result.distractors.length < minRequired) {
       return false;
@@ -560,16 +548,19 @@ export async function generateDistractorsInBatches(
 
   /**
    * Process a batch of requests (used for both initial and retry batches)
+   * Fix #2: Accept RetryItem[] for retry batches to carry attempts correctly
    */
   const processBatch = async (
-    slice: DistractorRequest[],
-    absoluteIndices: number[],
+    items: Array<{ request: DistractorRequest; originalIndex: number; attempts: number }>,
     batchIndex: number,
-    totalBatches: number,
-    isRetry: boolean
+    initialBatchTotal: number,
+    retryRound: number
   ): Promise<{ results: BatchResult[]; failedItems: RetryItem[] }> => {
     const batchStartTime = new Date().toISOString();
     const failedItems: RetryItem[] = [];
+
+    const slice = items.map(item => item.request);
+    const absoluteIndices = items.map(item => item.originalIndex);
 
     // Prepare batch requests for logging
     const batchRequests = slice.map((req, idx) => ({
@@ -586,7 +577,7 @@ export async function generateDistractorsInBatches(
     // Emit batch start event
     opts?.onBatchLog?.({
       batchIndex,
-      batchTotal: totalBatches,
+      batchTotal: initialBatchTotal,
       phase: "start",
       requests: batchRequests,
       prompt: batchPrompt,
@@ -596,10 +587,11 @@ export async function generateDistractorsInBatches(
     const batchResults: BatchResult[] = [];
 
     try {
+      // Fix #5: Get signal from request properly
       const batchResult = await callDeepSeekBatch(
         slice,
         baseMessages,
-        slice[0]?.signal
+        items[0]?.request.signal
       );
 
       const batchResponses: Array<{
@@ -614,7 +606,9 @@ export async function generateDistractorsInBatches(
 
       batchResult.results.forEach((res, idx) => {
         const absoluteIndex = absoluteIndices[idx];
-        const request = slice[idx];
+        const item = items[idx];
+        const request = item.request;
+        const currentAttempts = item.attempts;
 
         const result: BatchResult = {
           index: absoluteIndex,
@@ -638,36 +632,43 @@ export async function generateDistractorsInBatches(
 
         // Check if result needs retry
         if (!validateResult(result, request)) {
-          const existingRetry = retryQueue.find(r => r.originalIndex === absoluteIndex);
-          const attempts = existingRetry ? existingRetry.attempts + 1 : 1;
-
-          if (attempts <= maxRetries) {
+          // Fix #2: Use attempts from the item itself, not from retryQueue lookup
+          if (currentAttempts < maxRetries) {
             failedItems.push({
               originalIndex: absoluteIndex,
               request,
-              attempts,
+              attempts: currentAttempts + 1,
             });
-            console.log(`[generateDistractorsInBatches] Card ${absoluteIndex} failed validation, queuing for retry (attempt ${attempts})`);
           } else {
-            console.log(`[generateDistractorsInBatches] Card ${absoluteIndex} exceeded max retries`);
-            failed += 1;
+            // Exhausted retries - mark as finalized and failed
+            if (!finalizedCards.has(absoluteIndex)) {
+              finalizedCards.add(absoluteIndex);
+              failedCount += 1;
+              // Set error message for exhausted retries
+              result.error = `Failed validation after ${currentAttempts} attempts`;
+            }
+          }
+        } else {
+          // Success - mark as finalized
+          if (!finalizedCards.has(absoluteIndex)) {
+            finalizedCards.add(absoluteIndex);
           }
         }
       });
 
-      completed += slice.length;
+      // Fix #1 & #4: Report progress based on finalized cards, use stable batch total
       opts?.onProgress?.({
         total,
-        completed,
-        failed,
+        completed: finalizedCards.size,
+        failed: failedCount,
         batchIndex,
-        batchTotal: totalBatches,
+        batchTotal: initialBatchTotal,
       });
 
       // Emit batch complete event
       opts?.onBatchLog?.({
         batchIndex,
-        batchTotal: totalBatches,
+        batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
         prompt: batchPrompt,
@@ -676,14 +677,13 @@ export async function generateDistractorsInBatches(
         startedAt: batchStartTime,
         completedAt: new Date().toISOString(),
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
       // Entire batch failed - queue all for retry
-      const errorMessage = err?.message || String(err);
+      const errorMessage = err instanceof Error ? err.message : String(err);
 
-      slice.forEach((request, idx) => {
-        const absoluteIndex = absoluteIndices[idx];
-        const existingRetry = retryQueue.find(r => r.originalIndex === absoluteIndex);
-        const attempts = existingRetry ? existingRetry.attempts + 1 : 1;
+      items.forEach((item, idx) => {
+        const absoluteIndex = item.originalIndex;
+        const currentAttempts = item.attempts;
 
         batchResults.push({
           index: absoluteIndex,
@@ -691,35 +691,39 @@ export async function generateDistractorsInBatches(
           error: errorMessage,
         });
 
-        if (attempts <= maxRetries) {
+        if (currentAttempts < maxRetries) {
           failedItems.push({
             originalIndex: absoluteIndex,
-            request,
-            attempts,
+            request: item.request,
+            attempts: currentAttempts + 1,
           });
         } else {
-          failed += 1;
+          // Exhausted retries - mark as finalized and failed
+          if (!finalizedCards.has(absoluteIndex)) {
+            finalizedCards.add(absoluteIndex);
+            failedCount += 1;
+          }
         }
       });
 
-      completed += slice.length;
+      // Fix #1 & #4: Report progress based on finalized cards
       opts?.onProgress?.({
         total,
-        completed,
-        failed,
+        completed: finalizedCards.size,
+        failed: failedCount,
         batchIndex,
-        batchTotal: totalBatches,
+        batchTotal: initialBatchTotal,
       });
 
       // Emit batch complete event with error
       opts?.onBatchLog?.({
         batchIndex,
-        batchTotal: totalBatches,
+        batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
         prompt: batchPrompt,
-        responses: slice.map((_, idx) => ({
-          index: absoluteIndices[idx],
+        responses: items.map((item) => ({
+          index: item.originalIndex,
           distractors: [],
           error: errorMessage,
         })),
@@ -731,7 +735,7 @@ export async function generateDistractorsInBatches(
     return { results: batchResults, failedItems };
   };
 
-  // Calculate initial batch count
+  // Calculate initial batch count (used as stable batchTotal for all progress reports)
   const initialBatches = Math.ceil(total / batchSize);
   let currentBatchIndex = 0;
 
@@ -739,15 +743,19 @@ export async function generateDistractorsInBatches(
   for (let i = 0; i < initialBatches; i++) {
     const start = i * batchSize;
     const slice = requests.slice(start, start + batchSize);
-    const absoluteIndices = slice.map((_, idx) => start + idx);
+    // Convert to items with attempts = 1 for initial processing
+    const items = slice.map((request, idx) => ({
+      request,
+      originalIndex: start + idx,
+      attempts: 1,
+    }));
 
     currentBatchIndex = i + 1;
     const { results: batchResults, failedItems } = await processBatch(
-      slice,
-      absoluteIndices,
+      items,
       currentBatchIndex,
       initialBatches,
-      false
+      0
     );
 
     // Store results
@@ -763,7 +771,6 @@ export async function generateDistractorsInBatches(
   let retryRound = 0;
   while (retryQueue.length > 0 && retryRound < maxRetries) {
     retryRound++;
-    console.log(`[generateDistractorsInBatches] Retry round ${retryRound}: ${retryQueue.length} cards`);
 
     const itemsToRetry = [...retryQueue];
     retryQueue = [];
@@ -774,22 +781,19 @@ export async function generateDistractorsInBatches(
     for (let i = 0; i < retryBatches; i++) {
       const start = i * batchSize;
       const slice = itemsToRetry.slice(start, start + batchSize);
-      const retryRequests = slice.map(item => item.request);
-      const absoluteIndices = slice.map(item => item.originalIndex);
 
       currentBatchIndex++;
       const { results: batchResults, failedItems } = await processBatch(
-        retryRequests,
-        absoluteIndices,
+        slice,
         currentBatchIndex,
-        initialBatches + retryBatches,
-        true
+        initialBatches, // Keep using initial batch count for stable progress
+        retryRound
       );
 
       // Update results (overwrite previous failed results)
       batchResults.forEach(result => {
-        const request = slice.find(item => item.originalIndex === result.index)?.request;
-        if (request && validateResult(result, request)) {
+        const item = slice.find(item => item.originalIndex === result.index);
+        if (item && validateResult(result, item.request)) {
           results[result.index] = result;
         }
       });
@@ -799,9 +803,17 @@ export async function generateDistractorsInBatches(
     }
   }
 
-  // Log final stats
-  const successCount = results.filter(r => r && !r.error && r.distractors.length > 0).length;
-  console.log(`[generateDistractorsInBatches] Complete: ${successCount}/${total} successful, ${failed} failed`);
+  // Handle any remaining items in retry queue (exhausted all retry rounds)
+  retryQueue.forEach(item => {
+    if (!finalizedCards.has(item.originalIndex)) {
+      finalizedCards.add(item.originalIndex);
+      failedCount += 1;
+      // Ensure result has error message
+      if (results[item.originalIndex]) {
+        results[item.originalIndex].error = `Failed validation after ${item.attempts} attempts`;
+      }
+    }
+  });
 
   return results;
 }

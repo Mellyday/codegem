@@ -178,18 +178,14 @@ export function updateBatch(
     const runs = loadFromStorage();
     const run = runs.find((r) => r.runId === runId);
     if (!run) {
-        console.log("[updateBatch] Run not found:", runId);
         return;
     }
 
-    console.log("[updateBatch] Looking for batch", batchIndex, "in batches:", run.batches.map(b => b.batchIndex));
     const batch = run.batches.find((b) => b.batchIndex === batchIndex);
     if (!batch) {
-        console.log("[updateBatch] Batch not found:", batchIndex);
         return;
     }
 
-    console.log("[updateBatch] Updating batch", batchIndex, "to status:", update.status);
     batch.status = update.status;
     if (update.responses) batch.responses = update.responses;
     if (update.completedAt) batch.completedAt = update.completedAt;

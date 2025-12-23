@@ -187,6 +187,8 @@ export async function POST(
             type: "start",
             total: totalToGenerate,
             batchSize: LLM_DISTRACTOR_BATCH_SIZE,
+            provider,
+            model,
           });
           await runGeneration(
             (progress) => emit({ type: "progress", ...progress }),

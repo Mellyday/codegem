@@ -184,13 +184,25 @@ export function SavedCustomQuizzesPanel({
     let runId: string | undefined;
     let batchSize = 20; // default
     let totalCards = 0;
+    let serverProvider = "deepseek";
+    let serverModel = "deepseek-chat";
 
     const handleLine = (line: string) => {
       if (!line) return;
-      const evt = JSON.parse(line);
+      // Fix #9: Wrap JSON.parse in try/catch to handle malformed lines
+      let evt;
+      try {
+        evt = JSON.parse(line);
+      } catch (e) {
+        console.warn("[SavedCustomQuizzesPanel] Invalid JSON line:", line.slice(0, 100));
+        return;
+      }
       if (evt.type === "start") {
         totalCards = evt.total ?? 0;
         batchSize = evt.batchSize ?? 20;
+        // Fix #10: Use provider/model from server event
+        serverProvider = evt.provider ?? "deepseek";
+        serverModel = evt.model ?? "deepseek-chat";
         setProgress({
           total: evt.total ?? 0,
           completed: 0,
@@ -201,8 +213,8 @@ export function SavedCustomQuizzesPanel({
           quizId,
           totalCards,
           batchSize,
-          provider: "deepseek",
-          model: "deepseek-chat",
+          provider: serverProvider,
+          model: serverModel,
         });
         runId = run.runId;
       } else if (evt.type === "progress") {
@@ -213,7 +225,6 @@ export function SavedCustomQuizzesPanel({
         });
       } else if (evt.type === "batch-detail" && runId) {
         // Save batch detail to debug log
-        console.log("[SavedCustomQuizzesPanel] batch-detail event:", evt.phase, "batch:", evt.batchIndex);
         if (evt.phase === "start") {
           addBatchToRun(runId, {
             batchIndex: evt.batchIndex,
@@ -230,7 +241,6 @@ export function SavedCustomQuizzesPanel({
             fullPromptPayload: evt.fullPromptPayload,
           });
         } else if (evt.phase === "complete") {
-          console.log("[SavedCustomQuizzesPanel] Updating batch", evt.batchIndex, "with", (evt.responses || []).length, "responses");
           updateBatch(runId, evt.batchIndex, {
             status: (evt.responses || []).some((r: any) => r.error)
               ? "error"
@@ -268,9 +278,10 @@ export function SavedCustomQuizzesPanel({
       setGeneratingId(quizId);
       setStatus(undefined);
       setProgress(null);
-      // Add debug=1 to capture batch details for the debug page
+      // Fix #6: Only enable debug mode in development
+      const isDev = process.env.NODE_ENV === "development";
       const res = await fetch(
-        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1&debug=1`,
+        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1${isDev ? "&debug=1" : ""}`,
         {
           method: "POST",
           cache: "no-store",
