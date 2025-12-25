@@ -10,6 +10,10 @@ export const LLM_DISTRACTOR_BATCH_SIZE =
     ? parsedBatchSize
     : DEFAULT_LLM_DISTRACTOR_BATCH_SIZE;
 
+// Default distractor counts - configurable via batch opts
+export const DEFAULT_MCQ_DISTRACTOR_COUNT = 6;
+export const DEFAULT_MULTI_DISTRACTOR_COUNT = 10;
+
 export type DistractorProvider = "deepseek" | "mock";
 
 export type DistractorRequest = {
@@ -155,12 +159,16 @@ const buildCardPrompt = (req: DistractorRequest, target: number) => {
 
 /**
  * Build a batch prompt combining multiple cards into one request.
- * Multi-select questions receive 10 distractors, MCQ receives 6.
+ * Multi-select questions receive multiTarget distractors, MCQ receives mcqTarget.
  */
-const buildBatchPrompt = (requests: DistractorRequest[]): string => {
+const buildBatchPrompt = (
+  requests: DistractorRequest[],
+  mcqTarget: number = DEFAULT_MCQ_DISTRACTOR_COUNT,
+  multiTarget: number = DEFAULT_MULTI_DISTRACTOR_COUNT
+): string => {
   const cards = requests.map((req, i) => {
     const isMulti = req.questionType === "multi";
-    const targetCount = isMulti ? 10 : 6;
+    const targetCount = isMulti ? multiTarget : mcqTarget;
     return {
       index: i,
       questionType: isMulti ? "multi-select (select N answers)" : "single-answer MCQ",
@@ -279,7 +287,9 @@ type BatchProviderResult = {
 async function callDeepSeekBatch(
   requests: DistractorRequest[],
   baseMessages?: PromptMessage[],
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  mcqTarget: number = DEFAULT_MCQ_DISTRACTOR_COUNT,
+  multiTarget: number = DEFAULT_MULTI_DISTRACTOR_COUNT
 ): Promise<BatchProviderResult> {
   const apiKey = process.env.DEEPSEEK_API_KEY;
   if (!apiKey) {
@@ -294,7 +304,7 @@ async function callDeepSeekBatch(
       ...messages,
       {
         role: "user",
-        content: buildBatchPrompt(requests),
+        content: buildBatchPrompt(requests, mcqTarget, multiTarget),
       },
     ],
     stream: false,
@@ -336,7 +346,7 @@ async function callDeepSeekBatch(
   // Map results back to requests, sanitizing each
   const results = requests.map((req, i) => {
     const isMulti = req.questionType === "multi";
-    const targetCount = isMulti ? 10 : 6;
+    const targetCount = isMulti ? multiTarget : mcqTarget;
     const candidates = batchResults[i] || [];
     const distractors = sanitizeCandidates(candidates, req.correctAnswers, targetCount);
 
@@ -501,6 +511,12 @@ export async function generateDistractorsInBatches(
     onBatchLog?: (event: BatchLogEvent) => void;
     /** Maximum total attempts per card including initial attempt (default 3 = 1 initial + 2 retries) */
     maxAttempts?: number;
+    /** AbortSignal for cancelling all batch operations */
+    signal?: AbortSignal;
+    /** Target distractor count for single-answer MCQ (default 6) */
+    mcqTargetCount?: number;
+    /** Target distractor count for multi-select questions (default 10) */
+    multiTargetCount?: number;
   }
 ): Promise<BatchResult[]> {
   const results: BatchResult[] = [];
@@ -508,6 +524,9 @@ export async function generateDistractorsInBatches(
 
   const batchSize = Math.max(1, opts?.batchSize || LLM_DISTRACTOR_BATCH_SIZE);
   const maxAttempts = opts?.maxAttempts ?? 3; // 1 initial + 2 retries
+  const mcqTarget = opts?.mcqTargetCount ?? DEFAULT_MCQ_DISTRACTOR_COUNT;
+  const multiTarget = opts?.multiTargetCount ?? DEFAULT_MULTI_DISTRACTOR_COUNT;
+  const batchSignal = opts?.signal;
   const total = requests.length;
 
   // Fix #1: Track finalized cards (success or exhausted retries) to avoid completed > total
@@ -534,7 +553,7 @@ export async function generateDistractorsInBatches(
     if (result.error) return false;
 
     const isMulti = request.questionType === "multi";
-    const minRequired = isMulti ? 10 : 6; // Full target count required
+    const minRequired = isMulti ? multiTarget : mcqTarget;
 
     if (!result.distractors || result.distractors.length < minRequired) {
       return false;
@@ -577,7 +596,7 @@ export async function generateDistractorsInBatches(
     }));
 
     // Build the batch prompt for logging
-    const batchPrompt = buildBatchPrompt(slice);
+    const batchPrompt = buildBatchPrompt(slice, mcqTarget, multiTarget);
 
     // Emit batch start event (use displayBatchIndex for UI, batchId for unique identification)
     opts?.onBatchLog?.({
@@ -592,12 +611,21 @@ export async function generateDistractorsInBatches(
 
     const batchResults: BatchResult[] = [];
 
+    // Check if cancelled before starting batch
+    if (batchSignal?.aborted) {
+      const abortError = new Error('Batch operation was cancelled');
+      abortError.name = 'AbortError';
+      throw abortError;
+    }
+
     try {
-      // Fix #5: Get signal from request properly
+      // Use batch-level signal for proper cancellation across all batches
       const batchResult = await callDeepSeekBatch(
         slice,
         baseMessages,
-        items[0]?.request.signal
+        batchSignal,
+        mcqTarget,
+        multiTarget
       );
 
       const batchResponses: Array<{
