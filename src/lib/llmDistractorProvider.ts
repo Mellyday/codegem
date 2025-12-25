@@ -496,15 +496,15 @@ export async function generateDistractorsInBatches(
     sharedCodeContext?: string;
     /** Debug callback for detailed batch-level logging */
     onBatchLog?: (event: BatchLogEvent) => void;
-    /** Maximum retry attempts for failed cards (default 2) */
-    maxRetries?: number;
+    /** Maximum total attempts per card including initial attempt (default 3 = 1 initial + 2 retries) */
+    maxAttempts?: number;
   }
 ): Promise<BatchResult[]> {
   const results: BatchResult[] = [];
   if (!requests.length) return results;
 
   const batchSize = Math.max(1, opts?.batchSize || LLM_DISTRACTOR_BATCH_SIZE);
-  const maxRetries = opts?.maxRetries ?? 2;
+  const maxAttempts = opts?.maxAttempts ?? 3; // 1 initial + 2 retries
   const total = requests.length;
 
   // Fix #1: Track finalized cards (success or exhausted retries) to avoid completed > total
@@ -553,9 +553,10 @@ export async function generateDistractorsInBatches(
   const processBatch = async (
     items: Array<{ request: DistractorRequest; originalIndex: number; attempts: number }>,
     batchIndex: number,
-    initialBatchTotal: number,
-    retryRound: number
+    initialBatchTotal: number
   ): Promise<{ results: BatchResult[]; failedItems: RetryItem[] }> => {
+    // Clamp batchIndex for display purposes to avoid "Batch 7 of 5" during retries
+    const displayBatchIndex = Math.min(batchIndex, initialBatchTotal);
     const batchStartTime = new Date().toISOString();
     const failedItems: RetryItem[] = [];
 
@@ -574,9 +575,9 @@ export async function generateDistractorsInBatches(
     // Build the batch prompt for logging
     const batchPrompt = buildBatchPrompt(slice);
 
-    // Emit batch start event
+    // Emit batch start event (use displayBatchIndex to avoid confusing "Batch 7 of 5")
     opts?.onBatchLog?.({
-      batchIndex,
+      batchIndex: displayBatchIndex,
       batchTotal: initialBatchTotal,
       phase: "start",
       requests: batchRequests,
@@ -633,7 +634,7 @@ export async function generateDistractorsInBatches(
         // Check if result needs retry
         if (!validateResult(result, request)) {
           // Fix #2: Use attempts from the item itself, not from retryQueue lookup
-          if (currentAttempts < maxRetries) {
+          if (currentAttempts < maxAttempts) {
             failedItems.push({
               originalIndex: absoluteIndex,
               request,
@@ -661,13 +662,13 @@ export async function generateDistractorsInBatches(
         total,
         completed: finalizedCards.size,
         failed: failedCount,
-        batchIndex,
+        batchIndex: displayBatchIndex,
         batchTotal: initialBatchTotal,
       });
 
       // Emit batch complete event
       opts?.onBatchLog?.({
-        batchIndex,
+        batchIndex: displayBatchIndex,
         batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
@@ -681,7 +682,7 @@ export async function generateDistractorsInBatches(
       // Entire batch failed - queue all for retry
       const errorMessage = err instanceof Error ? err.message : String(err);
 
-      items.forEach((item, idx) => {
+      items.forEach((item) => {
         const absoluteIndex = item.originalIndex;
         const currentAttempts = item.attempts;
 
@@ -691,7 +692,7 @@ export async function generateDistractorsInBatches(
           error: errorMessage,
         });
 
-        if (currentAttempts < maxRetries) {
+        if (currentAttempts < maxAttempts) {
           failedItems.push({
             originalIndex: absoluteIndex,
             request: item.request,
@@ -711,13 +712,13 @@ export async function generateDistractorsInBatches(
         total,
         completed: finalizedCards.size,
         failed: failedCount,
-        batchIndex,
+        batchIndex: displayBatchIndex,
         batchTotal: initialBatchTotal,
       });
 
       // Emit batch complete event with error
       opts?.onBatchLog?.({
-        batchIndex,
+        batchIndex: displayBatchIndex,
         batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
@@ -754,8 +755,7 @@ export async function generateDistractorsInBatches(
     const { results: batchResults, failedItems } = await processBatch(
       items,
       currentBatchIndex,
-      initialBatches,
-      0
+      initialBatches
     );
 
     // Store results
@@ -769,7 +769,7 @@ export async function generateDistractorsInBatches(
 
   // Process retry batches
   let retryRound = 0;
-  while (retryQueue.length > 0 && retryRound < maxRetries) {
+  while (retryQueue.length > 0 && retryRound < maxAttempts - 1) { // -1 because initial attempt counts
     retryRound++;
 
     const itemsToRetry = [...retryQueue];
@@ -786,8 +786,7 @@ export async function generateDistractorsInBatches(
       const { results: batchResults, failedItems } = await processBatch(
         slice,
         currentBatchIndex,
-        initialBatches, // Keep using initial batch count for stable progress
-        retryRound
+        initialBatches // Keep using initial batch count for stable progress
       );
 
       // Update results (overwrite previous failed results)

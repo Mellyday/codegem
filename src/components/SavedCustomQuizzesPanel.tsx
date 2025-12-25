@@ -226,13 +226,20 @@ export function SavedCustomQuizzesPanel({
   }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
   const handleGenerateDistractors = async (quizId: string) => {
-    // Import debug store functions dynamically to avoid SSR issues
-    const {
-      createRun,
-      addBatchToRun,
-      updateBatch,
-      completeRun,
-    } = await import("@/src/lib/distractorDebugStore");
+    // Only enable debug mode in development
+    const isDev = process.env.NODE_ENV === "development";
+
+    // Import debug store functions only in dev to avoid bundling in production
+    let debugStore: {
+      createRun: typeof import("@/src/lib/distractorDebugStore").createRun;
+      addBatchToRun: typeof import("@/src/lib/distractorDebugStore").addBatchToRun;
+      updateBatch: typeof import("@/src/lib/distractorDebugStore").updateBatch;
+      completeRun: typeof import("@/src/lib/distractorDebugStore").completeRun;
+    } | null = null;
+
+    if (isDev) {
+      debugStore = await import("@/src/lib/distractorDebugStore");
+    }
 
     const decoder = new TextDecoder();
     let buffer = "";
@@ -263,25 +270,27 @@ export function SavedCustomQuizzesPanel({
           completed: 0,
           failed: 0,
         });
-        // Create debug run
-        const run = createRun({
-          quizId,
-          totalCards,
-          batchSize,
-          provider: serverProvider,
-          model: serverModel,
-        });
-        runId = run.runId;
+        // Create debug run only in dev
+        if (isDev && debugStore) {
+          const run = debugStore.createRun({
+            quizId,
+            totalCards,
+            batchSize,
+            provider: serverProvider,
+            model: serverModel,
+          });
+          runId = run.runId;
+        }
       } else if (evt.type === "progress") {
         setProgress({
           total: evt.total ?? 0,
           completed: evt.completed ?? 0,
           failed: evt.failed ?? 0,
         });
-      } else if (evt.type === "batch-detail" && runId) {
-        // Save batch detail to debug log
+      } else if (evt.type === "batch-detail" && runId && isDev && debugStore) {
+        // Save batch detail to debug log (dev only)
         if (evt.phase === "start") {
-          addBatchToRun(runId, {
+          debugStore.addBatchToRun(runId, {
             batchIndex: evt.batchIndex,
             batchTotal: evt.batchTotal,
             startedAt: evt.startedAt,
@@ -296,7 +305,7 @@ export function SavedCustomQuizzesPanel({
             fullPromptPayload: evt.fullPromptPayload,
           });
         } else if (evt.phase === "complete") {
-          updateBatch(runId, evt.batchIndex, {
+          debugStore.updateBatch(runId, evt.batchIndex, {
             status: (evt.responses || []).some((r: any) => r.error)
               ? "error"
               : "success",
@@ -319,12 +328,12 @@ export function SavedCustomQuizzesPanel({
         setStatus(
           `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
         );
-        if (runId) {
-          completeRun(runId, "completed");
+        if (runId && isDev && debugStore) {
+          debugStore.completeRun(runId, "completed");
         }
       } else if (evt.type === "error") {
-        if (runId) {
-          completeRun(runId, "failed");
+        if (runId && isDev && debugStore) {
+          debugStore.completeRun(runId, "failed");
         }
         throw new Error(evt.error || "Failed to generate distractors.");
       }
@@ -333,8 +342,7 @@ export function SavedCustomQuizzesPanel({
       setGeneratingId(quizId);
       setStatus(undefined);
       setProgress(null);
-      // Fix #6: Only enable debug mode in development
-      const isDev = process.env.NODE_ENV === "development";
+      // isDev is already defined at the top of handleGenerateDistractors
       const res = await fetch(
         `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1${isDev ? "&debug=1" : ""}`,
         {
@@ -377,8 +385,8 @@ export function SavedCustomQuizzesPanel({
       }
     } catch (e: any) {
       setStatus(e?.message || "Failed to generate distractors.");
-      if (runId) {
-        completeRun(runId, "failed");
+      if (runId && isDev && debugStore) {
+        debugStore.completeRun(runId, "failed");
       }
     } finally {
       setGeneratingId(undefined);
