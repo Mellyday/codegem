@@ -1,0 +1,10 @@
+need to test 1 decorators 2 a ton of imports 3 what if there's strings nearby of import 
+
+D) Grouping: new engine’s group steps are almost always diggable Old grouping diggability: 
+isDigable = childSteps.length > 1 || nodes.length > 1 New engine grouping: isDigable: childSteps.length > 0 and 
+also this 
+
+E) Custom quiz payload expansion is more aggressive in the new engine New buildCustomQuizPayload(): 
+recursively appends cards for step.lesson.childSteps too (both history and remaining queue) Old 
+pyLesson.buildCustomQuizPayload(): generally one card per lesson step, no recursive “expand every child step into c
+ards” behavior the same way. So a grouped import section can produce more quiz material downstream in the new system.
