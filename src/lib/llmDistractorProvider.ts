@@ -644,12 +644,10 @@ export async function generateDistractorsInBatches(
         const request = item.request;
         const currentAttempts = item.attempts;
 
+        // Slim result: raw/promptPayload/usage only in onBatchLog, not per-card
         const result: BatchResult = {
           index: absoluteIndex,
           distractors: res.distractors,
-          raw: batchResult.raw,
-          promptPayload: batchResult.promptPayload,
-          usage: batchResult.usage,
           error: res.error,
         };
 
