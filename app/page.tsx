@@ -2,7 +2,6 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 import Link from "next/link";
 import { listReposAndProjects } from "@/src/server/browse";
-import GitHubImportSection from "@/src/components/GitHubImportSection";
 
 export default async function HomePage() {
   const { repos, projects } = await listReposAndProjects();
@@ -16,9 +15,6 @@ export default async function HomePage() {
             Choose a repo or a project to browse like a filesystem.
           </p>
         </header>
-
-        {/* GitHub Import Section */}
-        <GitHubImportSection />
 
         <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
           <section className="space-y-3">
@@ -71,3 +67,4 @@ export default async function HomePage() {
     </main>
   );
 }
+
