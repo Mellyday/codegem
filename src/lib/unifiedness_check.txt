@@ -1,0 +1,31 @@
+If your goal is “unified mental model” (not just unified code), here are the big fixes
+
+Make “dig” semantics explicit
+
+Either commit to “dig = nested statements only” (and accept loss of structural decomposition), or
+
+Re-introduce structural child steps for key constructs (for/if/while/function/class) like old pyLesson did, but as virtual child steps under the same anchor.
+
+Normalize semanticRole across lesson+masking
+
+Right now masking still checks roles like if_condition / loop_condition, but your engine rarely emits those roles anymore. It works only because you also check isHeaderNode.
+
+Either remove role-based paths, or reintroduce those roles via structural substeps.
+
+Fix the profile story
+
+Either support "normal" properly in EngineOptions.profile, or stop emitting "normal" in the payload if it’s not meaningful.
+
+Guarantee multi-select correctness
+
+If multiCorrect.length > options.length, you can generate impossible questions. Fix by:
+
+capping multiCorrect to the option set, or
+
+increasing MAX options dynamically, or
+
+emitting multiple questions when there are many correct answers.
+
+Be intentional about reveal anchors
+
+If the UI expects progressive reveal for module/name questions, add revealStart / revealEnd* consistently (your import module question currently doesn’t).
