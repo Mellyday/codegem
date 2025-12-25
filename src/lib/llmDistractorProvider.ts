@@ -75,7 +75,7 @@ const parseArray = (content: string): string[] => {
     }
   }
   return trimmed
-    .split(/\\n|,/)
+    .split(/\r?\n|,/)
     .map((s) => s.trim())
     .filter(Boolean);
 };
@@ -458,6 +458,9 @@ export type BatchResult = ProviderResult & {
  * Debug log event emitted per batch for detailed inspection.
  */
 export type BatchLogEvent = {
+  /** Unique monotonically increasing identifier for this batch operation */
+  batchId: number;
+  /** UI-friendly batch index (clamped during retries) */
   batchIndex: number;
   batchTotal: number;
   phase: "start" | "complete";
@@ -555,7 +558,8 @@ export async function generateDistractorsInBatches(
     batchIndex: number,
     initialBatchTotal: number
   ): Promise<{ results: BatchResult[]; failedItems: RetryItem[] }> => {
-    // Clamp batchIndex for display purposes to avoid "Batch 7 of 5" during retries
+    // Use batchIndex as unique batchId, clamp for display purposes to avoid "Batch 7 of 5" during retries
+    const batchId = batchIndex;
     const displayBatchIndex = Math.min(batchIndex, initialBatchTotal);
     const batchStartTime = new Date().toISOString();
     const failedItems: RetryItem[] = [];
@@ -575,8 +579,9 @@ export async function generateDistractorsInBatches(
     // Build the batch prompt for logging
     const batchPrompt = buildBatchPrompt(slice);
 
-    // Emit batch start event (use displayBatchIndex to avoid confusing "Batch 7 of 5")
+    // Emit batch start event (use displayBatchIndex for UI, batchId for unique identification)
     opts?.onBatchLog?.({
+      batchId,
       batchIndex: displayBatchIndex,
       batchTotal: initialBatchTotal,
       phase: "start",
@@ -668,6 +673,7 @@ export async function generateDistractorsInBatches(
 
       // Emit batch complete event
       opts?.onBatchLog?.({
+        batchId,
         batchIndex: displayBatchIndex,
         batchTotal: initialBatchTotal,
         phase: "complete",
@@ -718,6 +724,7 @@ export async function generateDistractorsInBatches(
 
       // Emit batch complete event with error
       opts?.onBatchLog?.({
+        batchId,
         batchIndex: displayBatchIndex,
         batchTotal: initialBatchTotal,
         phase: "complete",
@@ -789,10 +796,12 @@ export async function generateDistractorsInBatches(
         initialBatches // Keep using initial batch count for stable progress
       );
 
-      // Update results (overwrite previous failed results)
+      // Update results - always write latest attempt to preserve error state
       batchResults.forEach(result => {
         const item = slice.find(item => item.originalIndex === result.index);
-        if (item && validateResult(result, item.request)) {
+        const prev = results[result.index];
+        // Write if: no previous result, previous had error, current is valid, or current has error
+        if (!prev || prev.error || (item && validateResult(result, item.request)) || result.error) {
           results[result.index] = result;
         }
       });

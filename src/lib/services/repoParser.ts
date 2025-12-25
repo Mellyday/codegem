@@ -109,3 +109,126 @@ export async function parseAndPersistRepo(
 
   return progress;
 }
+
+// Event types for streaming progress
+export type ProgressEvent =
+  | { type: 'cloned'; fileCount: number }
+  | { type: 'scanning' }
+  | { type: 'discovered'; files: string[]; ignoredFiles: string[] }
+  | { type: 'processing'; file: string; index: number; total: number }
+  | { type: 'ignored'; file: string; reason: string }
+  | { type: 'parsed'; file: string; success: boolean; error?: string };
+
+type WithProgressParams = {
+  userId: string;
+  repoId: ObjectId;
+  url: string;
+  owner: string;
+  name: string;
+  rootDir: string;
+  onProgress: (event: ProgressEvent) => void;
+};
+
+export async function parseAndPersistRepoWithProgress(
+  db: Db,
+  params: WithProgressParams
+): Promise<RepoProgress> {
+  const { userId, repoId, url, owner, name, rootDir, onProgress } = params;
+  const targetCol = db.collection("repos");
+  const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0 };
+
+  // Collect all files and categorize them
+  onProgress({ type: 'scanning' });
+
+  const parsableFiles: string[] = [];
+  const ignoredFiles: string[] = [];
+
+  for await (const p of walk(rootDir)) {
+    const ext = fileExtension(p);
+    const relPath = relativePath(rootDir, p);
+    if (canParseWithTreeSitter(ext)) {
+      parsableFiles.push(relPath);
+    } else {
+      ignoredFiles.push(relPath);
+    }
+  }
+
+  onProgress({
+    type: 'discovered',
+    files: parsableFiles,
+    ignoredFiles: ignoredFiles,
+  });
+
+  // Emit ignored files
+  for (const ignoredPath of ignoredFiles) {
+    onProgress({
+      type: 'ignored',
+      file: ignoredPath,
+      reason: 'Unsupported file extension',
+    });
+  }
+
+  progress.totalFiles = parsableFiles.length;
+
+  // Process parsable files
+  for (let i = 0; i < parsableFiles.length; i++) {
+    const relPath = parsableFiles[i];
+    const absPath = path.join(rootDir, relPath);
+    const ext = fileExtension(absPath);
+
+    onProgress({
+      type: 'processing',
+      file: relPath,
+      index: i + 1,
+      total: parsableFiles.length,
+    });
+
+    try {
+      const sourceCode = await fs.readFile(absPath, "utf8");
+      const parsed = await parseWithTreeSitter(sourceCode, ext);
+      const now = new Date();
+      await targetCol.insertOne({
+        userId,
+        repoId,
+        projectId: null,
+        url,
+        owner,
+        name,
+        path: relPath,
+        language: parsed.languageId,
+        extension: ext,
+        sourceCode,
+        ast: parsed.ast as TreeSitterAstNode,
+        parseStatus: "success",
+        size: Buffer.byteLength(sourceCode, "utf8"),
+        createdAt: now,
+        updatedAt: now,
+      });
+      progress.parsedFiles += 1;
+      onProgress({ type: 'parsed', file: relPath, success: true });
+    } catch (err) {
+      progress.failedFiles += 1;
+      await targetCol.insertOne({
+        userId,
+        repoId,
+        projectId: null,
+        url,
+        owner,
+        name,
+        path: relPath,
+        language: "unknown",
+        extension: ext,
+        sourceCode: "",
+        ast: null,
+        parseStatus: "failed",
+        parseError: String(err),
+        size: 0,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      } as any);
+      onProgress({ type: 'parsed', file: relPath, success: false, error: String(err) });
+    }
+  }
+
+  return progress;
+}

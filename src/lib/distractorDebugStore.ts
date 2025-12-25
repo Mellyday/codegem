@@ -37,6 +37,9 @@ export type DistractorCardResponse = {
 };
 
 export type BatchLogEntry = {
+    /** Unique monotonically increasing identifier for this batch operation */
+    batchId: number;
+    /** UI-friendly batch index (may be clamped during retries) */
     batchIndex: number;
     batchTotal: number;
     startedAt: string;
@@ -165,7 +168,7 @@ export function addBatchToRun(
  */
 export function updateBatch(
     runId: string,
-    batchIndex: number,
+    batchId: number,
     update: {
         status: BatchLogEntry["status"];
         responses?: DistractorCardResponse[];
@@ -181,7 +184,7 @@ export function updateBatch(
         return;
     }
 
-    const batch = run.batches.find((b) => b.batchIndex === batchIndex);
+    const batch = run.batches.find((b) => b.batchId === batchId);
     if (!batch) {
         return;
     }

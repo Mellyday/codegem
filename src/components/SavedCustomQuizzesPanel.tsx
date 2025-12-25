@@ -80,7 +80,7 @@ async function fetchSavedCustomQuizzes(fileKey?: {
         path: q.rootNode?.path,
       },
       totalCards: Array.isArray(q.cards) ? q.cards.length : 0,
-      cards: (q.cards || []).map((c: any) => ({
+      cards: (Array.isArray(q.cards) ? q.cards : []).map((c: any) => ({
         order: c.order,
         type: c.type,
         text: c.text,
@@ -291,6 +291,7 @@ export function SavedCustomQuizzesPanel({
         // Save batch detail to debug log (dev only)
         if (evt.phase === "start") {
           debugStore.addBatchToRun(runId, {
+            batchId: evt.batchId,
             batchIndex: evt.batchIndex,
             batchTotal: evt.batchTotal,
             startedAt: evt.startedAt,
@@ -305,7 +306,7 @@ export function SavedCustomQuizzesPanel({
             fullPromptPayload: evt.fullPromptPayload,
           });
         } else if (evt.phase === "complete") {
-          debugStore.updateBatch(runId, evt.batchIndex, {
+          debugStore.updateBatch(runId, evt.batchId, {
             status: (evt.responses || []).some((r: any) => r.error)
               ? "error"
               : "success",
