@@ -137,6 +137,61 @@ export function SavedCustomQuizzesPanel({
     failed: number;
   } | null>(null);
 
+  const copyTextToClipboard = async (text: string) => {
+    const fallbackCopy = (value: string) => {
+      try {
+        const ta = document.createElement("textarea");
+        ta.value = value;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.focus();
+        ta.select();
+        document.execCommand("copy");
+        document.body.removeChild(ta);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(text);
+      } else {
+        const ok = fallbackCopy(text);
+        if (!ok) throw new Error("Clipboard unavailable");
+      }
+    } catch {
+      // ignore
+    }
+  };
+
+  const buildQuizExportJson = (quiz: SavedCustomQuizV11) => {
+    return {
+      id: quiz.id,
+      createdAt: quiz.createdAt,
+      profile: quiz.profile,
+      root: quiz.root,
+      cards: quiz.cards.map((c) => {
+        const isMulti = c.questionType === "multi";
+        const question =
+          c.question || (isMulti ? "Select all that apply." : "What comes next?");
+        const answer = isMulti
+          ? Array.isArray(c.multiCorrect)
+            ? c.multiCorrect
+            : []
+          : c.text;
+        return {
+          order: c.order,
+          type: c.type,
+          question,
+          questionType: isMulti ? "multi" : "single",
+          answer,
+        };
+      }),
+    };
+  };
+
   const load = async () => {
     try {
       setLoading(true);
@@ -431,6 +486,17 @@ export function SavedCustomQuizzesPanel({
                     disabled={loading || generatingId === q.id}
                   >
                     {generatingId === q.id ? "Generating…" : "Generate"}
+                  </button>
+                  <button
+                    type="button"
+                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
+                    onClick={async () => {
+                      const payload = buildQuizExportJson(q);
+                      await copyTextToClipboard(JSON.stringify(payload, null, 2));
+                    }}
+                    disabled={loading}
+                  >
+                    Copy JSON
                   </button>
                   <button
                     type="button"

@@ -5,7 +5,6 @@ import {
   firstChildOfType,
   childByField,
   buildCuratedSections,
-  collectDescendants,
 } from "./pyCuration";
 import { randomString } from "./utils";
 
@@ -53,6 +52,7 @@ export type QuizQuestion = {
 export type EngineStep = {
     id: string;
     node: TreeSitterAstNode & { isVirtual?: boolean };
+    displaySpan?: { start: number; end: number };
 
     // Lesson Data
     lesson?: {
@@ -88,6 +88,53 @@ export const textForRange = (
     )
         return code.slice(start, end);
     return undefined;
+};
+
+const headerAnswer = (stmt: TreeSitterAstNode, code?: string): string => {
+    if (!code) return stmt.type;
+    const full = code.substring(stmt.startIndex, stmt.endIndex);
+    const colonIdx = full.indexOf(":");
+    return (colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]).trimEnd();
+};
+
+const headerSpanByAst = (
+    node: TreeSitterAstNode
+): { start: number; end: number } => {
+    const body =
+        firstChildOfType(node, "block") || firstChildOfType(node, "suite");
+    if (body && body.startIndex > node.startIndex) {
+        return { start: node.startIndex, end: body.startIndex };
+    }
+    if (node.type === "decorated_definition") {
+        const inner =
+            firstChildOfType(node, "function_definition") ||
+            firstChildOfType(node, "class_definition");
+        const innerBody =
+            inner &&
+            (firstChildOfType(inner, "block") || firstChildOfType(inner, "suite"));
+        if (innerBody && innerBody.startIndex > node.startIndex) {
+            return { start: node.startIndex, end: innerBody.startIndex };
+        }
+    }
+    if (node.type === "match_statement" || node.type === "match_stmt") {
+        const firstCase = (node.namedChildren || []).find(
+            (c) => c.type === "case_clause" || c.type === "case_block"
+        );
+        if (firstCase && firstCase.startIndex > node.startIndex) {
+            return { start: node.startIndex, end: firstCase.startIndex };
+        }
+    }
+    return { start: node.startIndex, end: node.endIndex };
+};
+
+const displaySpanForNode = (
+    node: TreeSitterAstNode
+): { start: number; end: number } => {
+    const span = headerSpanByAst(node);
+    if (span.end <= span.start) {
+        return { start: node.startIndex, end: node.endIndex };
+    }
+    return span;
 };
 
 export const computeAstPath = (
@@ -218,8 +265,13 @@ const extractCallChain = (
 };
 
 function buildDistractors(correct: string, _ctx?: { code?: string }): string[] {
+  if (!correct || !correct.trim()) {
+    return shuffle(GENERIC_DISTRACTORS).slice(0, 3);
+  }
   const out = new Set<string>();
-  while (out.size < 3) {
+  let attempts = 0;
+  while (out.size < 3 && attempts < 6) {
+    attempts += 1;
     const variation =
       correct.length <= 3
         ? correct.toUpperCase() !== correct
@@ -233,8 +285,77 @@ function buildDistractors(correct: string, _ctx?: { code?: string }): string[] {
     if (out.size < 3)
       out.add(correct.slice(0, Math.max(1, Math.floor(correct.length * 0.8))));
   }
+  if (out.size < 3) {
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => d !== correct && !out.has(d))
+      .slice(0, 3 - out.size);
+    pad.forEach((d) => out.add(d));
+  }
   return Array.from(out);
 }
+
+const buildMultiSelectOptionPool = (
+  correct: string[],
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const idPool: string[] = [];
+  const strPool: string[] = [];
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const reStr = /(['"])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) idPool.push(m[0]);
+    while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
+  } catch {}
+  let pool = Array.from(new Set<string>([...correct, ...idPool, ...strPool]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !pool.includes(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, MAX - correct.length)),
+  ]).slice(0, MAX);
+};
+
+const buildModuleOptionPool = (
+  correct: string,
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const pool = new Set<string>();
+  try {
+    const reModule = /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reModule.exec(snippet))) {
+      if (m[0] !== correct) pool.add(m[0]);
+    }
+  } catch {}
+  let options = Array.from(pool);
+  if (options.length + 1 < 10) {
+    const needed = 10 - (options.length + 1);
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => d !== correct && !options.includes(d))
+      .slice(0, needed);
+    options.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(options);
+  return shuffle([correct, ...extras.slice(0, Math.max(0, MAX - 1))]).slice(
+    0,
+    MAX
+  );
+};
 
 // ============================================================================
 // Quiz rules (copied from pyQuiz)
@@ -253,6 +374,23 @@ type RuleCtx = {
 type Q11 = QuizQuestion;
 
 type Rule = (ctx: RuleCtx) => Q11[] | undefined;
+
+const headerRule: Rule = ({ node, code, sourceRef }) => {
+  const answerText = headerAnswer(node, code);
+  const span = headerSpanByAst(node);
+  return [
+    {
+      kind: node.type,
+      stem: "Write the full header line",
+      answerLabel: answerText,
+      options: [],
+      sourceRefs: [sourceRef],
+      generatorRule: "header.line",
+      revealEndBeforeChild: span.start,
+      revealEndAfterChild: span.end,
+    },
+  ];
+};
 
 const rules: Record<string, Rule[]> = {
   assignment: [
@@ -359,6 +497,119 @@ const rules: Record<string, Rule[]> = {
         });
       }
       return qs;
+    },
+  ],
+  import_from_statement: [
+    ({ root, node, code, sourceRef }) => {
+      const sections = buildCuratedSections(node);
+      const moduleGroup = sections.find((g) => g.key === "module");
+      const moduleNode = moduleGroup?.items?.[0];
+      const moduleText =
+        moduleNode &&
+        (textForRange(moduleNode.startIndex, moduleNode.endIndex, code) ||
+          moduleNode.type);
+      const namesGroup = sections.find((g) => g.key === "names");
+      const items = namesGroup?.items || [];
+      const correct = items
+        .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+        .filter(Boolean);
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      const qs: Q11[] = [];
+      if (moduleText && moduleNode) {
+        const moduleRef: SourceRef = {
+          nodeType: moduleNode.type,
+          start: moduleNode.startIndex,
+          end: moduleNode.endIndex,
+          path: computeAstPath(root, moduleNode),
+        };
+        qs.push({
+          kind: "import_from_module",
+          stem: "What module is this import from?",
+          answerLabel: moduleText,
+          options: buildModuleOptionPool(moduleText, code, spanStart, spanEnd),
+          sourceRefs: [sourceRef, moduleRef],
+          generatorRule: "import_from.module",
+        });
+      }
+
+      // Option pool mirrors the old pyQuiz multi-select behavior for imports.
+      const optionPool = buildMultiSelectOptionPool(
+        correct,
+        code,
+        spanStart,
+        spanEnd
+      );
+      const firstStart = items.length
+        ? items.reduce(
+            (m, it) => Math.min(m, it.startIndex),
+            items[0].startIndex
+          )
+        : undefined;
+      const lastEnd = items.length
+        ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
+        : undefined;
+      qs.push({
+        kind: "imported_names_multi",
+        stem: "Which names are imported?",
+        answerLabel: correct[0] ?? "import",
+        options: optionPool,
+        sourceRefs: [sourceRef],
+        generatorRule: "import_from.names",
+        questionType: "multi",
+        multiCorrect: correct,
+        optionPool,
+        revealStart: node.startIndex,
+        // Match pyQuiz import reveal anchors (first name to last name).
+        revealEndBeforeChild: firstStart,
+        revealEndAfterChild: lastEnd,
+      });
+      return qs;
+    },
+  ],
+  import_statement: [
+    ({ node, code, sourceRef }) => {
+      const sections = buildCuratedSections(node);
+      const namesGroup = sections.find((g) => g.key === "names");
+      const items = namesGroup?.items || [];
+      const correct = items
+        .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+        .filter(Boolean);
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      // Option pool mirrors the old pyQuiz multi-select behavior for imports.
+      const optionPool = buildMultiSelectOptionPool(
+        correct,
+        code,
+        spanStart,
+        spanEnd
+      );
+      const firstStart = items.length
+        ? items.reduce(
+            (m, it) => Math.min(m, it.startIndex),
+            items[0].startIndex
+          )
+        : undefined;
+      const lastEnd = items.length
+        ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
+        : undefined;
+      return [
+        {
+          kind: "imported_names_multi",
+          stem: "Which names are imported?",
+          answerLabel: correct[0] ?? "import",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "import.names",
+          questionType: "multi",
+          multiCorrect: correct,
+          optionPool,
+          revealStart: node.startIndex,
+          // Match pyQuiz import reveal anchors (first name to last name).
+          revealEndBeforeChild: firstStart,
+          revealEndAfterChild: lastEnd,
+        },
+      ];
     },
   ],
   dictionary: [
@@ -696,7 +947,8 @@ const rules: Record<string, Rule[]> = {
         (node.namedChildren || []).find((c) => c.type === "parameters")
           ?.namedChildren || [];
       const qs: Q11[] = [];
-      params.forEach((p, idx) => {
+      const names: string[] = [];
+      for (const p of params) {
         const nameNode = (p.namedChildren || []).find(
           (c) => c.type === "identifier"
         );
@@ -704,50 +956,51 @@ const rules: Record<string, Rule[]> = {
           const nameText =
             textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
             "param";
-          qs.push({
-            kind: "param-name",
-            stem: `What is the name of parameter #${idx + 1}?`,
-            answerLabel: nameText,
-            options: buildDistractors(nameText, { code }),
-            sourceRefs: [
-              sourceRef,
-              {
-                nodeType: p.type,
-                start: p.startIndex,
-                end: p.endIndex,
-                path: computeAstPath(root, p),
-              },
-            ],
-            generatorRule: "func.param-name",
-          });
+          names.push(nameText);
+        } else {
+          const raw =
+            textForRange(p.startIndex, p.endIndex, code) || p.type || "param";
+          names.push(raw);
         }
-        if (profile !== "shallow") {
-          const typeNode = (p.namedChildren || []).find(
-            (c) => c.type === "type" || c.type === "type_annotation"
-          );
-          if (typeNode) {
-            const typText =
-              textForRange(typeNode.startIndex, typeNode.endIndex, code) ||
-              "type";
-            qs.push({
-              kind: "param-type",
-              stem: `What is the type of parameter #${idx + 1}?`,
-              answerLabel: typText,
-              options: buildDistractors(typText, { code }),
-              sourceRefs: [
-                sourceRef,
-                {
-                  nodeType: typeNode.type,
-                  start: typeNode.startIndex,
-                  end: typeNode.endIndex,
-                  path: computeAstPath(root, typeNode),
-                },
-              ],
-              generatorRule: "func.param-type",
-            });
-          }
-        }
-      });
+      }
+      if (names.length > 0) {
+        const block =
+          firstChildOfType(node, "block") || firstChildOfType(node, "suite");
+        const spanStart = block ? block.startIndex : node.startIndex;
+        const spanEnd = block ? block.endIndex : node.endIndex;
+        const optionPool = buildMultiSelectOptionPool(
+          names,
+          code,
+          spanStart,
+          spanEnd
+        );
+        const firstParamStart = params.length
+          ? params.reduce(
+              (m, it) => Math.min(m, it.startIndex),
+              params[0].startIndex
+            )
+          : undefined;
+        const lastParamEnd = params.length
+          ? params.reduce(
+              (m, it) => Math.max(m, it.endIndex),
+              params[0].endIndex
+            )
+          : undefined;
+        qs.push({
+          kind: "function_params_multi",
+          stem: "Which of the following are parameters of this function?",
+          answerLabel: names[0] ?? "param",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "func.params-multi",
+          questionType: "multi",
+          multiCorrect: names,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: firstParamStart,
+          revealEndAfterChild: lastParamEnd,
+        });
+      }
       if (profile !== "shallow") {
         const ret = (node.namedChildren || []).find(
           (c) =>
@@ -779,6 +1032,19 @@ const rules: Record<string, Rule[]> = {
       return qs;
     },
   ],
+  if_statement: [headerRule],
+  elif_clause: [headerRule],
+  else_clause: [headerRule],
+  while_statement: [headerRule],
+  for_statement: [headerRule],
+  with_statement: [headerRule],
+  try_statement: [headerRule],
+  except_clause: [headerRule],
+  finally_clause: [headerRule],
+  match_statement: [headerRule],
+  match_stmt: [headerRule],
+  case_clause: [headerRule],
+  case_block: [headerRule],
 };
 
 export function generateQuestionsV11(
@@ -879,6 +1145,7 @@ function createGroupStep(
     return {
         id: randomString(8),
         node: virtualNode,
+        displaySpan: { start: virtualNode.startIndex, end: virtualNode.endIndex },
         lesson: {
             semanticRole: `group:${category}`,
             prompt: generateGroupPrompt(category, nodes.length),
@@ -894,12 +1161,13 @@ function groupTopLevelNodes(
     code: string,
     options: EngineOptions
 ): EngineStep[] {
-    if (!topLevelNodes.length) return [];
+    const nodes = topLevelNodes.filter(isAnchorNode);
+    if (!nodes.length) return [];
     const out: EngineStep[] = [];
     let currentCategory: PyCategory | null = null;
     let currentGroup: TreeSitterAstNode[] = [];
 
-    for (const n of topLevelNodes) {
+    for (const n of nodes) {
         const cat = getSemanticCategory(n);
         if (currentCategory && cat === currentCategory) {
             currentGroup.push(n);
@@ -918,6 +1186,197 @@ function groupTopLevelNodes(
 }
 
 // ============================================================================
+// Statement Anchors
+// ============================================================================
+
+const ANCHOR_NODE_TYPES = new Set<string>([
+    "assignment",
+    "augmented_assignment",
+    "class_definition",
+    "function_definition",
+    "decorated_definition",
+    "elif_clause",
+    "else_clause",
+    "except_clause",
+    "finally_clause",
+    "match_statement",
+    "match_stmt",
+    "case_clause",
+    "case_block",
+    "type_alias",
+    "type_alias_statement",
+]);
+
+export const isAnchorNode = (node: TreeSitterAstNode): boolean => {
+    if (ANCHOR_NODE_TYPES.has(node.type)) return true;
+    if (node.type.endsWith("_statement")) return true;
+    return false;
+};
+
+const getStatementChildren = (node: TreeSitterAstNode): TreeSitterAstNode[] =>
+    (node.namedChildren || []).filter(
+        (c) => c.type !== "comment" && !isDocstringNode(c, node)
+    );
+
+const BODY_NODE_TYPES = new Set(["block", "suite"]);
+
+const statementHasAnchor = (node: TreeSitterAstNode): boolean => {
+    const stack = (node.namedChildren || []).slice();
+    while (stack.length) {
+        const cur = stack.pop();
+        if (!cur) continue;
+        if (BODY_NODE_TYPES.has(cur.type)) continue;
+        if (isAnchorNode(cur)) return true;
+        if (cur.namedChildren && cur.namedChildren.length) {
+            stack.push(...cur.namedChildren);
+        }
+    }
+    return false;
+};
+
+const hasQuizChildren = (node: TreeSitterAstNode): boolean => {
+    const stack = (node.namedChildren || []).slice();
+    while (stack.length) {
+        const cur = stack.pop();
+        if (!cur) continue;
+        if (BODY_NODE_TYPES.has(cur.type)) {
+            const statements = getStatementChildren(cur);
+            for (const stmt of statements) {
+                if (isAnchorNode(stmt) || statementHasAnchor(stmt)) return true;
+            }
+            continue;
+        }
+        if (cur.namedChildren && cur.namedChildren.length) {
+            stack.push(...cur.namedChildren);
+        }
+    }
+    return false;
+};
+
+const isHeaderQuestion = (q: QuizQuestion): boolean =>
+    q.stem === "Write the full header line" || q.generatorRule === "header.line";
+
+const spanForQuestion = (
+    q: QuizQuestion
+): { start: number; end: number } | undefined => {
+    if (
+        typeof q.revealEndBeforeChild === "number" &&
+        typeof q.revealEndAfterChild === "number" &&
+        Number.isFinite(q.revealEndBeforeChild) &&
+        Number.isFinite(q.revealEndAfterChild) &&
+        q.revealEndAfterChild >= q.revealEndBeforeChild
+    ) {
+        return {
+            start: q.revealEndBeforeChild,
+            end: q.revealEndAfterChild,
+        };
+    }
+    if (Array.isArray(q.sourceRefs) && q.sourceRefs.length > 0) {
+        let best = q.sourceRefs[0];
+        for (const ref of q.sourceRefs) {
+            if (ref.end - ref.start < best.end - best.start) best = ref;
+        }
+        return { start: best.start, end: best.end };
+    }
+    return undefined;
+};
+
+const applyQuestionOverlapGuard = (steps: EngineStep[]): void => {
+    const entries: Array<{
+        question: QuizQuestion;
+        span: { start: number; end: number };
+        isHeader: boolean;
+    }> = [];
+
+    const collect = (step: EngineStep) => {
+        if (step.quiz?.questions?.length) {
+            for (const q of step.quiz.questions) {
+                const span = spanForQuestion(q);
+                if (!span) continue;
+                entries.push({
+                    question: q,
+                    span,
+                    isHeader: isHeaderQuestion(q),
+                });
+            }
+        }
+        const children = step.lesson?.childSteps || [];
+        if (children.length) children.forEach(collect);
+    };
+
+    steps.forEach(collect);
+    if (!entries.length) return;
+
+    const sorted = entries.slice().sort((a, b) => {
+        const lenA = a.span.end - a.span.start;
+        const lenB = b.span.end - b.span.start;
+        if (lenA !== lenB) return lenA - lenB;
+        return a.span.start - b.span.start;
+    });
+
+    const kept: typeof entries = [];
+    const drop = new Set<QuizQuestion>();
+
+    for (const entry of sorted) {
+        const isDuplicate = kept.some(
+            (k) =>
+                k.span.start === entry.span.start &&
+                k.span.end === entry.span.end &&
+                k.question.stem === entry.question.stem &&
+                k.question.answerLabel === entry.question.answerLabel
+        );
+        if (isDuplicate) {
+            drop.add(entry.question);
+            continue;
+        }
+        if (!entry.isHeader) {
+            const containsKept = kept.some(
+                (k) =>
+                    entry.span.start <= k.span.start &&
+                    entry.span.end >= k.span.end &&
+                    (entry.span.start < k.span.start || entry.span.end > k.span.end)
+            );
+            if (containsKept) {
+                drop.add(entry.question);
+                continue;
+            }
+        }
+        kept.push(entry);
+    }
+
+    const filter = (step: EngineStep) => {
+        if (step.quiz?.questions?.length) {
+            step.quiz.questions = step.quiz.questions.filter((q) => !drop.has(q));
+            if (step.quiz.questions.length === 0) step.quiz = undefined;
+        }
+        const children = step.lesson?.childSteps || [];
+        if (children.length) children.forEach(filter);
+    };
+
+    steps.forEach(filter);
+};
+
+const NO_FALLBACK_QUIZ_NODE_TYPES = new Set<string>([
+    "import_from_statement",
+    "import_statement",
+    "function_definition",
+    "class_definition",
+    "if_statement",
+    "elif_clause",
+    "else_clause",
+    "while_statement",
+    "for_statement",
+    "with_statement",
+    "try_statement",
+    "except_clause",
+    "finally_clause",
+    "match_statement",
+    "match_stmt",
+    "case_clause",
+    "case_block",
+]);
+
+// ============================================================================
 // Main Walker
 // ============================================================================
 
@@ -928,164 +1387,367 @@ export const generateEngineSteps = (
     options: EngineOptions
 ): EngineStep[] => {
     const steps: EngineStep[] = [];
-    const children = (node.namedChildren || []).filter(
-        (c) => c.type !== "comment" && !isDocstringNode(c, node)
-    );
+    const mappedProfile: DecompositionLevel =
+        options.profile === "deep" ? "deep" : "shallow";
 
-    // 1. Check for Grouping (Module Level)
-    if (node.type === "module" && !options.__noGroup) {
-        const enableGrouping = options.grouping === "auto"
-            ? (children.length >= 12 || code.length >= 5000)
-            : options.grouping;
-
-        if (enableGrouping) {
-            return groupTopLevelNodes(root, children, code, options);
-        }
-    }
-
-    // 2. Generate Quiz Questions using rule-driven logic (unless disabled)
-    const questions: QuizQuestion[] = [];
-    if (options.generateQuiz !== false) {
-        const mappedProfile: DecompositionLevel =
-            options.profile === "deep" ? "deep" : "shallow";
-        const ruleQuestions = generateQuestionsV11(root, node, mappedProfile, code);
-        if (ruleQuestions.length) {
-            questions.push(...ruleQuestions);
-        } else {
-            const txt = textForNode(node, code);
-            questions.push({
+    const buildQuestionsForAnchor = (anchor: TreeSitterAstNode): QuizQuestion[] => {
+        if (options.generateQuiz === false) return [];
+        const ruleQuestions = generateQuestionsV11(root, anchor, mappedProfile, code);
+        if (ruleQuestions.length) return ruleQuestions;
+        if (NO_FALLBACK_QUIZ_NODE_TYPES.has(anchor.type)) return [];
+        if (hasQuizChildren(anchor)) return [];
+        const txt = textForNode(anchor, code);
+        return [
+            {
                 kind: "shallow_ident",
-                stem: "What is this code block?",
+                stem: "What comes next?",
                 answerLabel: txt,
                 options: [],
                 sourceRefs: [
                     {
-                        nodeType: node.type,
-                        start: node.startIndex,
-                        end: node.endIndex,
-                        path: computeAstPath(root, node),
+                        nodeType: anchor.type,
+                        start: anchor.startIndex,
+                        end: anchor.endIndex,
+                        path: computeAstPath(root, anchor),
                         preview: txt.slice(0, 120),
                     },
                 ],
                 generatorRule: "shallow_statement",
-            });
-        }
-    }
+            },
+        ];
+    };
 
-    // 3. Generate Lesson Step (if applicable)
-    //    We default to creating a step for every node visited, unless it's purely structural
-    //    or handled by a parent's custom logic.
-
-    let lessonData: EngineStep["lesson"] | undefined;
-    let recurse = true;
-
-    switch (node.type) {
-        case "module":
-            // Module itself doesn't get a step, just yields children
-            break;
-
-        case "class_definition": {
-            const name = firstChildOfType(node, "identifier");
-            const nameText = name ? textForNode(name, code) : "class";
-            lessonData = {
-                prompt: `We define a class named: ${nameText}`,
-                semanticRole: "class_definition",
-                isDigable: true,
-            };
-            break;
-        }
-
-        case "function_definition": {
-            const name = firstChildOfType(node, "identifier");
-            const nameText = name ? textForNode(name, code) : "function";
-            lessonData = {
-                prompt: `We define a function named: ${nameText}`,
-                semanticRole: "function_definition",
-                isDigable: true,
-            };
-            break;
-        }
-
-        case "if_statement": {
-            lessonData = {
-                prompt: "An if statement checks a condition.",
-                semanticRole: "if_statement",
-                isDigable: true,
-            };
-            break;
-        }
-
-        case "while_statement": {
-            lessonData = {
-                prompt: "A while loop runs as long as the condition is true.",
-                semanticRole: "while_statement",
-                isDigable: true,
-            };
-            break;
-        }
-
-        case "for_statement": {
-            lessonData = {
-                prompt: "A for loop iterates over a sequence.",
-                semanticRole: "for_statement",
-                isDigable: true,
-            };
-            break;
-        }
-
-        case "assignment": {
-            lessonData = {
-                prompt: "An assignment statement stores a value.",
-                semanticRole: "assignment",
-                isDigable: false, // Usually leaf in lesson view, but quiz digs in
-            };
-            // For assignments, we might not want to recurse in the *lesson* flow 
-            // if we treat it as atomic, but for *quiz* generation we might want to 
-            // visit children if we had questions for them. 
-            // However, current pyQuiz logic handles assignment children inside the assignment rule.
-            break;
-        }
-
-        default: {
-            // Generic fallback
-            if (questions.length > 0) {
-                // If it has questions, it's interesting enough to be a step
-                lessonData = {
-                    prompt: `Analyze this ${node.type}.`,
-                    semanticRole: node.type,
-                    isDigable: children.length > 0,
-                };
-            } else if (node.type.endsWith("_statement") || node.type === "expression_statement") {
-                lessonData = {
-                    prompt: `Next, we have a ${node.type.replace("_statement", "")} statement.`,
-                    semanticRole: node.type,
-                    isDigable: children.length > 0,
+    const buildLessonDataForAnchor = (
+        anchor: TreeSitterAstNode,
+        hasChildStatements: boolean,
+        hasQuestions: boolean
+    ): EngineStep["lesson"] | undefined => {
+        switch (anchor.type) {
+            case "import_statement": {
+                const sections = buildCuratedSections(anchor);
+                const namesGroup = sections.find((g) => g.key === "names");
+                const names = (namesGroup?.items || [])
+                    .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+                    .filter(Boolean);
+                const nameText = names.length ? names.join(", ") : "module(s)";
+                return {
+                    prompt: `We import ${nameText}.`,
+                    semanticRole: "import_statement",
+                    isDigable: false,
                 };
             }
-            break;
+
+            case "import_from_statement": {
+                const sections = buildCuratedSections(anchor);
+                const moduleGroup = sections.find((g) => g.key === "module");
+                const moduleNode = moduleGroup?.items?.[0];
+                const moduleText =
+                    moduleNode &&
+                    (textForRange(moduleNode.startIndex, moduleNode.endIndex, code) ||
+                        moduleNode.type);
+                const namesGroup = sections.find((g) => g.key === "names");
+                const names = (namesGroup?.items || [])
+                    .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+                    .filter(Boolean);
+                let prompt = "We import from another module.";
+                if (names.length && moduleText) {
+                    prompt = `We import ${names.join(", ")} from ${moduleText}.`;
+                } else if (moduleText) {
+                    prompt = `We import from ${moduleText}.`;
+                } else if (names.length) {
+                    prompt = `We import ${names.join(", ")}.`;
+                }
+                return {
+                    prompt,
+                    semanticRole: "import_from_statement",
+                    isDigable: false,
+                };
+            }
+
+            case "class_definition": {
+                const name = firstChildOfType(anchor, "identifier");
+                const nameText = name ? textForNode(name, code) : "class";
+                return {
+                    prompt: `We define a class named: ${nameText}`,
+                    semanticRole: "class_definition",
+                    isDigable: hasChildStatements,
+                };
+            }
+
+            case "function_definition": {
+                const name = firstChildOfType(anchor, "identifier");
+                const nameText = name ? textForNode(name, code) : "function";
+                return {
+                    prompt: `We define a function named: ${nameText}`,
+                    semanticRole: "function_definition",
+                    isDigable: hasChildStatements,
+                };
+            }
+
+            case "decorated_definition": {
+                const innerFn = firstChildOfType(anchor, "function_definition");
+                const innerClass = firstChildOfType(anchor, "class_definition");
+                const defNode = innerFn || innerClass;
+                const nameNode = defNode
+                    ? firstChildOfType(defNode, "identifier")
+                    : firstChildOfType(anchor, "identifier");
+                let prompt = "We define a decorated definition.";
+                if (defNode) {
+                    const kind = innerClass ? "class" : "function";
+                    const nameText = nameNode
+                        ? textForNode(nameNode, code)
+                        : kind;
+                    prompt = `We define a ${kind} named: ${nameText}`;
+                }
+                return {
+                    prompt,
+                    semanticRole: "decorated_definition",
+                    isDigable: hasChildStatements,
+                };
+            }
+
+            case "if_statement": {
+                return {
+                    prompt: "An if statement checks a condition.",
+                    semanticRole: "if_statement",
+                    isDigable: hasChildStatements,
+                };
+            }
+
+            case "while_statement": {
+                return {
+                    prompt: "A while loop runs as long as the condition is true.",
+                    semanticRole: "while_statement",
+                    isDigable: hasChildStatements,
+                };
+            }
+
+            case "for_statement": {
+                return {
+                    prompt: "A for loop iterates over a sequence.",
+                    semanticRole: "for_statement",
+                    isDigable: hasChildStatements,
+                };
+            }
+
+            case "assignment": {
+                return {
+                    prompt: "An assignment statement stores a value.",
+                    semanticRole: "assignment",
+                    isDigable: false,
+                };
+            }
+
+            case "augmented_assignment": {
+                return {
+                    prompt: "An augmented assignment updates a value.",
+                    semanticRole: "augmented_assignment",
+                    isDigable: false,
+                };
+            }
+
+            default: {
+                const label = anchor.type.replace(/_/g, " ");
+                if (hasQuestions) {
+                    return {
+                        prompt: `Analyze this ${label}.`,
+                        semanticRole: anchor.type,
+                        isDigable: hasChildStatements,
+                    };
+                }
+                const prompt = anchor.type.endsWith("_statement")
+                    ? `Next, we have a ${anchor.type.replace("_statement", "")} statement.`
+                    : `Next, we have a ${label}.`;
+                return {
+                    prompt,
+                    semanticRole: anchor.type,
+                    isDigable: hasChildStatements,
+                };
+            }
+        }
+    };
+
+    const emitAnchorStep = (
+        anchor: TreeSitterAstNode,
+        hasChildStatements: boolean
+    ) => {
+        const questions = buildQuestionsForAnchor(anchor);
+        const lessonData = buildLessonDataForAnchor(
+            anchor,
+            hasChildStatements,
+            questions.length > 0
+        );
+        if (lessonData || questions.length > 0) {
+            steps.push({
+                id: randomString(8),
+                node: anchor,
+                displaySpan: displaySpanForNode(anchor),
+                lesson: lessonData,
+                quiz: questions.length > 0 ? { questions } : undefined,
+            });
+        }
+    };
+
+    const blockHasStatements = (block?: TreeSitterAstNode) =>
+        Boolean(block && getStatementChildren(block).some(isAnchorNode));
+
+    const clauseHasStatements = (clause?: TreeSitterAstNode) =>
+        Boolean(clause && blockHasStatements(firstChildOfType(clause, "block")));
+
+    const walkModule = (mod: TreeSitterAstNode) => {
+        for (const stmt of getStatementChildren(mod)) {
+            if (isAnchorNode(stmt)) walkStmt(stmt);
+        }
+    };
+
+    const walkBlock = (block: TreeSitterAstNode) => {
+        for (const stmt of getStatementChildren(block)) {
+            if (isAnchorNode(stmt)) walkStmt(stmt);
+        }
+    };
+
+    const walkStmt = (stmt: TreeSitterAstNode) => {
+        if (!isAnchorNode(stmt)) return;
+        switch (stmt.type) {
+            case "function_definition":
+            case "class_definition": {
+                const block = firstChildOfType(stmt, "block");
+                const hasChildStatements = blockHasStatements(block);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                break;
+            }
+            case "decorated_definition": {
+                const innerDef =
+                    firstChildOfType(stmt, "function_definition") ||
+                    firstChildOfType(stmt, "class_definition");
+                const block = innerDef
+                    ? firstChildOfType(innerDef, "block")
+                    : firstChildOfType(stmt, "block");
+                const hasChildStatements = blockHasStatements(block);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                break;
+            }
+            case "if_statement": {
+                const block = firstChildOfType(stmt, "block");
+                const elifs = childrenOfType(stmt, "elif_clause");
+                const elseCl = firstChildOfType(stmt, "else_clause");
+                const hasChildStatements =
+                    blockHasStatements(block) ||
+                    elifs.some((e) => clauseHasStatements(e)) ||
+                    clauseHasStatements(elseCl);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                for (const e of elifs) walkStmt(e);
+                if (elseCl) walkStmt(elseCl);
+                break;
+            }
+            case "elif_clause":
+            case "else_clause": {
+                const block = firstChildOfType(stmt, "block");
+                const hasChildStatements = blockHasStatements(block);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                break;
+            }
+            case "while_statement":
+            case "for_statement": {
+                const block = firstChildOfType(stmt, "block");
+                const elseCl = firstChildOfType(stmt, "else_clause");
+                const hasChildStatements =
+                    blockHasStatements(block) || clauseHasStatements(elseCl);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                if (elseCl) walkStmt(elseCl);
+                break;
+            }
+            case "with_statement": {
+                const block = firstChildOfType(stmt, "block");
+                const hasChildStatements = blockHasStatements(block);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                break;
+            }
+            case "try_statement": {
+                const body = firstChildOfType(stmt, "block");
+                const excepts = (stmt.namedChildren || []).filter((c) =>
+                    c.type.includes("except")
+                );
+                const elseCl = firstChildOfType(stmt, "else_clause");
+                const finCl = firstChildOfType(stmt, "finally_clause");
+                const hasChildStatements =
+                    blockHasStatements(body) ||
+                    excepts.some((c) => clauseHasStatements(c)) ||
+                    clauseHasStatements(elseCl) ||
+                    clauseHasStatements(finCl);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (body) walkBlock(body);
+                for (const h of excepts) walkStmt(h);
+                if (elseCl) walkStmt(elseCl);
+                if (finCl) walkStmt(finCl);
+                break;
+            }
+            case "except_clause":
+            case "finally_clause": {
+                const block = firstChildOfType(stmt, "block");
+                const hasChildStatements = blockHasStatements(block);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                break;
+            }
+            case "match_statement":
+            case "match_stmt": {
+                const cases = (stmt.namedChildren || []).filter(
+                    (c) => c.type === "case_clause" || c.type === "case_block"
+                );
+                const hasChildStatements = cases.some((c) => clauseHasStatements(c));
+                emitAnchorStep(stmt, hasChildStatements);
+                for (const c of cases) walkStmt(c);
+                break;
+            }
+            case "case_clause":
+            case "case_block": {
+                const block = firstChildOfType(stmt, "block");
+                const hasChildStatements = blockHasStatements(block);
+                emitAnchorStep(stmt, hasChildStatements);
+                if (block) walkBlock(block);
+                break;
+            }
+            default: {
+                emitAnchorStep(stmt, false);
+                break;
+            }
+        }
+    };
+
+    const finalizeSteps = (out: EngineStep[]): EngineStep[] => {
+        if (options.generateQuiz !== false) applyQuestionOverlapGuard(out);
+        return out;
+    };
+
+    if (node.type === "module" && !options.__noGroup) {
+        const children = getStatementChildren(node).filter(isAnchorNode);
+        const enableGrouping =
+            options.grouping === "auto"
+                ? children.length >= 12 || code.length >= 5000
+                : options.grouping;
+
+        if (enableGrouping) {
+            return finalizeSteps(groupTopLevelNodes(root, children, code, options));
         }
     }
 
-    // 4. Construct the Step
-    if (lessonData || questions.length > 0) {
-        const step: EngineStep = {
-            id: randomString(8),
-            node,
-            lesson: lessonData,
-            quiz: questions.length > 0 ? { questions } : undefined,
-        };
-        steps.push(step);
+    if (node.type === "module") {
+        walkModule(node);
+        return finalizeSteps(steps);
     }
-
-    // 5. Recurse
-    if (recurse) {
-        children.forEach((child) => {
-            // Pass root down
-            steps.push(...generateEngineSteps(root, child, code, options));
-        });
+    if (node.type === "block") {
+        walkBlock(node);
+        return finalizeSteps(steps);
     }
-
-    return steps;
+    walkStmt(node);
+    return finalizeSteps(steps);
 };
 
 // ============================================================================
@@ -1130,11 +1792,7 @@ function headerMaskAndAnswer(
     const maskStart = stmt.startIndex;
     const maskEnd = firstNamed ? firstNamed.startIndex : stmt.startIndex;
 
-    const full = code.substring(stmt.startIndex, stmt.endIndex);
-    const colonIdx = full.indexOf(":");
-    const answerText = (
-        colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
-    ).trimEnd();
+    const answerText = headerAnswer(stmt, code);
 
     const masks = maskEnd > maskStart ? [{ start: maskStart, end: maskEnd }] : [];
     return { masks, answerText };
@@ -1151,8 +1809,17 @@ export function maskAndAnswerForStep(
     const headerTypes = [
         "if_statement",
         "elif_clause",
+        "else_clause",
         "while_statement",
         "for_statement",
+        "with_statement",
+        "try_statement",
+        "except_clause",
+        "finally_clause",
+        "match_statement",
+        "match_stmt",
+        "case_clause",
+        "case_block",
     ];
     const role = step.lesson?.semanticRole;
     const isHeaderNode = headerTypes.includes(step.node.type);
@@ -1170,6 +1837,25 @@ export function maskAndAnswerForStep(
 
 export type LessonHistoryItem = EngineStep & { action?: "next" | "dig" };
 
+type CustomQuizCard = {
+    order: number;
+    type: string;
+    text: string;
+    action: "next" | "dig";
+    question?: string;
+    semanticRole?: string;
+    generatorRule?: string;
+    difficulty?: "easy" | "medium" | "hard";
+    questionType?: "single" | "multi";
+    multiCorrect?: string[];
+    multiSelectHint?: number;
+    optionPool?: string[];
+    sourceRef?: SourceRef;
+    revealStart?: number;
+    revealEndBeforeChild?: number;
+    revealEndAfterChild?: number;
+};
+
 export function buildCustomQuizPayload(params: {
     fileKey?: { kind: "repo" | "project"; id: string; path: string };
     root: TreeSitterAstNode;
@@ -1180,69 +1866,69 @@ export function buildCustomQuizPayload(params: {
 }) {
     const { fileKey, root, code, history, lessonQueue, currentStep } = params;
 
-    const stepToCard = (
+    const bestSourceRef = (q: QuizQuestion): SourceRef | undefined => {
+        if (!Array.isArray(q.sourceRefs) || q.sourceRefs.length === 0) return undefined;
+        let best = q.sourceRefs[0];
+        for (const ref of q.sourceRefs) {
+            if (ref.end - ref.start < best.end - best.start) best = ref;
+        }
+        const preview = textForRange(best.start, best.end, code)?.slice(0, 120);
+        return preview ? { ...best, preview } : best;
+    };
+
+    const questionToCard = (
         step: EngineStep,
+        q: QuizQuestion,
         order: number,
-        source: "visited" | "pending",
-        action: "next" | "dig" = "next"
-    ) => {
-        let question = `What is this ${step.node.type}?`;
-        if (step.lesson?.semanticRole === "return_type") {
-            question = "What is the return type of this function?";
-        } else if (
-            step.lesson?.semanticRole === "loop_condition" ||
-            step.lesson?.semanticRole === "if_condition"
-        ) {
-            question = "Write the full header line";
-        }
-
-        const { masks, answerText } = maskAndAnswerForStep(step, root, code);
-
-        // Compute progressive reveal anchors for this step.
-        // Default: reveal nothing of this node before the question,
-        // then reveal the full node after it is answered.
-        const revealStart = step.node.startIndex;
-        let revealEndBeforeChild: number | undefined = step.node.startIndex;
-        let revealEndAfterChild: number | undefined = step.node.endIndex;
-
-        // For header-like nodes (if/elif/while/for headers), maskAndAnswerForStep
-        // returns a prefix mask. Show that prefix before asking, then reveal the rest.
-        if (masks.length > 0) {
-            revealEndBeforeChild = masks[0].end;
-            revealEndAfterChild = step.node.endIndex;
-        }
-
-        const sourceRef = {
-            nodeType: step.node.type,
+        action: "next" | "dig"
+    ): CustomQuizCard => {
+        const isMulti =
+            q.questionType === "multi" ||
+            (Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0);
+        const span = step.displaySpan ?? {
             start: step.node.startIndex,
             end: step.node.endIndex,
-            path: computeAstPath(root, step.node),
-            preview: textForNode(step.node, code).slice(0, 120),
         };
+        const snippet = code.slice(span.start, span.end).trimEnd();
         return {
             order,
-            type: step.node.type,
-            text: answerText,
+            type: q.kind,
+            text: isMulti ? snippet : q.answerLabel,
             action,
+            question: q.stem,
             semanticRole: step.lesson?.semanticRole,
-            question,
-            sourceRef,
-            source,
-            revealStart,
-            revealEndBeforeChild,
-            revealEndAfterChild,
+            generatorRule: q.generatorRule,
+            difficulty: q.difficulty,
+            questionType: isMulti ? "multi" : undefined,
+            multiCorrect: q.multiCorrect,
+            multiSelectHint: q.multiSelectHint,
+            optionPool: q.optionPool,
+            sourceRef: bestSourceRef(q),
+            revealStart: q.revealStart,
+            revealEndBeforeChild: q.revealEndBeforeChild,
+            revealEndAfterChild: q.revealEndAfterChild,
         };
     };
 
-    const filteredHistory = history.filter((h) => h.action !== "dig");
-    const visitedCards = filteredHistory.map((step, idx) =>
-        stepToCard(step, idx, "visited", step.action ?? "next")
-    );
-    const pendingCards = lessonQueue
-        .slice(currentStep)
-        .map((step, i) => stepToCard(step, filteredHistory.length + i, "pending"));
+    const cards: CustomQuizCard[] = [];
+    let order = 0;
 
-    const cards = [...visitedCards, ...pendingCards];
+    const appendStepCards = (step: EngineStep, action: "next" | "dig") => {
+        const questions = step.quiz?.questions || [];
+        for (const q of questions) {
+            cards.push(questionToCard(step, q, order++, action));
+        }
+        const children = step.lesson?.childSteps || [];
+        for (const child of children) appendStepCards(child, action);
+    };
+
+    const filteredHistory = history.filter((h) => h.action !== "dig");
+    for (const step of filteredHistory) {
+        appendStepCards(step, step.action ?? "next");
+    }
+    for (const step of lessonQueue.slice(currentStep)) {
+        appendStepCards(step, "next");
+    }
 
     return {
         fileKey,
@@ -1256,452 +1942,6 @@ export function buildCustomQuizPayload(params: {
             end: root.endIndex,
             path: [] as number[],
         },
-        cards: cards.map((c) => ({
-            order: c.order,
-            type: c.type,
-            text: c.text,
-            action: c.action,
-            question: c.question,
-            semanticRole: c.semanticRole,
-            sourceRef: (c as any).sourceRef,
-            // progressive reveal anchors used by QuizViewer for custom quizzes
-            revealStart: (c as any).revealStart,
-            revealEndBeforeChild: (c as any).revealEndBeforeChild,
-            revealEndAfterChild: (c as any).revealEndAfterChild,
-        })),
+        cards,
     };
-}
-
-function headerAnswer(stmt: TreeSitterAstNode, code: string): string {
-  const full = code.substring(stmt.startIndex, stmt.endIndex);
-  const colonIdx = full.indexOf(":");
-  return (
-    colonIdx >= 0 ? full.slice(0, colonIdx) : full.split("\n")[0]
-  ).trimEnd();
-}
-
-export function buildHeuristicQuiz(
-  root: TreeSitterAstNode,
-  code: string,
-  profile: "shallow" | "deep",
-  opts?: { maxDeepPerStmt?: number; maxQuestions?: number }
-): {
-  id: string;
-  kind: "custom-quiz";
-  createdAt: string;
-  typeLabel?: string;
-  profile?: "shallow" | "normal" | "deep";
-  root: { type: string; start?: number; end?: number };
-  totalCards: number;
-  cards: Array<{
-    order: number;
-    type: string;
-    text: string;
-    action: "next" | "dig";
-    sourceRef?: {
-      nodeType: string;
-      start: number;
-      end: number;
-      path: number[];
-      preview?: string;
-    };
-    semanticRole?: string;
-    question?: string;
-    generatorRule?: string;
-    difficulty?: "easy" | "medium" | "hard";
-    // optional progressive reveal anchors
-    revealEndBeforeChild?: number;
-    revealEndAfterChild?: number;
-  }>;
-} {
-  const cards: Array<{
-    order: number;
-    type: string;
-    text: string;
-    action: "next" | "dig";
-    sourceRef?: {
-      nodeType: string;
-      start: number;
-      end: number;
-      path: number[];
-      preview?: string;
-    };
-    semanticRole?: string;
-    question?: string;
-    generatorRule?: string;
-    difficulty?: "easy" | "medium" | "hard";
-    revealEndBeforeChild?: number;
-    revealEndAfterChild?: number;
-  }> = [];
-  let order = 0;
-
-  const emitCard = (
-    text: string,
-    q: string,
-    node: TreeSitterAstNode,
-    kind?: string,
-    semanticRole?: string
-  ) => {
-    cards.push({
-      order: order++,
-      type: kind || node.type,
-      text,
-      action: "next",
-      question: q,
-      semanticRole,
-      sourceRef: {
-        nodeType: node.type,
-        start: node.startIndex,
-        end: node.endIndex,
-        path: computeAstPath(root, node),
-        preview: code.slice(node.startIndex, node.endIndex).slice(0, 120),
-      },
-      // progressive reveal anchors for line-by-line shallow/normal quizzes
-      revealEndBeforeChild: node.startIndex,
-      revealEndAfterChild: node.endIndex,
-    });
-  };
-
-  const makeIdentifierPool = (spanStart: number, spanEnd: number): string[] => {
-    const snippet = code.slice(spanStart, spanEnd);
-    const re = /[A-Za-z_][A-Za-z0-9_]*/g;
-    const out = new Set<string>();
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(snippet))) out.add(m[0]);
-    return Array.from(out);
-  };
-
-  const makeStringPool = (spanStart: number, spanEnd: number): string[] => {
-    const snippet = code.slice(spanStart, spanEnd);
-    const re = /(['"])((?:\\.|(?!\1).)*)\1/g;
-    const out = new Set<string>();
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(snippet))) {
-      const s = m[2];
-      if (s.trim().length > 0) out.add(s);
-    }
-    return Array.from(out);
-  };
-
-  const emitHeader = (stmt: TreeSitterAstNode) => {
-    const answerText = headerAnswer(stmt, code);
-    emitCard(
-      answerText,
-      "Write the full header line",
-      stmt,
-      stmt.type,
-      "header"
-    );
-  };
-
-  const walkBlock = (block: TreeSitterAstNode) => {
-    const kids = (block.namedChildren || []).filter(
-      (c) => c.type !== "comment" && !isDocstringNode(c, block)
-    );
-    for (const stmt of kids) walkStmt(stmt);
-  };
-
-  const walkStmt = (node: TreeSitterAstNode) => {
-    switch (node.type) {
-      case "import_from_statement": {
-        const groups = buildCuratedSections(node);
-        const moduleGroup = groups.find((g) => g.key === "module");
-        if (moduleGroup?.items?.[0]) {
-          const mod = moduleGroup.items[0];
-          const modTxt = code.slice(mod.startIndex, mod.endIndex);
-          emitCard(modTxt, "What is the module?", mod, "module");
-        }
-        const namesGroup = groups.find((g) => g.key === "names");
-        const items = namesGroup?.items || [];
-        const correct = items
-          .map((n) => code.slice(n.startIndex, n.endIndex))
-          .filter(Boolean);
-        // Build padded option pool (always up to 10)
-        const idPool = makeIdentifierPool(
-          root.startIndex,
-          root.endIndex
-        ).filter((s) => !correct.includes(s));
-        let pool = Array.from(new Set<string>([...correct, ...idPool]));
-        if (pool.length < 10) {
-          const needed = 10 - pool.length;
-          const pad = shuffle(GENERIC_DISTRACTORS)
-            .filter((d) => !pool.includes(d))
-            .slice(0, needed);
-          pool.push(...pad);
-        }
-        const MAX = 10;
-        const extras = shuffle(pool.filter((p) => !correct.includes(p)));
-        const optionPool = shuffle([
-          ...correct,
-          ...extras.slice(0, Math.max(0, MAX - correct.length)),
-        ]).slice(0, MAX);
-        const snippet = code.slice(node.startIndex, node.endIndex);
-        // Reveal anchors for import-from: show header up to first imported name, then reveal through last name
-        const firstStart = items.length
-          ? items.reduce((m, it) => Math.min(m, it.startIndex), items[0].startIndex)
-          : undefined;
-        const lastEnd = items.length
-          ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
-          : undefined;
-        cards.push({
-          order: order++,
-          type: "imported_names_multi",
-          text: snippet,
-          action: "next",
-          question: `Which names are imported?`,
-          generatorRule: "import_from.names",
-          sourceRef: {
-            nodeType: node.type,
-            start: node.startIndex,
-            end: node.endIndex,
-            path: computeAstPath(root, node),
-            preview: snippet.slice(0, 120),
-          },
-          questionType: "multi",
-          multiCorrect: correct,
-          optionPool,
-          // progressive reveal anchors
-          revealStart: node.startIndex,
-          revealEndBeforeChild: firstStart,
-          revealEndAfterChild: lastEnd,
-        } as any);
-        break;
-      }
-      case "import_statement": {
-        const groups = buildCuratedSections(node);
-        const namesGroup = groups.find((g) => g.key === "names");
-        const items = namesGroup?.items || [];
-        const correct = items
-          .map((n) => code.slice(n.startIndex, n.endIndex))
-          .filter(Boolean);
-        const idPool = makeIdentifierPool(
-          root.startIndex,
-          root.endIndex
-        ).filter((s) => !correct.includes(s));
-        let pool = Array.from(new Set<string>([...correct, ...idPool]));
-        if (pool.length < 10) {
-          const needed = 10 - pool.length;
-          const pad = shuffle(GENERIC_DISTRACTORS)
-            .filter((d) => !pool.includes(d))
-            .slice(0, needed);
-          pool.push(...pad);
-        }
-        const MAX = 10;
-        const extras = shuffle(pool.filter((p) => !correct.includes(p)));
-        const optionPool = shuffle([
-          ...correct,
-          ...extras.slice(0, Math.max(0, MAX - correct.length)),
-        ]).slice(0, MAX);
-        const snippet = code.slice(node.startIndex, node.endIndex);
-        const namesGroup2 = groups.find((g) => g.key === "names");
-        const items2 = namesGroup2?.items || [];
-        const firstStart2 = items2.length
-          ? items2.reduce((m, it) => Math.min(m, it.startIndex), items2[0].startIndex)
-          : undefined;
-        const lastEnd2 = items2.length
-          ? items2.reduce((m, it) => Math.max(m, it.endIndex), items2[0].endIndex)
-          : undefined;
-        cards.push({
-          order: order++,
-          type: "imported_names_multi",
-          text: snippet,
-          action: "next",
-          question: `Which names are imported?`,
-          generatorRule: "import.names",
-          sourceRef: {
-            nodeType: node.type,
-            start: node.startIndex,
-            end: node.endIndex,
-            path: computeAstPath(root, node),
-            preview: snippet.slice(0, 120),
-          },
-          questionType: "multi",
-          multiCorrect: correct,
-          optionPool,
-          revealStart: node.startIndex,
-          revealEndBeforeChild: firstStart2,
-          revealEndAfterChild: lastEnd2,
-        } as any);
-        break;
-      }
-      case "function_definition": {
-        const sections = buildCuratedSections(node);
-        const argsGroup = sections.find((s) => s.key === "args");
-        const returnsGroup = sections.find((s) => s.key === "returns");
-
-        if (argsGroup) {
-          const params = argsGroup.items || [];
-          const names: string[] = [];
-          for (const p of params) {
-            const nameNode = (p.namedChildren || []).find(
-              (c) => c.type === "identifier"
-            );
-            if (nameNode)
-              names.push(code.slice(nameNode.startIndex, nameNode.endIndex));
-            else names.push(code.slice(p.startIndex, p.endIndex));
-          }
-          const block = firstChildOfType(node, "block");
-          const spanStart = block ? block.startIndex : node.startIndex;
-          const spanEnd = block ? block.endIndex : node.endIndex;
-          const idPool = makeIdentifierPool(spanStart, spanEnd).filter(
-            (s) => !names.includes(s)
-          );
-          let pool = Array.from(new Set<string>([...names, ...idPool]));
-          if (pool.length < 10) {
-            const needed = 10 - pool.length;
-            const pad = shuffle(GENERIC_DISTRACTORS)
-              .filter((d) => !pool.includes(d))
-              .slice(0, needed);
-            pool.push(...pad);
-          }
-          const MAX = 10;
-          const extras = shuffle(pool.filter((p) => !names.includes(p)));
-          const optionPool = shuffle([
-            ...names,
-            ...extras.slice(0, Math.max(0, MAX - names.length)),
-          ]).slice(0, MAX);
-          const header = headerAnswer(node, code);
-          // Reveal anchors for params: prefix through first param, then through last param
-          const firstParamStart = params.length
-            ? params.reduce((m, it) => Math.min(m, it.startIndex), params[0].startIndex)
-            : undefined;
-          const lastParamEnd = params.length
-            ? params.reduce((m, it) => Math.max(m, it.endIndex), params[0].endIndex)
-            : undefined;
-          cards.push({
-            order: order++,
-            type: "function_params_multi",
-            text: header,
-            action: "next",
-            question: `Which of the following are parameters of this function?`,
-            generatorRule: "func.params-multi",
-            sourceRef: {
-              nodeType: node.type,
-              start: node.startIndex,
-              end: node.endIndex,
-              path: computeAstPath(root, node),
-              preview: code
-                .slice(node.startIndex, node.endIndex)
-                .slice(0, 120),
-            },
-            questionType: "multi",
-            multiCorrect: names,
-            optionPool,
-            revealStart: node.startIndex,
-            revealEndBeforeChild: firstParamStart,
-            revealEndAfterChild: lastParamEnd,
-          } as any);
-        }
-        if (returnsGroup) {
-          for (let i = 0; i < returnsGroup.items.length; i++) {
-            const item = returnsGroup.items[i];
-            const text = code.substring(item.startIndex, item.endIndex);
-            emitCard(
-              text,
-              "What is the return type?",
-              item,
-              item.type,
-              "returns"
-            );
-          }
-        }
-        const block = firstChildOfType(node, "block");
-        if (block) walkBlock(block);
-        break;
-      }
-      case "class_definition": {
-        const block = firstChildOfType(node, "block");
-        if (block) walkBlock(block);
-        break;
-      }
-      case "while_statement":
-      case "for_statement": {
-        emitHeader(node);
-        const block = firstChildOfType(node, "block");
-        if (block) walkBlock(block);
-        const elseCl = firstChildOfType(node, "else_clause");
-        if (elseCl) {
-          emitHeader(elseCl);
-          const eb = firstChildOfType(elseCl, "block");
-          if (eb) walkBlock(eb);
-        }
-        break;
-      }
-      case "if_statement": {
-        emitHeader(node);
-        const block = firstChildOfType(node, "block");
-        if (block) walkBlock(block);
-        for (const e of childrenOfType(node, "elif_clause")) {
-          emitHeader(e);
-          const b = firstChildOfType(e, "block");
-          if (b) walkBlock(b);
-        }
-        const elseCl = firstChildOfType(node, "else_clause");
-        if (elseCl) {
-          emitHeader(elseCl);
-          const eb = firstChildOfType(elseCl, "block");
-          if (eb) walkBlock(eb);
-        }
-        break;
-      }
-      case "with_statement": {
-        emitHeader(node);
-        const block = firstChildOfType(node, "block");
-        if (block) walkBlock(block);
-        break;
-      }
-      case "try_statement": {
-        emitHeader(node);
-        const body = firstChildOfType(node, "block");
-        if (body) walkBlock(body);
-        for (const h of (node.namedChildren || []).filter((c) =>
-          c.type.includes("except")
-        )) {
-          emitHeader(h);
-          const b = firstChildOfType(h, "block");
-          if (b) walkBlock(b);
-        }
-        const elseCl = firstChildOfType(node, "else_clause");
-        if (elseCl) {
-          emitHeader(elseCl);
-          const eb = firstChildOfType(elseCl, "block");
-          if (eb) walkBlock(eb);
-        }
-        const finCl = firstChildOfType(node, "finally_clause");
-        if (finCl) {
-          emitHeader(finCl);
-          const fb = firstChildOfType(finCl, "block");
-          if (fb) walkBlock(fb);
-        }
-        break;
-      }
-      default: {
-        const text = code.slice(node.startIndex, node.endIndex);
-        emitCard(text, "What comes next?", node);
-        break;
-      }
-    }
-  };
-
-  {
-    const tops = (root.namedChildren || []).filter(
-      (c) => c.type !== "comment" && !isDocstringNode(c, root)
-    );
-    for (const top of tops) walkStmt(top);
-  }
-  if (typeof opts?.maxQuestions === "number") {
-    const n = Math.min(cards.length, opts.maxQuestions);
-    cards.length = n;
-  }
-
-  return {
-    id: "",
-    kind: "custom-quiz",
-    createdAt: new Date().toISOString(),
-    typeLabel: "CustomQuizV1.1",
-    profile,
-    root: { type: root.type, start: root.startIndex, end: root.endIndex },
-    totalCards: cards.length,
-    cards,
-  };
 }

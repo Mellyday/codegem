@@ -238,7 +238,15 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
   const isComplete = currentStep >= lessonQueue.length;
   const nextStep = !isComplete ? lessonQueue[currentStep] : null;
-  const nextNode = nextStep?.node;
+  const displaySnippet = (step: LessonStep | null | undefined): string => {
+    if (!step) return "";
+    if (isJsLessonStep(step)) return jsLesson.textForNode(step.node, code);
+    const span = step.displaySpan ?? {
+      start: step.node.startIndex,
+      end: step.node.endIndex,
+    };
+    return code.slice(span.start, span.end).trimEnd();
+  };
 
   // Compact, scalable step navigator items for large quizzes
   const stepNavItems = (() => {
@@ -365,7 +373,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         </div>
         <p className="text-sm text-slate-800">{getPrompt(nextStep)}</p>
         <pre className="text-sm text-slate-900 font-mono bg-slate-100 p-2 rounded overflow-auto whitespace-pre-wrap wrap-anywhere">
-          <code>{nextNode ? (language === "python" ? pyEngine.textForNode : jsLesson.textForNode)(nextNode, code) : ""}</code>
+          <code>{displaySnippet(nextStep)}</code>
         </pre>
       </div>
 

@@ -384,7 +384,7 @@ const revealAfterForQuestion = (q: Question | undefined): number | undefined => 
   return undefined;
 };
 
-// Heuristic helpers use buildHeuristicQuiz from src/lib/pyEngine (Python) and src/lib/jsQuiz (JS).
+// Heuristic helpers use pyEngine steps for Python and buildHeuristicQuiz from src/lib/jsQuiz for JS.
 
 export const QuizViewer = ({
   root,
@@ -535,7 +535,67 @@ export const QuizViewer = ({
     }
   };
 
-  // Save split quizzes using the same grouping heuristic as Lesson (Python via pyEngine, JS via jsQuiz)
+  const buildPythonEnginePayload = (
+    vroot: TreeSitterAstNode,
+    profile: "shallow" | "deep"
+  ) => {
+    const steps = pyEngine.generateEngineSteps(vroot, vroot, code || "", {
+      profile,
+      grouping: false,
+      includeNames: false,
+      generateQuiz: true,
+    }) as any[];
+    return pyEngine.buildCustomQuizPayload({
+      fileKey,
+      root: vroot,
+      code: code || "",
+      history: [],
+      lessonQueue: steps as any,
+      currentStep: 0,
+    }) as any;
+  };
+
+  const savePythonEngineQuiz = async (
+    payload: any,
+    vroot: TreeSitterAstNode,
+    name: string,
+    profile: "shallow" | "deep"
+  ) => {
+    const rootText =
+      typeof code === "string"
+        ? code.substring(vroot.startIndex, vroot.endIndex)
+        : payload?.rootNode?.text;
+    const quizPayload = {
+      ...payload,
+      fileKey,
+      name,
+      profile,
+      rootNode: payload?.rootNode || {
+        type: vroot.type,
+        text: rootText,
+        start: vroot.startIndex,
+        end: vroot.endIndex,
+      },
+    };
+    if (!quizPayload.rootNode?.text && typeof code === "string") {
+      quizPayload.rootNode.text = rootText;
+    }
+    const res = await fetch("/api/quizzes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(quizPayload),
+    });
+    if (!res.ok) {
+      let msg = `HTTP ${res.status}`;
+      try {
+        const data = await res.json();
+        if (data?.error) msg += ` — ${data.error}`;
+      } catch {}
+      throw new Error(msg);
+    }
+  };
+
+  // Save split quizzes using the same grouping heuristic as Lesson (Python via pyEngine steps, JS via jsQuiz)
   const saveSplitHeuristic = async (
     profile: "shallow" | "deep",
     opts?: { maxDeepPerStmt?: number }
@@ -558,11 +618,13 @@ export const QuizViewer = ({
     );
     if (!groups.length) {
       // Fallback to single save
-      const single =
-        language === "python"
-          ? pyEngine.buildHeuristicQuiz(root, code || "", profile, opts)
-          : jsQuiz.buildHeuristicQuiz(root, code || "", profile, opts);
-      await saveHeuristicQuiz(single, root, `Heuristic ${profile}`);
+      if (language === "python") {
+        const payload = buildPythonEnginePayload(root, profile);
+        await savePythonEngineQuiz(payload, root, `Heuristic ${profile}`, profile);
+      } else {
+        const single = jsQuiz.buildHeuristicQuiz(root, code || "", profile, opts);
+        await saveHeuristicQuiz(single, root, `Heuristic ${profile}`);
+      }
       alert(`Saved 1 quiz (Heuristic ${profile}).`);
       return;
     }
@@ -592,16 +654,18 @@ export const QuizViewer = ({
       const start = g.node.startIndex;
       const end = g.node.endIndex;
       const vroot = buildGroupRoot(start, end);
-      const quiz =
-        language === "python"
-          ? pyEngine.buildHeuristicQuiz(vroot, code || "", profile, opts)
-          : jsQuiz.buildHeuristicQuiz(vroot, code || "", profile, opts);
       const name =
         `${(g as any).prompt ?? (g as any).lesson?.prompt ?? ""}`.slice(
           0,
           160
         ) || `Heuristic ${profile} (${i + 1})`;
-      await saveHeuristicQuiz(quiz, vroot, name);
+      if (language === "python") {
+        const payload = buildPythonEnginePayload(vroot, profile);
+        await savePythonEngineQuiz(payload, vroot, name, profile);
+      } else {
+        const quiz = jsQuiz.buildHeuristicQuiz(vroot, code || "", profile, opts);
+        await saveHeuristicQuiz(quiz, vroot, name);
+      }
       saved += 1;
     }
     alert(`Saved ${saved} quiz(es) for grouped sections.`);
@@ -728,13 +792,26 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz =
-                  language === "python"
-                    ? pyEngine.buildHeuristicQuiz(root, code || "", "shallow")
-                    : jsQuiz.buildHeuristicQuiz(root, code || "", "shallow");
-                saveHeuristicQuiz(quiz, root, "Heuristic shallow")
-                  .then(() => alert("Saved heuristic shallow quiz."))
-                  .catch(() => alert("Failed to save heuristic shallow quiz."));
+                if (language === "python") {
+                  const payload = buildPythonEnginePayload(root, "shallow");
+                  savePythonEngineQuiz(
+                    payload,
+                    root,
+                    "Heuristic shallow",
+                    "shallow"
+                  )
+                    .then(() => alert("Saved heuristic shallow quiz."))
+                    .catch(() => alert("Failed to save heuristic shallow quiz."));
+                } else {
+                  const quiz = jsQuiz.buildHeuristicQuiz(
+                    root,
+                    code || "",
+                    "shallow"
+                  );
+                  saveHeuristicQuiz(quiz, root, "Heuristic shallow")
+                    .then(() => alert("Saved heuristic shallow quiz."))
+                    .catch(() => alert("Failed to save heuristic shallow quiz."));
+                }
               }}
             >
               Shallow (Line-by-Line)
@@ -744,17 +821,19 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const quiz =
-                  language === "python"
-                    ? pyEngine.buildHeuristicQuiz(root, code || "", "deep", {
-                        maxDeepPerStmt: 6,
-                      })
-                    : jsQuiz.buildHeuristicQuiz(root, code || "", "deep", {
-                        maxDeepPerStmt: 6,
-                      });
-                saveHeuristicQuiz(quiz, root, "Heuristic deep")
-                  .then(() => alert("Saved heuristic deep quiz."))
-                  .catch(() => alert("Failed to save heuristic deep quiz."));
+                if (language === "python") {
+                  const payload = buildPythonEnginePayload(root, "deep");
+                  savePythonEngineQuiz(payload, root, "Heuristic deep", "deep")
+                    .then(() => alert("Saved heuristic deep quiz."))
+                    .catch(() => alert("Failed to save heuristic deep quiz."));
+                } else {
+                  const quiz = jsQuiz.buildHeuristicQuiz(root, code || "", "deep", {
+                    maxDeepPerStmt: 6,
+                  });
+                  saveHeuristicQuiz(quiz, root, "Heuristic deep")
+                    .then(() => alert("Saved heuristic deep quiz."))
+                    .catch(() => alert("Failed to save heuristic deep quiz."));
+                }
               }}
             >
               Deep (With Expression Detail)
