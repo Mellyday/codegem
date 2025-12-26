@@ -836,6 +836,36 @@ export const buildCuratedSections = (
       ];
     }
 
+    case "annotated_assignment": {
+      // x: int = value or x: int (no value)
+      // Tree-sitter exposes: target (identifier), annotation (type), value (optional)
+      const children = node.namedChildren || [];
+      const targetNode =
+        childByField(node, "left") ||
+        childByField(node, "target") ||
+        children.find((c) => c.type === "identifier");
+      const annotationNode =
+        childByField(node, "annotation") ||
+        childByField(node, "type") ||
+        children.find(
+          (c) =>
+            c.type === "type" ||
+            c.type === "subscript" ||
+            (c.type === "identifier" && c !== targetNode)
+        );
+      const valueNode =
+        childByField(node, "right") ||
+        childByField(node, "value") ||
+        children.find(
+          (c) => c !== targetNode && c !== annotationNode && c.startIndex > (annotationNode?.endIndex ?? 0)
+        );
+      return [
+        { key: "target", items: targetNode ? [targetNode] : [] },
+        { key: "annotation", items: annotationNode ? [annotationNode] : [] },
+        { key: "value", items: valueNode ? [valueNode] : [] },
+      ];
+    }
+
     case "return_statement": {
       return [{ key: "value", items: node.namedChildren || [] }];
     }

@@ -9,6 +9,7 @@ import {
   getSectionFirstItem,
   getRevealAnchors,
   getSectionSpan,
+  isYieldFrom,
 } from "./pyCuration";
 import { randomString } from "./utils";
 
@@ -118,10 +119,28 @@ const displaySpanForNode = (
   return span;
 };
 
+// Path cache: WeakMap keyed by root node, then by target node object.
+// Using WeakMap<node, path> is more robust than string keys (type:start:end)
+// because it avoids potential collisions with identical spans/types.
+const pathCache = new WeakMap<TreeSitterAstNode, WeakMap<TreeSitterAstNode, number[]>>();
+
 export const computeAstPath = (
   root: TreeSitterAstNode,
   target: TreeSitterAstNode
 ): number[] => {
+  // Check cache first
+  let rootCache = pathCache.get(root);
+  if (!rootCache) {
+    rootCache = new WeakMap<TreeSitterAstNode, number[]>();
+    pathCache.set(root, rootCache);
+  }
+
+  const cached = rootCache.get(target);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  // DFS to find path
   const path: number[] = [];
   let found = false;
   const dfs = (n: TreeSitterAstNode, cur: number[]) => {
@@ -138,6 +157,9 @@ export const computeAstPath = (
     (n.namedChildren || []).forEach((c, idx) => dfs(c, cur.concat(idx)));
   };
   dfs(root, []);
+
+  // Cache result
+  rootCache.set(target, path);
   return path;
 };
 
@@ -350,9 +372,69 @@ const findLambdaNodes = (n: TreeSitterAstNode): TreeSitterAstNode[] => {
   return out;
 };
 
+// Boundary node types where we should NOT descend when looking for yield/await/etc.
+// These create new scopes where a yield would belong to the inner function, not the outer one.
+const SCOPE_BOUNDARY_TYPES = new Set([
+  "function_definition",
+  "async_function_definition",
+  "class_definition",
+  "lambda",
+  // Generator expressions create their own scope too
+  "generator_expression",
+]);
+
+/**
+ * Collect descendants matching a predicate, but stop descending at scope boundary nodes.
+ * Used by generator detection to avoid false positives from nested functions.
+ * 
+ * @param node - Node to search from
+ * @param predicate - Function to test each node
+ * @param stopAtBoundaries - If true, don't descend into function_definition, class_definition, lambda, etc.
+ */
+const collectDescendantsWithinScope = (
+  node: TreeSitterAstNode,
+  predicate: (n: TreeSitterAstNode) => boolean,
+  stopAtBoundaries: boolean = true
+): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [...(node.namedChildren || [])];
+
+  while (stack.length) {
+    const cur = stack.pop()!;
+
+    // Check if this node matches the predicate
+    if (predicate(cur)) {
+      out.push(cur);
+    }
+
+    // If this is a boundary node and we're stopping at boundaries, don't descend further
+    if (stopAtBoundaries && SCOPE_BOUNDARY_TYPES.has(cur.type)) {
+      continue;
+    }
+
+    // Otherwise, add children to stack
+    for (const child of cur.namedChildren || []) {
+      stack.push(child);
+    }
+  }
+
+  return out;
+};
+
 // ============================================================================
 // Quiz rules (copied from pyQuiz)
 // ============================================================================
+//
+// NOTE: Tree-sitter node type names can vary across grammar versions/forks.
+// Known variations to watch for:
+// - yield: yield, yield_expression, yield_expr, yield_statement
+// - f-strings: f_string, formatted_string
+// - comparison: comparison, comparison_operator
+// - patterns: as_pattern, class_pattern, etc. (may not exist in all grammars)
+// - annotated assignments: annotated_assignment (may be represented differently)
+//
+// If a rule never fires, check the actual AST output for your grammar version.
+// Consider adding a dev-only utility to dump encountered node types for coverage testing.
 
 type DecompositionLevel = "shallow" | "normal" | "deep";
 
@@ -618,7 +700,7 @@ const rules: Record<string, Rule[]> = {
       const strPool: string[] = [];
       try {
         const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
-        const reStr = /(['"])((?:\\.|(?!\1).)*)\\1/g;
+        const reStr = /(['"])((?:\\.|(?!\1).)*)\1/g;
         const snippet = (code || "").slice(spanStart, spanEnd);
         let m: RegExpExecArray | null;
         while ((m = reId.exec(snippet))) idPool.push(m[0]);
@@ -1110,16 +1192,17 @@ const rules: Record<string, Rule[]> = {
               .filter(Boolean);
             if (typeParamNames.length > 0) {
               const tpSpan = getSectionSpan(node, "type_params");
+              const tpOptionPool = buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex);
               qs.push({
                 kind: "func_type_params_multi",
                 stem: "Which are type parameters of this function?",
                 answerLabel: typeParamNames[0] ?? "T",
-                options: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+                options: tpOptionPool,
                 sourceRefs: [sourceRef],
                 generatorRule: "func.type-params-multi",
                 questionType: "multi",
                 multiCorrect: typeParamNames,
-                optionPool: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+                optionPool: tpOptionPool,
                 revealStart: node.startIndex,
                 revealEndBeforeChild: tpSpan?.start,
                 revealEndAfterChild: tpSpan?.end,
@@ -1149,6 +1232,69 @@ const rules: Record<string, Rule[]> = {
             generatorRule: "func.return-type",
           });
         }
+
+        // Generator function detection (yield/yield from in function body)
+        const bodyNode = getSectionFirstItem(node, "body");
+        if (bodyNode) {
+          // Helper to check if a node is a yield type
+          const isYieldType = (t: string) =>
+            t === "yield" ||
+            t === "yield_expression" ||
+            t === "yield_expr" ||
+            t === "yield_statement";
+
+          // Collect yield nodes, unwrapping expression_statement wrappers
+          const yieldNodes: TreeSitterAstNode[] = [];
+          const rawMatches = collectDescendantsWithinScope(
+            bodyNode,
+            (n) =>
+              isYieldType(n.type) ||
+              // Also match expression_statement containing yield
+              (n.type === "expression_statement" &&
+                (n.namedChildren || []).some((c) => isYieldType(c.type)))
+          );
+
+          for (const match of rawMatches) {
+            if (isYieldType(match.type)) {
+              // Direct yield node
+              yieldNodes.push(match);
+            } else if (match.type === "expression_statement") {
+              // Unwrap: push the actual yield child, not the wrapper
+              const yieldChild = (match.namedChildren || []).find((c) => isYieldType(c.type));
+              if (yieldChild) {
+                yieldNodes.push(yieldChild);
+              }
+            }
+          }
+
+          if (yieldNodes.length > 0) {
+            // Check if any are yield from (now correctly using actual yield nodes)
+            const hasYieldFrom = yieldNodes.some((y) => isYieldFrom(y, code));
+
+            qs.push({
+              kind: "generator-function",
+              stem: "Does this function use yield (making it a generator)?",
+              answerLabel: "Yes",
+              options: ["No"],
+              sourceRefs: [sourceRef],
+              generatorRule: "func.is-generator",
+              difficulty: "easy",
+            });
+
+            // If there's yield from, add a specific question
+            if (hasYieldFrom) {
+              qs.push({
+                kind: "generator-yield-from",
+                stem: "Does this generator use 'yield from'?",
+                answerLabel: "Yes",
+                options: ["No"],
+                sourceRefs: [sourceRef],
+                generatorRule: "func.has-yield-from",
+                difficulty: "medium",
+              });
+            }
+          }
+        }
       }
       return qs;
     },
@@ -1167,16 +1313,17 @@ const rules: Record<string, Rule[]> = {
             .filter(Boolean);
           if (typeParamNames.length > 0) {
             const tpSpan = getSectionSpan(node, "type_params");
+            const tpOptionPool = buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex);
             qs.push({
               kind: "class_type_params_multi",
               stem: "Which are type parameters of this class?",
               answerLabel: typeParamNames[0] ?? "T",
-              options: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+              options: tpOptionPool,
               sourceRefs: [sourceRef],
               generatorRule: "class.type-params-multi",
               questionType: "multi",
               multiCorrect: typeParamNames,
-              optionPool: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+              optionPool: tpOptionPool,
               revealStart: node.startIndex,
               revealEndBeforeChild: tpSpan?.start,
               revealEndAfterChild: tpSpan?.end,
@@ -1491,15 +1638,1004 @@ const rules: Record<string, Rule[]> = {
   else_clause: [headerRule],
   while_statement: [headerRule],
   for_statement: [headerRule],
-  with_statement: [headerRule],
+
+  // Enhanced with_statement with context manager binding questions
+  with_statement: [
+    headerRule,
+    ({ root, node, code, sourceRef }) => {
+      const items = getSectionItems(node, "items");
+      if (items.length === 0) return;
+      const qs: Q11[] = [];
+
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        const context = getSectionFirstItem(item, "context");
+        const alias = getSectionFirstItem(item, "alias");
+
+        if (context) {
+          const contextText =
+            textForRange(context.startIndex, context.endIndex, code) || context.type;
+          qs.push({
+            kind: "with-context",
+            stem: items.length > 1
+              ? `What is the context manager expression #${i + 1}?`
+              : "What is the context manager expression?",
+            answerLabel: contextText,
+            options: buildDistractors(contextText, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: context.type,
+                start: context.startIndex,
+                end: context.endIndex,
+                path: computeAstPath(root, context),
+              },
+            ],
+            generatorRule: "with.context",
+          });
+        }
+
+        if (alias) {
+          const aliasText =
+            textForRange(alias.startIndex, alias.endIndex, code) || alias.type;
+          qs.push({
+            kind: "with-binding",
+            stem: items.length > 1
+              ? `What is the binding name (as ...) for context manager #${i + 1}?`
+              : "What is the binding name (as ...)?",
+            answerLabel: aliasText,
+            options: buildDistractors(aliasText, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: alias.type,
+                start: alias.startIndex,
+                end: alias.endIndex,
+                path: computeAstPath(root, alias),
+              },
+            ],
+            generatorRule: "with.binding",
+          });
+        }
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
   try_statement: [headerRule],
-  except_clause: [headerRule],
+
+  // Enhanced except_clause with exception type and binding name questions
+  except_clause: [
+    headerRule,
+    ({ root, node, code, sourceRef }) => {
+      const exceptionType = getSectionFirstItem(node, "type");
+      const bindingName = getSectionFirstItem(node, "name");
+      const qs: Q11[] = [];
+
+      if (exceptionType) {
+        const typeText =
+          textForRange(exceptionType.startIndex, exceptionType.endIndex, code) ||
+          exceptionType.type;
+        qs.push({
+          kind: "except-type",
+          stem: "What exception type is being caught?",
+          answerLabel: typeText,
+          options: buildDistractors(typeText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: exceptionType.type,
+              start: exceptionType.startIndex,
+              end: exceptionType.endIndex,
+              path: computeAstPath(root, exceptionType),
+            },
+          ],
+          generatorRule: "except.type",
+        });
+      }
+
+      if (bindingName) {
+        const nameText =
+          textForRange(bindingName.startIndex, bindingName.endIndex, code) ||
+          bindingName.type;
+        qs.push({
+          kind: "except-binding",
+          stem: "What is the binding name for the caught exception (as ...)?",
+          answerLabel: nameText,
+          options: buildDistractors(nameText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: bindingName.type,
+              start: bindingName.startIndex,
+              end: bindingName.endIndex,
+              path: computeAstPath(root, bindingName),
+            },
+          ],
+          generatorRule: "except.binding",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
   finally_clause: [headerRule],
   match_statement: [headerRule],
   match_stmt: [headerRule],
-  case_clause: [headerRule],
+
+  // Enhanced case_clause with pattern-specific questions
+  case_clause: [
+    headerRule,
+    ({ root, node, code, sourceRef }) => {
+      const pattern = getSectionFirstItem(node, "pattern");
+      const guard = getSectionFirstItem(node, "guard");
+      const qs: Q11[] = [];
+
+      if (pattern) {
+        const patternText =
+          textForRange(pattern.startIndex, pattern.endIndex, code) || pattern.type;
+        qs.push({
+          kind: "case-pattern",
+          stem: "What pattern is being matched?",
+          answerLabel: patternText,
+          options: buildDistractors(patternText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: pattern.type,
+              start: pattern.startIndex,
+              end: pattern.endIndex,
+              path: computeAstPath(root, pattern),
+            },
+          ],
+          generatorRule: "case.pattern",
+        });
+
+        // For as_pattern, ask about the binding name
+        if (pattern.type === "as_pattern") {
+          const bindingName = getSectionFirstItem(pattern, "name");
+          if (bindingName) {
+            const nameText =
+              textForRange(bindingName.startIndex, bindingName.endIndex, code) ||
+              bindingName.type;
+            qs.push({
+              kind: "case-binding",
+              stem: "What is the binding name in this pattern (as ...)?",
+              answerLabel: nameText,
+              options: buildDistractors(nameText, { code }),
+              sourceRefs: [
+                sourceRef,
+                {
+                  nodeType: bindingName.type,
+                  start: bindingName.startIndex,
+                  end: bindingName.endIndex,
+                  path: computeAstPath(root, bindingName),
+                },
+              ],
+              generatorRule: "case.binding",
+            });
+          }
+        }
+
+        // For class_pattern, ask about the class name
+        if (pattern.type === "class_pattern") {
+          const className = getSectionFirstItem(pattern, "class");
+          if (className) {
+            const classText =
+              textForRange(className.startIndex, className.endIndex, code) ||
+              className.type;
+            qs.push({
+              kind: "case-class",
+              stem: "Which class is being matched in this pattern?",
+              answerLabel: classText,
+              options: buildDistractors(classText, { code }),
+              sourceRefs: [
+                sourceRef,
+                {
+                  nodeType: className.type,
+                  start: className.startIndex,
+                  end: className.endIndex,
+                  path: computeAstPath(root, className),
+                },
+              ],
+              generatorRule: "case.class",
+            });
+          }
+        }
+      }
+
+      if (guard) {
+        const guardText =
+          textForRange(guard.startIndex, guard.endIndex, code) || guard.type;
+        qs.push({
+          kind: "case-guard",
+          stem: "What is the guard condition?",
+          answerLabel: guardText,
+          options: buildDistractors(guardText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: guard.type,
+              start: guard.startIndex,
+              end: guard.endIndex,
+              path: computeAstPath(root, guard),
+            },
+          ],
+          generatorRule: "case.guard",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
   case_block: [headerRule],
+
+  // Walrus operator (:=)
+  assignment_expression: [
+    ({ root, node, code, sourceRef }) => {
+      const target = getSectionFirstItem(node, "target");
+      const value = getSectionFirstItem(node, "value");
+      const qs: Q11[] = [];
+
+      if (target) {
+        const targetText =
+          textForRange(target.startIndex, target.endIndex, code) || target.type;
+        qs.push({
+          kind: "walrus-target",
+          stem: "What variable is being assigned with :=?",
+          answerLabel: targetText,
+          options: buildDistractors(targetText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: target.type,
+              start: target.startIndex,
+              end: target.endIndex,
+              path: computeAstPath(root, target),
+            },
+          ],
+          generatorRule: "walrus.target",
+        });
+      }
+
+      if (value) {
+        const valueText =
+          textForRange(value.startIndex, value.endIndex, code) || value.type;
+        qs.push({
+          kind: "walrus-value",
+          stem: "What value is being assigned with :=?",
+          answerLabel: valueText,
+          options: buildDistractors(valueText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: value.type,
+              start: value.startIndex,
+              end: value.endIndex,
+              path: computeAstPath(root, value),
+            },
+          ],
+          generatorRule: "walrus.value",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // List comprehension
+  list_comprehension: [
+    ({ root, node, code, sourceRef }) => {
+      const output = getSectionFirstItem(node, "output");
+      const fors = getSectionItems(node, "fors");
+      const ifs = getSectionItems(node, "ifs");
+      const qs: Q11[] = [];
+
+      if (output) {
+        const outputText =
+          textForRange(output.startIndex, output.endIndex, code) || output.type;
+        qs.push({
+          kind: "comprehension-output",
+          stem: "What is the output expression of this list comprehension?",
+          answerLabel: outputText,
+          options: buildDistractors(outputText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: output.type,
+              start: output.startIndex,
+              end: output.endIndex,
+              path: computeAstPath(root, output),
+            },
+          ],
+          generatorRule: "listcomp.output",
+        });
+      }
+
+      for (let i = 0; i < fors.length; i++) {
+        const forClause = fors[i];
+        const forText =
+          textForRange(forClause.startIndex, forClause.endIndex, code) || "for clause";
+        qs.push({
+          kind: "comprehension-for",
+          stem: fors.length > 1
+            ? `What is the for-clause #${i + 1}?`
+            : "What is the for-clause in this comprehension?",
+          answerLabel: forText,
+          options: buildDistractors(forText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: forClause.type,
+              start: forClause.startIndex,
+              end: forClause.endIndex,
+              path: computeAstPath(root, forClause),
+            },
+          ],
+          generatorRule: "listcomp.for",
+        });
+      }
+
+      for (let i = 0; i < ifs.length; i++) {
+        const ifClause = ifs[i];
+        const ifText =
+          textForRange(ifClause.startIndex, ifClause.endIndex, code) || "if clause";
+        qs.push({
+          kind: "comprehension-if",
+          stem: ifs.length > 1
+            ? `What is the filter condition #${i + 1}?`
+            : "What is the filter condition (if clause)?",
+          answerLabel: ifText,
+          options: buildDistractors(ifText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: ifClause.type,
+              start: ifClause.startIndex,
+              end: ifClause.endIndex,
+              path: computeAstPath(root, ifClause),
+            },
+          ],
+          generatorRule: "listcomp.if",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // Set comprehension
+  set_comprehension: [
+    ({ root, node, code, sourceRef }) => {
+      const elt = getSectionFirstItem(node, "elt");
+      const generators = getSectionItems(node, "generators");
+      const qs: Q11[] = [];
+
+      if (elt) {
+        const eltText =
+          textForRange(elt.startIndex, elt.endIndex, code) || elt.type;
+        qs.push({
+          kind: "comprehension-element",
+          stem: "What is the element expression of this set comprehension?",
+          answerLabel: eltText,
+          options: buildDistractors(eltText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: elt.type,
+              start: elt.startIndex,
+              end: elt.endIndex,
+              path: computeAstPath(root, elt),
+            },
+          ],
+          generatorRule: "setcomp.element",
+        });
+      }
+
+      for (let i = 0; i < generators.length; i++) {
+        const gen = generators[i];
+        const genText =
+          textForRange(gen.startIndex, gen.endIndex, code) || gen.type;
+        qs.push({
+          kind: "comprehension-generator",
+          stem: generators.length > 1
+            ? `What is generator clause #${i + 1}?`
+            : "What is the generator clause?",
+          answerLabel: genText,
+          options: buildDistractors(genText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: gen.type,
+              start: gen.startIndex,
+              end: gen.endIndex,
+              path: computeAstPath(root, gen),
+            },
+          ],
+          generatorRule: "setcomp.generator",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // Generator expression
+  generator_expression: [
+    ({ root, node, code, sourceRef }) => {
+      const elt = getSectionFirstItem(node, "elt");
+      const generators = getSectionItems(node, "generators");
+      const qs: Q11[] = [];
+
+      if (elt) {
+        const eltText =
+          textForRange(elt.startIndex, elt.endIndex, code) || elt.type;
+        qs.push({
+          kind: "generator-element",
+          stem: "What is the yielded expression of this generator expression?",
+          answerLabel: eltText,
+          options: buildDistractors(eltText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: elt.type,
+              start: elt.startIndex,
+              end: elt.endIndex,
+              path: computeAstPath(root, elt),
+            },
+          ],
+          generatorRule: "genexp.element",
+        });
+      }
+
+      for (let i = 0; i < generators.length; i++) {
+        const gen = generators[i];
+        const genText =
+          textForRange(gen.startIndex, gen.endIndex, code) || gen.type;
+        qs.push({
+          kind: "generator-clause",
+          stem: generators.length > 1
+            ? `What is generator clause #${i + 1}?`
+            : "What is the generator clause?",
+          answerLabel: genText,
+          options: buildDistractors(genText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: gen.type,
+              start: gen.startIndex,
+              end: gen.endIndex,
+              path: computeAstPath(root, gen),
+            },
+          ],
+          generatorRule: "genexp.generator",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // Dictionary comprehension
+  dictionary_comprehension: [
+    ({ root, node, code, sourceRef }) => {
+      const key = getSectionFirstItem(node, "key");
+      const value = getSectionFirstItem(node, "value");
+      const generators = getSectionItems(node, "generators");
+      const qs: Q11[] = [];
+
+      if (key) {
+        const keyText =
+          textForRange(key.startIndex, key.endIndex, code) || key.type;
+        qs.push({
+          kind: "dictcomp-key",
+          stem: "What is the key expression of this dict comprehension?",
+          answerLabel: keyText,
+          options: buildDistractors(keyText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: key.type,
+              start: key.startIndex,
+              end: key.endIndex,
+              path: computeAstPath(root, key),
+            },
+          ],
+          generatorRule: "dictcomp.key",
+        });
+      }
+
+      if (value) {
+        const valueText =
+          textForRange(value.startIndex, value.endIndex, code) || value.type;
+        qs.push({
+          kind: "dictcomp-value",
+          stem: "What is the value expression of this dict comprehension?",
+          answerLabel: valueText,
+          options: buildDistractors(valueText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: value.type,
+              start: value.startIndex,
+              end: value.endIndex,
+              path: computeAstPath(root, value),
+            },
+          ],
+          generatorRule: "dictcomp.value",
+        });
+      }
+
+      for (let i = 0; i < generators.length; i++) {
+        const gen = generators[i];
+        const genText =
+          textForRange(gen.startIndex, gen.endIndex, code) || gen.type;
+        qs.push({
+          kind: "dictcomp-generator",
+          stem: generators.length > 1
+            ? `What is generator clause #${i + 1}?`
+            : "What is the generator clause?",
+          answerLabel: genText,
+          options: buildDistractors(genText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: gen.type,
+              start: gen.startIndex,
+              end: gen.endIndex,
+              path: computeAstPath(root, gen),
+            },
+          ],
+          generatorRule: "dictcomp.generator",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // Global statement
+  global_statement: [
+    ({ node, code, sourceRef }) => {
+      const names = getSectionItems(node, "names");
+      const nameTexts = names
+        .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+        .filter(Boolean);
+
+      if (nameTexts.length === 0) return;
+
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      const optionPool = buildMultiSelectOptionPool(nameTexts, code, spanStart, spanEnd);
+      const namesSpan = getSectionSpan(node, "names");
+
+      return [
+        {
+          kind: "global-names",
+          stem: "Which variables are declared global?",
+          answerLabel: nameTexts[0] ?? "global",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "global.names",
+          questionType: "multi",
+          multiCorrect: nameTexts,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: namesSpan?.start,
+          revealEndAfterChild: namesSpan?.end,
+        },
+      ];
+    },
+  ],
+  global_stmt: [
+    ({ node, code, sourceRef }) => {
+      const names = getSectionItems(node, "names");
+      const nameTexts = names
+        .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+        .filter(Boolean);
+
+      if (nameTexts.length === 0) return;
+
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      const optionPool = buildMultiSelectOptionPool(nameTexts, code, spanStart, spanEnd);
+      const namesSpan = getSectionSpan(node, "names");
+
+      return [
+        {
+          kind: "global-names",
+          stem: "Which variables are declared global?",
+          answerLabel: nameTexts[0] ?? "global",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "global.names",
+          questionType: "multi",
+          multiCorrect: nameTexts,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: namesSpan?.start,
+          revealEndAfterChild: namesSpan?.end,
+        },
+      ];
+    },
+  ],
+
+  // Nonlocal statement
+  nonlocal_statement: [
+    ({ node, code, sourceRef }) => {
+      const names = getSectionItems(node, "names");
+      const nameTexts = names
+        .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+        .filter(Boolean);
+
+      if (nameTexts.length === 0) return;
+
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      const optionPool = buildMultiSelectOptionPool(nameTexts, code, spanStart, spanEnd);
+      const namesSpan = getSectionSpan(node, "names");
+
+      return [
+        {
+          kind: "nonlocal-names",
+          stem: "Which variables are declared nonlocal?",
+          answerLabel: nameTexts[0] ?? "nonlocal",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "nonlocal.names",
+          questionType: "multi",
+          multiCorrect: nameTexts,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: namesSpan?.start,
+          revealEndAfterChild: namesSpan?.end,
+        },
+      ];
+    },
+  ],
+  nonlocal_stmt: [
+    ({ node, code, sourceRef }) => {
+      const names = getSectionItems(node, "names");
+      const nameTexts = names
+        .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type)
+        .filter(Boolean);
+
+      if (nameTexts.length === 0) return;
+
+      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+      const spanEnd = node.endIndex + 200;
+      const optionPool = buildMultiSelectOptionPool(nameTexts, code, spanStart, spanEnd);
+      const namesSpan = getSectionSpan(node, "names");
+
+      return [
+        {
+          kind: "nonlocal-names",
+          stem: "Which variables are declared nonlocal?",
+          answerLabel: nameTexts[0] ?? "nonlocal",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "nonlocal.names",
+          questionType: "multi",
+          multiCorrect: nameTexts,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: namesSpan?.start,
+          revealEndAfterChild: namesSpan?.end,
+        },
+      ];
+    },
+  ],
+
+  // F-strings with interpolations
+  f_string: [
+    ({ root, node, code, sourceRef }) => {
+      // Find interpolation nodes (format expressions inside f-strings)
+      const interpolations = (node.namedChildren || []).filter(
+        (c) =>
+          c.type === "interpolation" ||
+          c.type === "format_expression" ||
+          c.type === "string_interpolation"
+      );
+
+      if (interpolations.length === 0) return;
+
+      const qs: Q11[] = [];
+
+      for (let i = 0; i < interpolations.length; i++) {
+        const interp = interpolations[i];
+        const interpText =
+          textForRange(interp.startIndex, interp.endIndex, code) || interp.type;
+
+        qs.push({
+          kind: "fstring-interpolation",
+          stem:
+            interpolations.length > 1
+              ? `What is the interpolated expression #${i + 1}?`
+              : "What is the interpolated expression in this f-string?",
+          answerLabel: interpText,
+          options: buildDistractors(interpText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: interp.type,
+              start: interp.startIndex,
+              end: interp.endIndex,
+              path: computeAstPath(root, interp),
+            },
+          ],
+          generatorRule: "fstring.interpolation",
+        });
+
+        // Check for format spec (e.g., :.2f)
+        const formatSpec = (interp.namedChildren || []).find(
+          (c) => c.type === "format_specifier" || c.type === "format_spec"
+        );
+        if (formatSpec) {
+          const specText =
+            textForRange(formatSpec.startIndex, formatSpec.endIndex, code) ||
+            formatSpec.type;
+          qs.push({
+            kind: "fstring-format-spec",
+            stem: "What is the format specifier?",
+            answerLabel: specText,
+            options: buildDistractors(specText, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: formatSpec.type,
+                start: formatSpec.startIndex,
+                end: formatSpec.endIndex,
+                path: computeAstPath(root, formatSpec),
+              },
+            ],
+            generatorRule: "fstring.format-spec",
+          });
+        }
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+  formatted_string: [
+    ({ root, node, code, sourceRef }) => {
+      // Same as f_string, handles alternative node type names
+      const interpolations = (node.namedChildren || []).filter(
+        (c) =>
+          c.type === "interpolation" ||
+          c.type === "format_expression" ||
+          c.type === "string_interpolation"
+      );
+
+      if (interpolations.length === 0) return;
+
+      const qs: Q11[] = [];
+
+      for (let i = 0; i < interpolations.length; i++) {
+        const interp = interpolations[i];
+        const interpText =
+          textForRange(interp.startIndex, interp.endIndex, code) || interp.type;
+
+        qs.push({
+          kind: "fstring-interpolation",
+          stem:
+            interpolations.length > 1
+              ? `What is the interpolated expression #${i + 1}?`
+              : "What is the interpolated expression in this f-string?",
+          answerLabel: interpText,
+          options: buildDistractors(interpText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: interp.type,
+              start: interp.startIndex,
+              end: interp.endIndex,
+              path: computeAstPath(root, interp),
+            },
+          ],
+          generatorRule: "fstring.interpolation",
+        });
+
+        const formatSpec = (interp.namedChildren || []).find(
+          (c) => c.type === "format_specifier" || c.type === "format_spec"
+        );
+        if (formatSpec) {
+          const specText =
+            textForRange(formatSpec.startIndex, formatSpec.endIndex, code) ||
+            formatSpec.type;
+          qs.push({
+            kind: "fstring-format-spec",
+            stem: "What is the format specifier?",
+            answerLabel: specText,
+            options: buildDistractors(specText, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: formatSpec.type,
+                start: formatSpec.startIndex,
+                end: formatSpec.endIndex,
+                path: computeAstPath(root, formatSpec),
+              },
+            ],
+            generatorRule: "fstring.format-spec",
+          });
+        }
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // Yield expression (standalone or in expression statement)
+  yield: [
+    ({ root, node, code, sourceRef }) => {
+      const value = getSectionFirstItem(node, "value");
+      const qs: Q11[] = [];
+
+      // Check if it's yield from
+      const isFrom = isYieldFrom(node, code);
+
+      if (value) {
+        const valueText =
+          textForRange(value.startIndex, value.endIndex, code) || value.type;
+        qs.push({
+          kind: isFrom ? "yield-from-value" : "yield-value",
+          stem: isFrom
+            ? "What iterable is being yielded from?"
+            : "What value is being yielded?",
+          answerLabel: valueText,
+          options: buildDistractors(valueText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: value.type,
+              start: value.startIndex,
+              end: value.endIndex,
+              path: computeAstPath(root, value),
+            },
+          ],
+          generatorRule: isFrom ? "yield.from-value" : "yield.value",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+  yield_expression: [
+    ({ root, node, code, sourceRef }) => {
+      const value = getSectionFirstItem(node, "value");
+      const qs: Q11[] = [];
+
+      const isFrom = isYieldFrom(node, code);
+
+      if (value) {
+        const valueText =
+          textForRange(value.startIndex, value.endIndex, code) || value.type;
+        qs.push({
+          kind: isFrom ? "yield-from-value" : "yield-value",
+          stem: isFrom
+            ? "What iterable is being yielded from?"
+            : "What value is being yielded?",
+          answerLabel: valueText,
+          options: buildDistractors(valueText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: value.type,
+              start: value.startIndex,
+              end: value.endIndex,
+              path: computeAstPath(root, value),
+            },
+          ],
+          generatorRule: isFrom ? "yield.from-value" : "yield.value",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
+
+  // Annotated assignment (class variables with type annotations: x: int = 5)
+  annotated_assignment: [
+    ({ root, node, code, sourceRef }) => {
+      const target = getSectionFirstItem(node, "target");
+      const annotation = getSectionFirstItem(node, "annotation");
+      const value = getSectionFirstItem(node, "value");
+      const qs: Q11[] = [];
+
+      if (target) {
+        const targetText =
+          textForRange(target.startIndex, target.endIndex, code) || target.type;
+        qs.push({
+          kind: "annotated-var-name",
+          stem: "What is the variable name?",
+          answerLabel: targetText,
+          options: buildDistractors(targetText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: target.type,
+              start: target.startIndex,
+              end: target.endIndex,
+              path: computeAstPath(root, target),
+            },
+          ],
+          generatorRule: "annotated.target",
+        });
+      }
+
+      if (annotation) {
+        const annotationText =
+          textForRange(annotation.startIndex, annotation.endIndex, code) ||
+          annotation.type;
+        qs.push({
+          kind: "annotated-var-type",
+          stem: "What is the type annotation?",
+          answerLabel: annotationText,
+          options: buildDistractors(annotationText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: annotation.type,
+              start: annotation.startIndex,
+              end: annotation.endIndex,
+              path: computeAstPath(root, annotation),
+            },
+          ],
+          generatorRule: "annotated.type",
+        });
+      }
+
+      if (value) {
+        const valueText =
+          textForRange(value.startIndex, value.endIndex, code) || value.type;
+        qs.push({
+          kind: "annotated-var-value",
+          stem: "What is the default value?",
+          answerLabel: valueText,
+          options: buildDistractors(valueText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: value.type,
+              start: value.startIndex,
+              end: value.endIndex,
+              path: computeAstPath(root, value),
+            },
+          ],
+          generatorRule: "annotated.value",
+        });
+      }
+
+      return qs.length > 0 ? qs : undefined;
+    },
+  ],
 };
+
+// ============================================================================
+// Node Type Aliases: Handle tree-sitter grammar variations
+// ============================================================================
+// Different tree-sitter-python versions/forks may use different node type names.
+// We alias common variations to the canonical rule name.
+
+// named_expression is an alternative name for assignment_expression (walrus operator)
+if (rules.assignment_expression) {
+  rules.named_expression = rules.assignment_expression;
+}
+
+// comparison might be used instead of comparison_operator
+if (rules.comparison_operator) {
+  rules.comparison = rules.comparison_operator;
+}
+
+// yield_expr might be an alias
+if (rules.yield) {
+  rules.yield_expr = rules.yield;
+}
+if (rules.yield_expression) {
+  rules.yield_expr = rules.yield_expr || rules.yield_expression;
+}
 
 export function generateQuestionsV11(
   root: TreeSitterAstNode,
@@ -1515,11 +2651,17 @@ export function generateQuestionsV11(
     preview: textForRange(node.startIndex, node.endIndex, code)?.slice(0, 120),
   };
   const applyRules = rules[node.type] || [];
+
+  // Accumulate questions from ALL matching rules, not just the first one.
+  // This allows stacked rules like [headerRule, enhancedRule] to both contribute.
+  const allQuestions: Q11[] = [];
   for (const rule of applyRules) {
     const qs = rule({ root, node, code, sourceRef: src, profile });
-    if (qs && qs.length) return qs;
+    if (qs && qs.length) {
+      allQuestions.push(...qs);
+    }
   }
-  return [];
+  return allQuestions;
 }
 
 // ============================================================================
@@ -1784,6 +2926,7 @@ const applyQuestionOverlapGuard = (steps: EngineStep[]): void => {
   steps.forEach(collect);
   if (!entries.length) return;
 
+  // Sort by span length (smallest first), then by start position
   const sorted = entries.slice().sort((a, b) => {
     const lenA = a.span.end - a.span.start;
     const lenB = b.span.end - b.span.start;
@@ -1791,33 +2934,49 @@ const applyQuestionOverlapGuard = (steps: EngineStep[]): void => {
     return a.span.start - b.span.start;
   });
 
+  // Use Set for O(1) duplicate detection instead of O(n) .some()
+  const seenKeys = new Set<string>();
+  const makeDuplicateKey = (entry: typeof entries[0]): string =>
+    `${entry.span.start}:${entry.span.end}:${entry.question.stem}:${entry.question.answerLabel}`;
+
   const kept: typeof entries = [];
   const drop = new Set<QuizQuestion>();
 
   for (const entry of sorted) {
-    const isDuplicate = kept.some(
-      (k) =>
-        k.span.start === entry.span.start &&
-        k.span.end === entry.span.end &&
-        k.question.stem === entry.question.stem &&
-        k.question.answerLabel === entry.question.answerLabel
-    );
-    if (isDuplicate) {
+    // O(1) duplicate check using Set
+    const dupKey = makeDuplicateKey(entry);
+    if (seenKeys.has(dupKey)) {
       drop.add(entry.question);
       continue;
     }
-    if (!entry.isHeader) {
-      const containsKept = kept.some(
-        (k) =>
-          entry.span.start <= k.span.start &&
-          entry.span.end >= k.span.end &&
-          (entry.span.start < k.span.start || entry.span.end > k.span.end)
-      );
-      if (containsKept) {
-        drop.add(entry.question);
-        continue;
+
+    // Containment check: does this (larger) span contain any kept (smaller) span?
+    // Since we process smallest-first, we only need to check if entry contains anything in kept.
+    // We can't fully eliminate O(n²) here without an interval tree, but we can:
+    // 1. Early exit if entry span is too small to contain anything
+    // 2. Skip header questions entirely (they're exempt)
+    if (!entry.isHeader && kept.length > 0) {
+      const entryLen = entry.span.end - entry.span.start;
+      // Only check containment if this entry is larger than the smallest kept entry
+      // (kept is sorted smallest-first, so kept[0] is the smallest)
+      const smallestKeptLen = kept[0].span.end - kept[0].span.start;
+
+      if (entryLen > smallestKeptLen) {
+        // Check if entry strictly contains any kept span
+        const containsKept = kept.some(
+          (k) =>
+            entry.span.start <= k.span.start &&
+            entry.span.end >= k.span.end &&
+            (entry.span.start < k.span.start || entry.span.end > k.span.end)
+        );
+        if (containsKept) {
+          drop.add(entry.question);
+          continue;
+        }
       }
     }
+
+    seenKeys.add(dupKey);
     kept.push(entry);
   }
 
