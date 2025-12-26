@@ -71,3 +71,11 @@ Bronze/silver/gold: Accuracy of 80/95/100%
 Star 1/2/3: First achievement/achievement after 2 days of last time we studied it (lesson/quiz)/after 5 days
 We should also be able to reset "last touched date" manually if we are studying outside
 Folder can show like 53/85 files completed, 47 bronze, 18 silver, 4 gold like that for example 
+
+---
+
+10.Dictionary handling
+right now I'm still not sure what to do with dictionary at all.
+In the future
+1. Implement "what keys are defined"
+2. Just get more familiar with what dictionary is used for in general 
