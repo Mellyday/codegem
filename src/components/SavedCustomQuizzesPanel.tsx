@@ -241,6 +241,10 @@ export function SavedCustomQuizzesPanel({
       debugStore = await import("@/src/lib/distractorDebugStore");
     }
 
+    // Fix #10: Add AbortController for unmount/cancel handling
+    const abortController = new AbortController();
+    let cancelled = false;
+
     const decoder = new TextDecoder();
     let buffer = "";
     let runId: string | undefined;
@@ -250,7 +254,7 @@ export function SavedCustomQuizzesPanel({
     let serverModel = "deepseek-chat";
 
     const handleLine = (line: string) => {
-      if (!line) return;
+      if (!line || cancelled) return;
       // Fix #9: Wrap JSON.parse in try/catch to handle malformed lines
       let evt;
       try {
@@ -265,11 +269,13 @@ export function SavedCustomQuizzesPanel({
         // Fix #10: Use provider/model from server event
         serverProvider = evt.provider ?? "deepseek";
         serverModel = evt.model ?? "deepseek-chat";
-        setProgress({
-          total: evt.total ?? 0,
-          completed: 0,
-          failed: 0,
-        });
+        if (!cancelled) {
+          setProgress({
+            total: evt.total ?? 0,
+            completed: 0,
+            failed: 0,
+          });
+        }
         // Create debug run only in dev
         if (isDev && debugStore) {
           const run = debugStore.createRun({
@@ -282,11 +288,13 @@ export function SavedCustomQuizzesPanel({
           runId = run.runId;
         }
       } else if (evt.type === "progress") {
-        setProgress({
-          total: evt.total ?? 0,
-          completed: evt.completed ?? 0,
-          failed: evt.failed ?? 0,
-        });
+        if (!cancelled) {
+          setProgress({
+            total: evt.total ?? 0,
+            completed: evt.completed ?? 0,
+            failed: evt.failed ?? 0,
+          });
+        }
       } else if (evt.type === "batch-detail" && runId && isDev && debugStore) {
         // Save batch detail to debug log (dev only)
         if (evt.phase === "start") {
@@ -326,9 +334,11 @@ export function SavedCustomQuizzesPanel({
         const updated = Array.isArray(evt.updatedCards)
           ? evt.updatedCards.length
           : 0;
-        setStatus(
-          `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
-        );
+        if (!cancelled) {
+          setStatus(
+            `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
+          );
+        }
         if (runId && isDev && debugStore) {
           debugStore.completeRun(runId, "completed");
         }
@@ -349,6 +359,7 @@ export function SavedCustomQuizzesPanel({
         {
           method: "POST",
           cache: "no-store",
+          signal: abortController.signal,
           headers: {
             "Content-Type": "application/json",
             Accept: "application/x-ndjson",
@@ -385,14 +396,20 @@ export function SavedCustomQuizzesPanel({
         handleLine(buffer.trim());
       }
     } catch (e: any) {
-      setStatus(e?.message || "Failed to generate distractors.");
+      // Only set error status if not cancelled/aborted
+      if (!cancelled && e?.name !== "AbortError") {
+        setStatus(e?.message || "Failed to generate distractors.");
+      }
       if (runId && isDev && debugStore) {
         debugStore.completeRun(runId, "failed");
       }
     } finally {
-      setGeneratingId(undefined);
-      setProgress(null);
-      await load();
+      cancelled = true; // Mark as cancelled to prevent any pending handleLine calls
+      if (!abortController.signal.aborted) {
+        setGeneratingId(undefined);
+        setProgress(null);
+        await load();
+      }
     }
   };
 
@@ -449,13 +466,15 @@ export function SavedCustomQuizzesPanel({
       ) : (
         <ul className="space-y-2">
           {list.map((q) => {
+            // Fix #11: Enforce minimum distractor counts (6 for single, 10 for multi)
             const hasDistractors =
               q.cards.length > 0 &&
-              q.cards.every(
-                (c) =>
-                  Array.isArray(c.llmDistractors) &&
-                  (c.llmDistractors as string[]).length > 0
-              );
+              q.cards.every((c) => {
+                if (!Array.isArray(c.llmDistractors)) return false;
+                const count = c.llmDistractors.length;
+                const required = c.questionType === "multi" ? 10 : 6;
+                return count >= required;
+              });
             return (
               <li
                 key={q.id}
