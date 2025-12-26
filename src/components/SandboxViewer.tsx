@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileText, ArrowLeft, Zap, BookOpen } from "lucide-react";
+import { FileText, Zap, BookOpen, FolderOpen } from "lucide-react";
 
 // Server now reads file and passes code; no client-side loader
 import { AstTree } from "./AstTree";
@@ -39,7 +39,7 @@ export const SandboxViewer = ({
       if ((kind === "repo" || kind === "project") && id && path) {
         return { kind, id, path } as const;
       }
-    } catch {}
+    } catch { }
     return undefined;
   }, [sandboxId]);
   const [state, setState] = useState<LoadingState>({ status: "idle" });
@@ -77,6 +77,20 @@ export const SandboxViewer = ({
   const [zoomRootTs, setZoomRootTs] = useState<TreeSitterAstNode | undefined>(
     undefined
   );
+
+  // Compute parent folder URL based on fileKey
+  const parentFolderUrl = useMemo(() => {
+    if (!fileKey) return "/";
+    const { kind, id, path } = fileKey;
+    const pathParts = path.split("/");
+    // Remove the file name to get the parent folder
+    pathParts.pop();
+    if (pathParts.length === 0) {
+      // File is at root of repo/project
+      return `/${kind}/${encodeURIComponent(id)}`;
+    }
+    return `/${kind}/${encodeURIComponent(id)}/${pathParts.map(encodeURIComponent).join("/")}`;
+  }, [fileKey]);
 
   useEffect(() => {
     if (!fileName || !initialCode) {
@@ -569,9 +583,9 @@ export const SandboxViewer = ({
                     language={languageKind}
                     mode={
                       viewMode.replace("quiz_", "") as
-                        | "setup"
-                        | "active"
-                        | "complete"
+                      | "setup"
+                      | "active"
+                      | "complete"
                     }
                     onCancel={() => setViewMode("ast")}
                     onStart={() => setViewMode("quiz_active")}
@@ -754,13 +768,13 @@ export const SandboxViewer = ({
 
         {/* Footer and Navigation */}
         <div className="mt-8 flex items-end justify-between">
-          {/* Back Button */}
+          {/* Back Button - goes to parent folder */}
           <Link
-            href="/"
+            href={parentFolderUrl}
             className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
           >
-            <ArrowLeft className="h-4 w-4" />
-            Back to Sandboxes
+            <FolderOpen className="h-4 w-4" />
+            Back to Folder
           </Link>
 
           {/* Made with Gemini Badge */}

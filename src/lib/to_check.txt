@@ -8,3 +8,22 @@ E) Custom quiz payload expansion is more aggressive in the new engine New buildC
 recursively appends cards for step.lesson.childSteps too (both history and remaining queue) Old 
 pyLesson.buildCustomQuizPayload(): generally one card per lesson step, no recursive “expand every child step into c
 ards” behavior the same way. So a grouped import section can produce more quiz material downstream in the new system.
+
+
+---
+
+import (grouping logic for select X out of N), function def, class def?
+assignment, binary operator comparison operator, Calls (function + args/keywords depending on depth)
+attributes/call chains (deeper mode), Subscripts and slices (indexing drills)
+Header-style statements (structured “header line” recall) -> not sure about these 
+Dict literal keys (multi-select)
+guard / cleanup
+
+grouping logic (code)
+Ask claude:
+What I mean is that I want you to summarize the quiz behaviors based on @pyengine
+Like for example what does common node/statements does it gets turned into mcq right? What kind of nodes are those.
+And there are special nodes right. Like function definition, or import for example with different question type, 
+grouping logic.
+I want an exhaustive look at the behavior we want based on our discussion.
+reference answer: https://chatgpt.com/c/694d656c-501c-8324-a3e7-2698f0e19bd0

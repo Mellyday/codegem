@@ -1,7 +1,7 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-import Link from "next/link";
 import { listReposAndProjects } from "@/src/server/browse";
+import { RepoProjectItem } from "@/src/components/RepoProjectItem";
 
 export default async function HomePage() {
   const { repos, projects } = await listReposAndProjects();
@@ -24,17 +24,12 @@ export default async function HomePage() {
             ) : (
               <ul className="grid gap-2">
                 {repos.map((r) => (
-                  <li key={r.id}>
-                    <Link
-                      href={`/repo/${encodeURIComponent(r.id)}`}
-                      className="flex items-center justify-between rounded-lg border border-rose-200 bg-white/70 px-4 py-3 text-sm font-medium transition hover:border-rose-300 hover:bg-white hover:text-rose-700"
-                    >
-                      <span>{r.label}</span>
-                      <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">
-                        Browse
-                      </span>
-                    </Link>
-                  </li>
+                  <RepoProjectItem
+                    key={r.id}
+                    id={r.id}
+                    label={r.label}
+                    kind="repo"
+                  />
                 ))}
               </ul>
             )}
@@ -47,17 +42,12 @@ export default async function HomePage() {
             ) : (
               <ul className="grid gap-2">
                 {projects.map((p) => (
-                  <li key={p.id}>
-                    <Link
-                      href={`/project/${encodeURIComponent(p.id)}`}
-                      className="flex items-center justify-between rounded-lg border border-rose-200 bg-white/70 px-4 py-3 text-sm font-medium transition hover:border-rose-300 hover:bg-white hover:text-rose-700"
-                    >
-                      <span>{p.label}</span>
-                      <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">
-                        Browse
-                      </span>
-                    </Link>
-                  </li>
+                  <RepoProjectItem
+                    key={p.id}
+                    id={p.id}
+                    label={p.label}
+                    kind="project"
+                  />
                 ))}
               </ul>
             )}
@@ -67,4 +57,3 @@ export default async function HomePage() {
     </main>
   );
 }
-

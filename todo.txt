@@ -40,6 +40,4 @@ Recommendation: You should likely delete buildHeuristicQuiz from pyEngine.ts ent
 LATER
 1. getprompt etc is an adapter layer for the js bcs the shape is now different, ie. when we are done refactoring the python part,
 let's make sure when we are refactoring the js part to get this cases right
-2. the "back to sandbox" button need improvements
-* should be return to ast/to the parent folder depending on the view
 
