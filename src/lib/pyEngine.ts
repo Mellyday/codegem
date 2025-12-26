@@ -201,6 +201,107 @@ const GENERIC_DISTRACTORS = [
   "settings",
 ];
 
+// Curated module-ish distractors for "Which modules are used?" questions
+const MODULE_DISTRACTORS = [
+  "sys",
+  "os",
+  "re",
+  "json",
+  "math",
+  "pathlib",
+  "collections",
+  "itertools",
+  "functools",
+  "dataclasses",
+  "datetime",
+  "logging",
+  "asyncio",
+  "subprocess",
+  "typing",
+  "enum",
+  "random",
+  "socket",
+  "http",
+  "urllib",
+  "csv",
+  "io",
+  "shutil",
+  "contextlib",
+  "abc",
+  // Common third-party
+  "numpy",
+  "pandas",
+  "requests",
+  "flask",
+  "django",
+  "pytest",
+  "sqlalchemy",
+  "pydantic",
+  "aiohttp",
+  "boto3",
+];
+
+// Curated importable object distractors for "What do we import from X?" questions
+const NAME_DISTRACTORS = [
+  // typing
+  "Any",
+  "Optional",
+  "Union",
+  "Callable",
+  "Iterable",
+  "Iterator",
+  "Sequence",
+  "Mapping",
+  "TypeVar",
+  "Protocol",
+  "Generic",
+  "List",
+  "Dict",
+  "Set",
+  "Tuple",
+  // collections
+  "defaultdict",
+  "Counter",
+  "OrderedDict",
+  "namedtuple",
+  "deque",
+  "ChainMap",
+  // pathlib
+  "Path",
+  "PurePath",
+  "PosixPath",
+  "WindowsPath",
+  // dataclasses
+  "dataclass",
+  "field",
+  "asdict",
+  "astuple",
+  // functools
+  "partial",
+  "lru_cache",
+  "reduce",
+  "wraps",
+  "singledispatch",
+  // contextlib
+  "contextmanager",
+  "suppress",
+  "closing",
+  // abc
+  "ABC",
+  "abstractmethod",
+  // enum
+  "Enum",
+  "IntEnum",
+  "auto",
+  // common patterns
+  "datetime",
+  "timedelta",
+  "timezone",
+  "date",
+  "time",
+];
+
+
 const extractOperatorBetween = (
   code: string | undefined,
   leftEnd: number,
@@ -464,23 +565,34 @@ function splitAs(raw: string): { original: string; alias?: string } {
 /**
  * Extract module names and imported names from an import run.
  * Uses original names (not aliases) per user requirement.
+ * 
+ * - modules: all modules referenced (from both import and import_from)
+ * - importedByModule: for import_from, maps module name to imported names
+ * - aliases: all aliases (for distractor filtering)
  */
 function extractImportRunData(
   run: TreeSitterAstNode[],
   code: string | undefined
 ): {
   modules: Set<string>;
-  imported: Set<string>;
+  importedByModule: Map<string, Set<string>>;
   aliases: Set<string>;
   span: { start: number; end: number };
 } {
   const modules = new Set<string>();
-  const imported = new Set<string>();
+  const importedByModule = new Map<string, Set<string>>();
   const aliases = new Set<string>();
 
   const first = run[0];
   const last = run[run.length - 1];
   const span = { start: first.startIndex, end: last.endIndex };
+
+  const addImported = (mod: string, name: string) => {
+    if (!mod || !name) return;
+    let set = importedByModule.get(mod);
+    if (!set) importedByModule.set(mod, (set = new Set()));
+    set.add(name);
+  };
 
   for (const stmt of run) {
     if (stmt.type === "import_from_statement") {
@@ -495,8 +607,10 @@ function extractImportRunData(
       for (const n of names) {
         const raw = (textForRange(n.startIndex, n.endIndex, code) ?? "").trim();
         if (!raw) continue;
+        // Skip star imports (from x import *)
+        if (raw === "*") continue;
         const { original, alias } = splitAs(raw);
-        if (original) imported.add(original);
+        if (original) addImported(moduleText, original);
         if (alias) aliases.add(alias);
       }
     }
@@ -508,17 +622,16 @@ function extractImportRunData(
         const raw = (textForRange(n.startIndex, n.endIndex, code) ?? "").trim();
         if (!raw) continue;
         const { original, alias } = splitAs(raw);
-        if (original) {
-          modules.add(original);
-          imported.add(original);
-        }
+        // For plain `import x`, add to modules but NOT to importedByModule
+        if (original) modules.add(original);
         if (alias) aliases.add(alias);
       }
     }
   }
 
-  return { modules, imported, aliases, span };
+  return { modules, importedByModule, aliases, span };
 }
+
 
 /**
  * Split a list of correct answers into cards with 3-6 each.
@@ -566,6 +679,8 @@ function getImportDistractorCount(correctCount: number): number {
 /**
  * Build an option pool for import questions.
  * Includes correct answers + distractors, excluding aliases.
+ * 
+ * @param mode - "module" uses dotted identifiers, "name" uses simple identifiers
  */
 function buildImportOptionPool(
   correct: string[],
@@ -573,22 +688,26 @@ function buildImportOptionPool(
   aliases: Set<string>,
   code: string | undefined,
   span: { start: number; end: number },
-  targetOptions: number = 10
+  targetOptions: number = 10,
+  mode: "module" | "name" = "module"
 ): string[] {
   // Collect identifiers from surrounding code as potential distractors
   const idPool: string[] = [];
   try {
-    const reModule = /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g;
+    // Use dotted pattern for modules, simple identifiers for names
+    const re = mode === "module"
+      ? /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g
+      : /[A-Za-z_][A-Za-z0-9_]*/g;
     const snippetStart = Math.max(0, span.start - 500);
     const snippetEnd = span.end + 500;
     const snippet = (code || "").slice(snippetStart, snippetEnd);
     let m: RegExpExecArray | null;
-    while ((m = reModule.exec(snippet))) {
+    while ((m = re.exec(snippet))) {
       const candidate = m[0];
       // Exclude: correct answers from entire family, aliases, keywords
       if (allCorrectInFamily.includes(candidate)) continue;
       if (aliases.has(candidate)) continue;
-      if (["import", "from", "as", "None", "True", "False"].includes(candidate)) continue;
+      if (["import", "from", "as", "None", "True", "False", "def", "class", "return"].includes(candidate)) continue;
       idPool.push(candidate);
     }
   } catch { }
@@ -596,11 +715,12 @@ function buildImportOptionPool(
   // Dedupe
   const distractors = Array.from(new Set(idPool));
 
-  // Pad with generic distractors if needed
+  // Pad with curated distractors if needed (use mode-appropriate list)
   if (distractors.length < targetOptions - correct.length) {
     const needed = targetOptions - correct.length - distractors.length;
-    const pad = shuffle(GENERIC_DISTRACTORS)
-      .filter((d) => !correct.includes(d) && !distractors.includes(d) && !aliases.has(d))
+    const fallbackList = mode === "module" ? MODULE_DISTRACTORS : NAME_DISTRACTORS;
+    const pad = shuffle(fallbackList)
+      .filter((d) => !correct.includes(d) && !distractors.includes(d) && !aliases.has(d) && !allCorrectInFamily.includes(d))
       .slice(0, needed);
     distractors.push(...pad);
   }
@@ -613,11 +733,12 @@ function buildImportOptionPool(
   return shuffle(pool).slice(0, targetOptions);
 }
 
+
 /**
  * Generate questions for a contiguous import run.
  * Creates two types of multi-select cards:
- * - "Which modules are used?" (with alias note)
- * - "Which names are imported?" (with alias note)
+ * - "Which modules are used?" (across whole run)
+ * - "What do we import from X?" (per-module)
  * 
  * Splits into multiple cards if >6 correct, aiming for 3-6 correct each.
  */
@@ -628,7 +749,7 @@ function generateImportRunQuestions(
 ): QuizQuestion[] {
   if (!run.length) return [];
 
-  const { modules, imported, aliases, span } = extractImportRunData(run, code);
+  const { modules, importedByModule, aliases, span } = extractImportRunData(run, code);
   const qs: QuizQuestion[] = [];
 
   // Use the first node for SourceRef path (virtual spans use this)
@@ -641,7 +762,7 @@ function generateImportRunQuestions(
     preview: (code || "").slice(span.start, Math.min(span.end, span.start + 120)),
   };
 
-  // === Module Questions ===
+  // === Module Questions (across whole run) ===
   const moduleList = Array.from(modules);
   if (moduleList.length > 0) {
     const moduleCards = splitCorrectIntoCards(moduleList);
@@ -656,7 +777,8 @@ function generateImportRunQuestions(
         aliases,
         code,
         span,
-        10
+        10,
+        "module"  // Use dotted identifier pattern
       );
 
       qs.push({
@@ -677,44 +799,53 @@ function generateImportRunQuestions(
     });
   }
 
-  // === Imported Names Questions ===
-  const importedList = Array.from(imported);
-  if (importedList.length > 0) {
-    const importedCards = splitCorrectIntoCards(importedList);
-    const totalImportedCards = importedCards.length;
-    const distractorCount = getImportDistractorCount(importedList.length);
+  // === Imported Names Questions (per module) ===
+  for (const [moduleName, namesSet] of importedByModule.entries()) {
+    const namesList = Array.from(namesSet);
+    if (namesList.length === 0) continue;
 
-    importedCards.forEach((cardCorrect, cardIdx) => {
-      const partLabel = totalImportedCards > 1 ? ` (Part ${cardIdx + 1} of ${totalImportedCards})` : "";
+    const nameCards = splitCorrectIntoCards(namesList);
+    const totalNameCards = nameCards.length;
+    // No distractorPoolSize for names cards - 10 options is enough per card
+
+    nameCards.forEach((cardCorrect, cardIdx) => {
+      const partLabel = totalNameCards > 1 ? ` (Part ${cardIdx + 1} of ${totalNameCards})` : "";
       const optionPool = buildImportOptionPool(
         cardCorrect,
-        importedList,  // All correct from this family
+        namesList,  // All correct from THIS module's family
         aliases,
         code,
         span,
-        10
+        10,
+        "name"  // Use simple identifier pattern
       );
+
+      // Handle relative imports with clearer stem
+      const stemModuleName = moduleName.startsWith(".")
+        ? "this relative module"
+        : moduleName;
 
       qs.push({
         kind: "imported_names_multi",
-        stem: `Which names are imported?${partLabel} (use original names, ignore aliases)`,
+        stem: `What do we import from ${stemModuleName}?${partLabel} (use original names, ignore aliases)`,
         answerLabel: cardCorrect[0] ?? "import",
         options: optionPool,
         sourceRefs: [baseSourceRef],
-        generatorRule: "import_run.names",
+        generatorRule: `import_run.names:${moduleName}`,
         questionType: "multi",
         multiCorrect: cardCorrect,
         optionPool,
         revealStart: span.start,
         revealEndBeforeChild: span.start,
         revealEndAfterChild: span.end,
-        distractorPoolSize: distractorCount,
+        // No distractorPoolSize for names - 10 options per card is sufficient
       });
     });
   }
 
   return qs;
 }
+
 
 // ============================================================================
 // Quiz rules (copied from pyQuiz)
