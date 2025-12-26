@@ -30,6 +30,10 @@ context manager
 
 ---
 
+One thing I can confirm is that my previous attempt at making a special reveal/mask logic for 
+decorator only didn't work
+
+
 file grouping/slicing
 some files are big and should be split into several quiz/lessons
 
