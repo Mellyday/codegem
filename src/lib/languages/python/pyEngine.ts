@@ -1536,7 +1536,11 @@ const rules: Record<string, Rule[]> = {
       const block = getSectionFirstItem(node, "body");
       const spanStart = block ? block.startIndex : node.startIndex;
       const spanEnd = block ? block.endIndex : node.endIndex;
-      const argsSpan = getSectionSpan(node, "args");
+      const paramsNode =
+        childByField(node, "parameters") || firstChildOfType(node, "parameters");
+      const paramsSpan = paramsNode
+        ? { start: paramsNode.startIndex, end: paramsNode.endIndex }
+        : getSectionSpan(node, "args");
 
       // Emit generic "all params" question
       if (allNames.length > 0) {
@@ -1552,8 +1556,8 @@ const rules: Record<string, Rule[]> = {
           multiCorrect: allNames,
           optionPool,
           revealStart: node.startIndex,
-          revealEndBeforeChild: argsSpan?.start,
-          revealEndAfterChild: argsSpan?.end,
+          revealEndBeforeChild: paramsSpan?.start,
+          revealEndAfterChild: paramsSpan?.end,
         });
       }
 
@@ -1572,8 +1576,8 @@ const rules: Record<string, Rule[]> = {
             multiCorrect: positionalOnly,
             optionPool,
             revealStart: node.startIndex,
-            revealEndBeforeChild: argsSpan?.start,
-            revealEndAfterChild: argsSpan?.end,
+            revealEndBeforeChild: paramsSpan?.start,
+            revealEndAfterChild: paramsSpan?.end,
           });
         }
 
@@ -1590,8 +1594,8 @@ const rules: Record<string, Rule[]> = {
             multiCorrect: keywordOnly,
             optionPool,
             revealStart: node.startIndex,
-            revealEndBeforeChild: argsSpan?.start,
-            revealEndAfterChild: argsSpan?.end,
+            revealEndBeforeChild: paramsSpan?.start,
+            revealEndAfterChild: paramsSpan?.end,
           });
         }
       }
@@ -4053,6 +4057,25 @@ export function buildCustomQuizPayload(params: {
     return preview ? { ...best, preview } : best;
   };
 
+  const revealSpanForCard = (
+    q: QuizQuestion,
+    fallback?: SourceRef
+  ): { start: number; end: number } | undefined => {
+    const start =
+      typeof q.revealStart === "number" ? q.revealStart : fallback?.start;
+    const end =
+      typeof q.revealEndAfterChild === "number"
+        ? q.revealEndAfterChild
+        : typeof q.revealEndBeforeChild === "number"
+          ? q.revealEndBeforeChild
+          : fallback?.end;
+
+    if (typeof start === "number" && typeof end === "number" && end >= start) {
+      return { start, end };
+    }
+    return undefined;
+  };
+
   const questionToCard = (
     step: EngineStep,
     q: QuizQuestion,
@@ -4067,6 +4090,17 @@ export function buildCustomQuizPayload(params: {
       end: step.node.endIndex,
     };
     const snippet = code.slice(span.start, span.end).trimEnd();
+    const baseRef = bestSourceRef(q);
+    const revealSpan = revealSpanForCard(q, baseRef);
+    const cardRef =
+      baseRef && revealSpan
+        ? {
+            ...baseRef,
+            start: revealSpan.start,
+            end: revealSpan.end,
+            preview: textForRange(revealSpan.start, revealSpan.end, code)?.slice(0, 120),
+          }
+        : baseRef;
     return {
       order,
       type: q.kind,
@@ -4080,7 +4114,7 @@ export function buildCustomQuizPayload(params: {
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
       optionPool: q.optionPool,
-      sourceRef: bestSourceRef(q),
+      sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,
       revealEndAfterChild: q.revealEndAfterChild,
