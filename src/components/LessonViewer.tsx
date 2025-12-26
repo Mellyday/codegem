@@ -40,9 +40,6 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const [currentStep, setCurrentStep] = useState(0);
   const [history, setHistory] = useState<LessonHistoryItem[]>([]);
   const totalSteps = lessonQueue.length;
-  // Optional Table-of-Contents mode for large files
-  const [tocSteps, setTocSteps] = useState<LessonStep[] | null>(null);
-  const inToc = !!tocSteps;
 
   const getPrompt = (step: LessonStep | null | undefined): string => {
     if (!step) return "";
@@ -65,38 +62,16 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       // Hide function/class names by default for more useful prompts
       const plan: LessonStep[] = pyEngine.generateEngineSteps(root, root, code, {
         profile: "shallow",
-        grouping: "auto",
         includeNames: false,
         generateQuiz: false,
       }) as unknown as LessonStep[];
-      // If the plan is grouped (virtual group steps) and there are multiple groups,
-      // show a TOC first. If only one group, jump straight into that group's child steps.
-      const hasGroups = plan.some((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
-      if (hasGroups) {
-        if (plan.length > 1) {
-          setTocSteps(plan);
-          setLessonQueue([]);
-        } else {
-          const only = plan[0];
-          const children = (only as any).childSteps || [];
-          setTocSteps(null);
-          setLessonQueue(children);
-        }
-      } else {
-        setTocSteps(null);
-        setLessonQueue(plan);
-      }
+      setLessonQueue(plan);
       setCurrentStep(0);
       setHistory([]);
     }
   }, [root, code]);
 
   useEffect(() => {
-    if (inToc) {
-      onRevealEndIndexChange(undefined);
-      onMaskRangesChange([]);
-      return;
-    }
     if (!lessonQueue.length) return;
 
     const currStepObj = lessonQueue[currentStep];
@@ -118,7 +93,6 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     code,
     onRevealEndIndexChange,
     onMaskRangesChange,
-    inToc,
   ]);
 
   useEffect(() => {
@@ -161,10 +135,8 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
           ? existingChildren
           : (pyEngine.generateEngineSteps(root, stepToExpand.node as any, code, {
             profile: "shallow",
-            grouping: false,
             includeNames: false,
             generateQuiz: false,
-            __noGroup: true,
           }) as unknown as LessonStep[]);
 
       if (childrenSteps.length > 0) {
@@ -233,7 +205,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     return items;
   })();
 
-  if (!inToc && isComplete) {
+  if (isComplete) {
     return (
       <div className="flex h-full flex-col justify-between">
         <div className="space-y-4">
@@ -256,52 +228,6 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
             <FileJson className="h-4 w-4" />
             Save Custom Quiz
           </button>
-          <button
-            type="button"
-            className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
-            onClick={onReturnToAst}
-          >
-            Return to AST
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  if (inToc) {
-    // Table-of-Contents view
-    return (
-      <div className="flex h-full flex-col justify-between">
-        <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <h3 className="text-lg font-semibold text-slate-800">Lessons</h3>
-              <p className="text-xs uppercase tracking-wide text-slate-500">Choose a section to start</p>
-            </div>
-          </div>
-          <div className="space-y-2">
-            {(tocSteps || []).map((s, idx) => (
-              <button
-                key={s.id}
-                type="button"
-                className="w-full text-left rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-800 shadow-sm hover:bg-slate-50"
-                onClick={() => {
-                  const kids = getChildSteps(s);
-                  setLessonQueue(kids);
-                  setCurrentStep(0);
-                  setHistory([]);
-                  setTocSteps(null);
-                }}
-              >
-                <div className="flex items-center justify-between">
-                  <span>{getPrompt(s)}</span>
-                  <span className="text-xs text-slate-500">{getChildSteps(s).length} steps</span>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="flex justify-end gap-2">
           <button
             type="button"
             className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"

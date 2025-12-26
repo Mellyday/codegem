@@ -434,7 +434,6 @@ export const QuizViewer = ({
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([]);
-  // Removed split preview list; split actions now save quizzes directly
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [selectedMulti, setSelectedMulti] = useState<Set<string>>(new Set());
@@ -514,7 +513,6 @@ export const QuizViewer = ({
   ) => {
     const steps = pyEngine.generateEngineSteps(vroot, vroot, code || "", {
       profile,
-      grouping: false,
       includeNames: false,
       generateQuiz: true,
     }) as any[];
@@ -566,66 +564,6 @@ export const QuizViewer = ({
       } catch { }
       throw new Error(msg);
     }
-  };
-
-  // Save split quizzes using the same grouping heuristic as Lesson (Python via pyEngine steps)
-  const saveSplitHeuristic = async (
-    profile: "shallow" | "deep",
-    opts?: { maxDeepPerStmt?: number }
-  ) => {
-    if (!root) return;
-    const plan = pyEngine.generateEngineSteps(root, root, code || "", {
-      profile: "shallow",
-      grouping: "auto",
-      includeNames: false,
-      generateQuiz: false,
-    }) as any[];
-    const groups = plan.filter(
-      (s: any) => (s.node as any)?.isVirtual || s.node.type === "group"
-    );
-    if (!groups.length) {
-      // Fallback to single save
-      const payload = buildPythonEnginePayload(root, profile);
-      await savePythonEngineQuiz(payload, root, `Heuristic ${profile}`, profile);
-      alert(`Saved 1 quiz (Heuristic ${profile}).`);
-      return;
-    }
-    const topLevel = (root.namedChildren || []).filter(
-      (c) => c.type !== "comment"
-    );
-    const buildGroupRoot = (start: number, end: number) => {
-      const namedChildren = topLevel.filter(
-        (n) => n.startIndex >= start && n.endIndex <= end
-      );
-      const vroot: any = {
-        type: "group",
-        named: true,
-        startPosition: root.startPosition,
-        endPosition: root.endPosition,
-        startIndex: start,
-        endIndex: end,
-        text: undefined,
-        children: [],
-        namedChildren,
-      } as TreeSitterAstNode;
-      return vroot;
-    };
-    let saved = 0;
-    for (let i = 0; i < groups.length; i++) {
-      const g: any = groups[i];
-      const start = g.node.startIndex;
-      const end = g.node.endIndex;
-      const vroot = buildGroupRoot(start, end);
-      const name =
-        `${(g as any).prompt ?? (g as any).lesson?.prompt ?? ""}`.slice(
-          0,
-          160
-        ) || `Heuristic ${profile} (${i + 1})`;
-      const payload = buildPythonEnginePayload(vroot, profile);
-      await savePythonEngineQuiz(payload, vroot, name, profile);
-      saved += 1;
-    }
-    alert(`Saved ${saved} quiz(es) for grouped sections.`);
   };
 
   useEffect(() => {
@@ -775,28 +713,8 @@ export const QuizViewer = ({
             >
               Deep (With Expression Detail)
             </button>
-            <button
-              type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={() => {
-                saveSplitHeuristic("shallow");
-              }}
-            >
-              Shallow (Split)
-            </button>
-            <button
-              type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={() => {
-                saveSplitHeuristic("deep", { maxDeepPerStmt: 6 });
-              }}
-            >
-              Deep (Split)
-            </button>
           </div>
         </div>
-
-        {/* Heuristic split now saves quizzes directly to DB */}
 
         <ErrorBoundary
           fallback={

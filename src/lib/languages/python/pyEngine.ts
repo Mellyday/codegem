@@ -19,12 +19,9 @@ import { randomString } from "../../utils";
 
 export type EngineOptions = {
   profile: "shallow" | "deep";
-  grouping: "auto" | boolean;
   includeNames?: boolean;
-  // Skip quiz generation when only lesson/grouping is needed (e.g., Teach Me flow)
+  // Skip quiz generation when only lesson output is needed (e.g., Teach Me flow)
   generateQuiz?: boolean;
-  // Internal recursion guard
-  __noGroup?: boolean;
 };
 
 export type SourceRef = {
@@ -3141,144 +3138,6 @@ export function generateQuestionsV11(
 }
 
 // ============================================================================
-// Grouping Logic (Ported from pyLesson.ts)
-// ============================================================================
-
-type PyCategory =
-  | "import"
-  | "definition"
-  | "type"
-  | "constants"
-  | "configuration"
-  | "main"
-  | "logic";
-
-function getSemanticCategory(node: TreeSitterAstNode): PyCategory {
-  switch (node.type) {
-    case "import_statement":
-    case "import_from_statement":
-      return "import";
-    case "type_alias_statement":
-    case "type_alias":
-      return "type";
-    case "class_definition":
-    case "function_definition":
-    case "async_function_definition":
-    case "decorated_definition":
-      return "definition";
-    case "if_statement":
-      return "logic";
-    default:
-      return "logic";
-  }
-}
-
-function generateGroupPrompt(category: PyCategory, count: number): string {
-  switch (category) {
-    case "import":
-      return `This file starts with ${count} import statement(s).`;
-    case "definition":
-      return `Next, we have a block of ${count} definition(s).`;
-    case "type":
-      return `There are ${count} type definition(s).`;
-    case "constants":
-      return `A block of ${count} constant definition(s).`;
-    case "configuration":
-      return `A configuration block with ${count} statement(s).`;
-    case "main":
-      return `This is the main execution block.`;
-    case "logic":
-    default:
-      return `Here is a block of application logic consisting of ${count} statement(s).`;
-  }
-}
-
-function createGroupStep(
-  root: TreeSitterAstNode,
-  nodes: TreeSitterAstNode[],
-  category: PyCategory,
-  code: string,
-  options: EngineOptions
-): EngineStep {
-  const first = nodes[0];
-  const last = nodes[nodes.length - 1];
-  const virtualNode = {
-    ...first,
-    type: "group",
-    startIndex: first.startIndex,
-    endIndex: last.endIndex,
-    isVirtual: true,
-  };
-
-  // For import groups: generate quiz at group level, children get no quiz
-  const isImportGroup = category === "import";
-  const childOpts: EngineOptions = {
-    ...options,
-    __noGroup: true,
-    generateQuiz: isImportGroup ? false : options.generateQuiz,
-  };
-
-  // Recursively generate steps for children
-  const childSteps = nodes.flatMap((n) =>
-    generateEngineSteps(root, n, code, childOpts)
-  );
-
-  // Generate grouped import quiz if applicable
-  let groupQuiz: { questions: QuizQuestion[] } | undefined;
-  if (isImportGroup && options.generateQuiz !== false) {
-    const importQuestions = generateImportRunQuestions(root, nodes, code);
-    if (importQuestions.length) {
-      groupQuiz = { questions: importQuestions };
-    }
-  }
-
-  return {
-    id: randomString(8),
-    node: virtualNode,
-    quiz: groupQuiz,
-    displaySpan: { start: virtualNode.startIndex, end: virtualNode.endIndex },
-    lesson: {
-      // Use "import_group" for consistency with walk-time emitImportRunStep
-      semanticRole: category === "import" ? "import_group" : `group:${category}`,
-      prompt: generateGroupPrompt(category, nodes.length),
-      isDigable: childSteps.length > 0,
-      childSteps,
-    },
-  };
-}
-
-
-function groupTopLevelNodes(
-  root: TreeSitterAstNode,
-  topLevelNodes: TreeSitterAstNode[],
-  code: string,
-  options: EngineOptions
-): EngineStep[] {
-  const nodes = topLevelNodes.filter(isAnchorNode);
-  if (!nodes.length) return [];
-  const out: EngineStep[] = [];
-  let currentCategory: PyCategory | null = null;
-  let currentGroup: TreeSitterAstNode[] = [];
-
-  for (const n of nodes) {
-    const cat = getSemanticCategory(n);
-    if (currentCategory && cat === currentCategory) {
-      currentGroup.push(n);
-    } else {
-      if (currentGroup.length) {
-        out.push(createGroupStep(root, currentGroup, currentCategory!, code, options));
-      }
-      currentCategory = cat;
-      currentGroup = [n];
-    }
-  }
-  if (currentGroup.length) {
-    out.push(createGroupStep(root, currentGroup, currentCategory!, code, options));
-  }
-  return out;
-}
-
-// ============================================================================
 // Statement Anchors
 // ============================================================================
 
@@ -3953,18 +3812,6 @@ export const generateEngineSteps = (
     if (options.generateQuiz !== false) applyQuestionOverlapGuard(out);
     return out;
   };
-
-  if (node.type === "module" && !options.__noGroup) {
-    const children = getStatementChildren(node).filter(isAnchorNode);
-    const enableGrouping =
-      options.grouping === "auto"
-        ? children.length >= 12 || code.length >= 5000
-        : options.grouping;
-
-    if (enableGrouping) {
-      return finalizeSteps(groupTopLevelNodes(root, children, code, options));
-    }
-  }
 
   if (node.type === "module") {
     walkModule(node);

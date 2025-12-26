@@ -10,16 +10,12 @@ export type LessonStep = {
   semanticRole: string;
   prompt: string;
   isDigable: boolean;
-  // Optional, used when a step summarizes a group of siblings
+  // Optional, used when a step can expand into nested steps
   childSteps?: LessonStep[];
 };
 
 export type LessonPlanOptions = {
   includeNames?: boolean;
-  // Enable grouping of contiguous top-level nodes into chapters
-  enableGrouping?: boolean | "auto";
-  // internal guard to avoid recursive grouping when expanding groups
-  __noGroup?: boolean;
 };
 
 // Simple mask range used by lesson masking helpers
@@ -36,7 +32,6 @@ export const generateLessonPlan = (
   options: LessonPlanOptions = {}
 ): LessonStep[] => {
   const includeNames = options.includeNames ?? true;
-  const enableGrouping = options.enableGrouping ?? "auto";
   const steps: LessonStep[] = [];
   const children = (node.namedChildren || []).filter(
     (c) => c.type !== "comment" && !isDocstringNode(c, node)
@@ -44,24 +39,9 @@ export const generateLessonPlan = (
 
   switch (node.type) {
     case "module": {
-      // Apply grouping at top-level unless explicitly disabled
-      const shouldGroup = (() => {
-        if (options.__noGroup) return false;
-        if (enableGrouping === true) return true;
-        if (enableGrouping === false) return false;
-        // auto: trigger when file is long or many top-level nodes
-        const topCount = children.length;
-        const fileLen = Math.max(0, (node.endIndex ?? 0) - (node.startIndex ?? 0));
-        return topCount >= 12 || fileLen >= 5000;
-      })();
-
-      if (shouldGroup) {
-        steps.push(...groupTopLevelNodes(node, children, options));
-      } else {
-        children.forEach((child) => {
-          steps.push(...generateLessonPlan(child, options));
-        });
-      }
+      children.forEach((child) => {
+        steps.push(...generateLessonPlan(child, options));
+      });
       break;
     }
 
@@ -318,121 +298,13 @@ export const generateLessonPlan = (
 
 // ---- Grouping heuristics for Python ----
 
-type PyCategory =
-  | "import"
-  | "definition"
-  | "type"
-  | "constants"
-  | "configuration"
-  | "main"
-  | "logic";
-
-function getSemanticCategory(node: TreeSitterAstNode): PyCategory {
-  switch (node.type) {
-    case "import_statement":
-    case "import_from_statement":
-      return "import";
-    case "type_alias_statement":
-    case "type_alias":
-      return "type";
-    case "class_definition":
-    case "function_definition":
-    case "decorated_definition":
-      // We'll refine decorated inner type in child steps; top-level treat as definition
-      return "definition";
-    case "if_statement": {
-      // Pragmatic match for main guard
-      // node.text might be null, prefer indices are not cheap; use children string types defensively is overkill
-      // Best-effort: check raw code presence is unavailable here; fallback to logic category
-      return "logic";
-    }
-    default:
-      return "logic";
-  }
-}
-
-function generateGroupPrompt(category: PyCategory, count: number): string {
-  switch (category) {
-    case "import":
-      return `This file starts with ${count} import statement(s) to bring in necessary libraries.`;
-    case "definition":
-      return `Next, we have a block of ${count} function and/or class definition(s).`;
-    case "type":
-      return `There are ${count} type definition(s).`;
-    case "constants":
-      return `A block of ${count} constant definition(s).`;
-    case "configuration":
-      return `A configuration block with ${count} statement(s).`;
-    case "main":
-      return `This is the main execution block, which runs when the script is executed directly.`;
-    case "logic":
-    default:
-      return `Here is a block of application logic consisting of ${count} statement(s).`;
-  }
-}
-
-function createGroupStep(
-  nodes: TreeSitterAstNode[],
-  category: PyCategory,
-  options: LessonPlanOptions
-): LessonStep {
-  const first = nodes[0];
-  const last = nodes[nodes.length - 1];
-  const virtualNode: VirtualAstNode = {
-    ...(first as any),
-    type: "group",
-    startIndex: first.startIndex,
-    endIndex: last.endIndex,
-    isVirtual: true,
-  };
-  // Pre-compute child steps without further grouping
-  const childSteps = nodes.flatMap((n) =>
-    generateLessonPlan(n, { ...options, __noGroup: true })
-  );
-  const isDigable = childSteps.length > 1 || nodes.length > 1;
-  return {
-    id: randomString(8),
-    node: virtualNode,
-    semanticRole: `group:${category}`,
-    prompt: generateGroupPrompt(category, nodes.length),
-    isDigable,
-    childSteps,
-  };
-}
-
-function groupTopLevelNodes(
-  root: TreeSitterAstNode,
-  topLevelNodes: TreeSitterAstNode[],
-  options: LessonPlanOptions
-): LessonStep[] {
-  if (!topLevelNodes.length) return [];
-  const out: LessonStep[] = [];
-  let currentCategory: PyCategory | null = null;
-  let currentGroup: TreeSitterAstNode[] = [];
-
-  for (const n of topLevelNodes) {
-    const cat = getSemanticCategory(n);
-    if (currentCategory && cat === currentCategory) {
-      currentGroup.push(n);
-    } else {
-      if (currentGroup.length) {
-        out.push(createGroupStep(currentGroup, currentCategory!, options));
-      }
-      currentCategory = cat;
-      currentGroup = [n];
-    }
-  }
-  if (currentGroup.length) out.push(createGroupStep(currentGroup, currentCategory!, options));
-  return out;
-}
-
 // Compute mask(s) and the expected answer text for a given step
 export function maskAndAnswerForStep(
   step: LessonStep,
   root: TreeSitterAstNode,
   code: string
 ): { masks: MaskRange[]; answerText: string } {
-  // Never mask headers for virtual group summaries
+  // Never mask headers for virtual summary steps
   if ((step.node as any).isVirtual || step.node.type === "group") {
     return { masks: [], answerText: textForNode(step.node, code) };
   }
