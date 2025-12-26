@@ -616,6 +616,7 @@ const rules: Record<string, Rule[]> = {
           end: moduleNode.endIndex,
           path: computeAstPath(root, moduleNode),
         };
+        const moduleSpan = getSectionSpan(node, "module");
         qs.push({
           kind: "import_from_module",
           stem: "What module is this import from?",
@@ -623,6 +624,9 @@ const rules: Record<string, Rule[]> = {
           options: buildModuleOptionPool(moduleText, code, spanStart, spanEnd),
           sourceRefs: [sourceRef, moduleRef],
           generatorRule: "import_from.module",
+          revealStart: node.startIndex,
+          revealEndBeforeChild: moduleSpan?.start,
+          revealEndAfterChild: moduleSpan?.end,
         });
       }
 
@@ -3446,16 +3450,10 @@ export function maskAndAnswerForStep(
     "case_clause",
     "case_block",
   ];
-  const role = step.lesson?.semanticRole;
   const isHeaderNode = headerTypes.includes(step.node.type);
 
-  if (role === "if_condition" || role === "loop_condition" || isHeaderNode) {
-    const stmt = isHeaderNode
-      ? step.node
-      : findEnclosingByTypes(root, step.node, headerTypes);
-    if (stmt) {
-      return headerMaskAndAnswer(stmt, code);
-    }
+  if (isHeaderNode) {
+    return headerMaskAndAnswer(step.node, code);
   }
   return { masks: [], answerText: textForNode(step.node, code) };
 }

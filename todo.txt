@@ -120,22 +120,6 @@ def func(pos_only, /, normal, *, kw_only):
 
 ---
 
-Reveal/masking 
-
-Normalize semanticRole across lesson+masking
-
-Right now masking still checks roles like if_condition / loop_condition, but your engine rarely emits those roles anymore. It works only because you also check isHeaderNode.
-
-Either remove role-based paths, or reintroduce those roles via structural substeps.
-
-
-Be intentional about reveal anchors
-
-If the UI expects progressive reveal for module/name questions, add revealStart / revealEnd* consistently (your import module question currently doesn’t).
-
-
----
-
 Digability and related stuff
 
 Make “dig” semantics explicit
@@ -174,6 +158,11 @@ yield / yield_expression ✅ rules exist, ❌ won’t trigger (yield lives insid
 annotated_assignment ✅ rule exists, but ❌ may not trigger depending on grammar and anchors
 
 Net: the checkbox list at the top (“❌ could detect …”) will still largely be ❌ in practice, even though the rule map looks complete.
+
+---
+
+file grouping/slicing
+some files are big and should be split into several quiz/lessons
 
 ---
 
