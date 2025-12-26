@@ -27,6 +27,8 @@ type QuizCard = {
   multiSelectHint?: number;
   optionPool?: string[];
   llmDistractors?: string[];
+  /** Override distractor count for grouped imports */
+  distractorPoolSize?: number;
 };
 
 type QuizDoc = {
@@ -104,7 +106,9 @@ export async function POST(
           ? card.multiCorrect.map((c) => String(c ?? "")).filter(Boolean)
           : [])
         : [String(card.text ?? "")].filter(Boolean);
-    const targetCount = card.questionType === "multi" ? 10 : 6;
+    const targetCount = card.distractorPoolSize
+      ? card.distractorPoolSize
+      : (card.questionType === "multi" ? 10 : 6);
 
     if (!correctAnswers.length) {
       failures.push({

@@ -52,7 +52,10 @@ export type QuizQuestion = {
   revealStart?: number;
   revealEndBeforeChild?: number;
   revealEndAfterChild?: number;
+  /** For grouped imports: request more distractors from LLM (default 10) */
+  distractorPoolSize?: number;
 };
+
 
 export type EngineStep = {
   id: string;
@@ -422,7 +425,300 @@ const collectDescendantsWithinScope = (
 };
 
 // ============================================================================
+// Import Run Grouping
+// ============================================================================
+
+/**
+ * Check if a node is an import statement
+ */
+const isImportStmt = (n: TreeSitterAstNode): boolean =>
+  n.type === "import_statement" || n.type === "import_from_statement";
+
+/**
+ * Collect contiguous import statements starting at index
+ */
+function collectImportRun(
+  stmts: TreeSitterAstNode[],
+  startIdx: number
+): { run: TreeSitterAstNode[]; nextIndex: number } {
+  const run: TreeSitterAstNode[] = [];
+  let i = startIdx;
+  while (i < stmts.length && isImportStmt(stmts[i])) {
+    run.push(stmts[i]);
+    i++;
+  }
+  return { run, nextIndex: i };
+}
+
+/**
+ * Split "import x as y" into original and alias.
+ * Returns the original name (not the alias).
+ */
+function splitAs(raw: string): { original: string; alias?: string } {
+  const parts = raw.split(/\s+as\s+/);
+  const original = (parts[0] ?? "").trim();
+  const alias = parts[1]?.trim();
+  return { original, alias };
+}
+
+/**
+ * Extract module names and imported names from an import run.
+ * Uses original names (not aliases) per user requirement.
+ */
+function extractImportRunData(
+  run: TreeSitterAstNode[],
+  code: string | undefined
+): {
+  modules: Set<string>;
+  imported: Set<string>;
+  aliases: Set<string>;
+  span: { start: number; end: number };
+} {
+  const modules = new Set<string>();
+  const imported = new Set<string>();
+  const aliases = new Set<string>();
+
+  const first = run[0];
+  const last = run[run.length - 1];
+  const span = { start: first.startIndex, end: last.endIndex };
+
+  for (const stmt of run) {
+    if (stmt.type === "import_from_statement") {
+      const sections = buildCuratedSections(stmt);
+      const moduleNode = sections.find((g) => g.key === "module")?.items?.[0];
+      const moduleText = moduleNode
+        ? (textForRange(moduleNode.startIndex, moduleNode.endIndex, code) ?? "").trim()
+        : "";
+      if (moduleText) modules.add(moduleText);
+
+      const names = sections.find((g) => g.key === "names")?.items ?? [];
+      for (const n of names) {
+        const raw = (textForRange(n.startIndex, n.endIndex, code) ?? "").trim();
+        if (!raw) continue;
+        const { original, alias } = splitAs(raw);
+        if (original) imported.add(original);
+        if (alias) aliases.add(alias);
+      }
+    }
+
+    if (stmt.type === "import_statement") {
+      const sections = buildCuratedSections(stmt);
+      const names = sections.find((g) => g.key === "names")?.items ?? [];
+      for (const n of names) {
+        const raw = (textForRange(n.startIndex, n.endIndex, code) ?? "").trim();
+        if (!raw) continue;
+        const { original, alias } = splitAs(raw);
+        if (original) {
+          modules.add(original);
+          imported.add(original);
+        }
+        if (alias) aliases.add(alias);
+      }
+    }
+  }
+
+  return { modules, imported, aliases, span };
+}
+
+/**
+ * Split a list of correct answers into cards with 3-6 each.
+ * Randomizes distribution to avoid "last card smallest" pattern.
+ */
+function splitCorrectIntoCards(correct: string[]): string[][] {
+  const unique = [...new Set(correct)];
+  // If <=6, single card is fine
+  if (unique.length <= 6) return [unique];
+
+  const shuffled = shuffle(unique);
+  const numCards = Math.ceil(unique.length / 6);
+  const baseSize = Math.floor(unique.length / numCards);
+  const remainder = unique.length % numCards;
+
+  // Randomly assign extra items to cards
+  const cardIndices = [...Array(numCards).keys()];
+  const shuffledIndices = shuffle(cardIndices);
+  const extraSlots = new Set(shuffledIndices.slice(0, remainder));
+
+  const cards: string[][] = [];
+  let idx = 0;
+
+  for (let c = 0; c < numCards; c++) {
+    const size = baseSize + (extraSlots.has(c) ? 1 : 0);
+    cards.push(shuffled.slice(idx, idx + size));
+    idx += size;
+  }
+
+  // Shuffle card order so extras aren't always first
+  return shuffle(cards);
+}
+
+/**
+ * Calculate required distractor pool size based on number of correct answers.
+ * More correct = more cards = need more unique distractors.
+ */
+function getImportDistractorCount(correctCount: number): number {
+  const numCards = Math.ceil(correctCount / 6);
+  // Each card needs ~(10 - avgCorrect) distractors
+  // numCards * 12 gives buffer for deduplication
+  return Math.max(20, numCards * 12);
+}
+
+/**
+ * Build an option pool for import questions.
+ * Includes correct answers + distractors, excluding aliases.
+ */
+function buildImportOptionPool(
+  correct: string[],
+  allCorrectInFamily: string[],
+  aliases: Set<string>,
+  code: string | undefined,
+  span: { start: number; end: number },
+  targetOptions: number = 10
+): string[] {
+  // Collect identifiers from surrounding code as potential distractors
+  const idPool: string[] = [];
+  try {
+    const reModule = /[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*/g;
+    const snippetStart = Math.max(0, span.start - 500);
+    const snippetEnd = span.end + 500;
+    const snippet = (code || "").slice(snippetStart, snippetEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reModule.exec(snippet))) {
+      const candidate = m[0];
+      // Exclude: correct answers from entire family, aliases, keywords
+      if (allCorrectInFamily.includes(candidate)) continue;
+      if (aliases.has(candidate)) continue;
+      if (["import", "from", "as", "None", "True", "False"].includes(candidate)) continue;
+      idPool.push(candidate);
+    }
+  } catch { }
+
+  // Dedupe
+  const distractors = Array.from(new Set(idPool));
+
+  // Pad with generic distractors if needed
+  if (distractors.length < targetOptions - correct.length) {
+    const needed = targetOptions - correct.length - distractors.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !correct.includes(d) && !distractors.includes(d) && !aliases.has(d))
+      .slice(0, needed);
+    distractors.push(...pad);
+  }
+
+  // Build final pool: correct + enough distractors to reach targetOptions
+  const shuffledDistractors = shuffle(distractors);
+  const neededDistractors = Math.max(0, targetOptions - correct.length);
+  const pool = [...correct, ...shuffledDistractors.slice(0, neededDistractors)];
+
+  return shuffle(pool).slice(0, targetOptions);
+}
+
+/**
+ * Generate questions for a contiguous import run.
+ * Creates two types of multi-select cards:
+ * - "Which modules are used?" (with alias note)
+ * - "Which names are imported?" (with alias note)
+ * 
+ * Splits into multiple cards if >6 correct, aiming for 3-6 correct each.
+ */
+function generateImportRunQuestions(
+  root: TreeSitterAstNode,
+  run: TreeSitterAstNode[],
+  code: string | undefined
+): QuizQuestion[] {
+  if (!run.length) return [];
+
+  const { modules, imported, aliases, span } = extractImportRunData(run, code);
+  const qs: QuizQuestion[] = [];
+
+  // Use the first node for SourceRef path (virtual spans use this)
+  const firstNode = run[0];
+  const baseSourceRef: SourceRef = {
+    nodeType: "import_group",
+    start: span.start,
+    end: span.end,
+    path: computeAstPath(root, firstNode),
+    preview: (code || "").slice(span.start, Math.min(span.end, span.start + 120)),
+  };
+
+  // === Module Questions ===
+  const moduleList = Array.from(modules);
+  if (moduleList.length > 0) {
+    const moduleCards = splitCorrectIntoCards(moduleList);
+    const totalModuleCards = moduleCards.length;
+    const distractorCount = getImportDistractorCount(moduleList.length);
+
+    moduleCards.forEach((cardCorrect, cardIdx) => {
+      const partLabel = totalModuleCards > 1 ? ` (Part ${cardIdx + 1} of ${totalModuleCards})` : "";
+      const optionPool = buildImportOptionPool(
+        cardCorrect,
+        moduleList,  // All correct from this family
+        aliases,
+        code,
+        span,
+        10
+      );
+
+      qs.push({
+        kind: "import_modules_multi",
+        stem: `Which modules are used here?${partLabel} (use original names, ignore aliases)`,
+        answerLabel: cardCorrect[0] ?? "module",
+        options: optionPool,
+        sourceRefs: [baseSourceRef],
+        generatorRule: "import_run.modules",
+        questionType: "multi",
+        multiCorrect: cardCorrect,
+        optionPool,
+        revealStart: span.start,
+        revealEndBeforeChild: span.start,
+        revealEndAfterChild: span.end,
+        distractorPoolSize: distractorCount,
+      });
+    });
+  }
+
+  // === Imported Names Questions ===
+  const importedList = Array.from(imported);
+  if (importedList.length > 0) {
+    const importedCards = splitCorrectIntoCards(importedList);
+    const totalImportedCards = importedCards.length;
+    const distractorCount = getImportDistractorCount(importedList.length);
+
+    importedCards.forEach((cardCorrect, cardIdx) => {
+      const partLabel = totalImportedCards > 1 ? ` (Part ${cardIdx + 1} of ${totalImportedCards})` : "";
+      const optionPool = buildImportOptionPool(
+        cardCorrect,
+        importedList,  // All correct from this family
+        aliases,
+        code,
+        span,
+        10
+      );
+
+      qs.push({
+        kind: "imported_names_multi",
+        stem: `Which names are imported?${partLabel} (use original names, ignore aliases)`,
+        answerLabel: cardCorrect[0] ?? "import",
+        options: optionPool,
+        sourceRefs: [baseSourceRef],
+        generatorRule: "import_run.names",
+        questionType: "multi",
+        multiCorrect: cardCorrect,
+        optionPool,
+        revealStart: span.start,
+        revealEndBeforeChild: span.start,
+        revealEndAfterChild: span.end,
+        distractorPoolSize: distractorCount,
+      });
+    });
+  }
+
+  return qs;
+}
+
+// ============================================================================
 // Quiz rules (copied from pyQuiz)
+
 // ============================================================================
 //
 // NOTE: Tree-sitter node type names can vary across grammar versions/forks.
@@ -2737,14 +3033,32 @@ function createGroupStep(
     isVirtual: true,
   };
 
-  // Recursively generate steps for children, but disable further grouping
+  // For import groups: generate quiz at group level, children get no quiz
+  const isImportGroup = category === "import";
+  const childOpts: EngineOptions = {
+    ...options,
+    __noGroup: true,
+    generateQuiz: isImportGroup ? false : options.generateQuiz,
+  };
+
+  // Recursively generate steps for children
   const childSteps = nodes.flatMap((n) =>
-    generateEngineSteps(root, n, code, { ...options, __noGroup: true })
+    generateEngineSteps(root, n, code, childOpts)
   );
+
+  // Generate grouped import quiz if applicable
+  let groupQuiz: { questions: QuizQuestion[] } | undefined;
+  if (isImportGroup && options.generateQuiz !== false) {
+    const importQuestions = generateImportRunQuestions(root, nodes, code);
+    if (importQuestions.length) {
+      groupQuiz = { questions: importQuestions };
+    }
+  }
 
   return {
     id: randomString(8),
     node: virtualNode,
+    quiz: groupQuiz,
     displaySpan: { start: virtualNode.startIndex, end: virtualNode.endIndex },
     lesson: {
       semanticRole: `group:${category}`,
@@ -2754,6 +3068,7 @@ function createGroupStep(
     },
   };
 }
+
 
 function groupTopLevelNodes(
   root: TreeSitterAstNode,
@@ -3235,16 +3550,104 @@ export const generateEngineSteps = (
     Boolean(clause && blockHasStatements(firstChildOfType(clause, "block")));
 
   const walkModule = (mod: TreeSitterAstNode) => {
-    for (const stmt of getStatementChildren(mod)) {
-      if (isAnchorNode(stmt)) walkStmt(stmt);
+    const children = getStatementChildren(mod);
+    let i = 0;
+    while (i < children.length) {
+      const stmt = children[i];
+      if (isImportStmt(stmt)) {
+        // Collect contiguous imports and emit a single grouped step
+        const { run, nextIndex } = collectImportRun(children, i);
+        emitImportRunStep(run);
+        i = nextIndex;
+      } else if (isAnchorNode(stmt)) {
+        walkStmt(stmt);
+        i++;
+      } else {
+        i++;
+      }
     }
   };
 
   const walkBlock = (block: TreeSitterAstNode) => {
-    for (const stmt of getStatementChildren(block)) {
-      if (isAnchorNode(stmt)) walkStmt(stmt);
+    const children = getStatementChildren(block);
+    let i = 0;
+    while (i < children.length) {
+      const stmt = children[i];
+      if (isImportStmt(stmt)) {
+        // Collect contiguous imports and emit a single grouped step
+        const { run, nextIndex } = collectImportRun(children, i);
+        emitImportRunStep(run);
+        i = nextIndex;
+      } else if (isAnchorNode(stmt)) {
+        walkStmt(stmt);
+        i++;
+      } else {
+        i++;
+      }
     }
   };
+
+  /**
+   * Emit a virtual step for an import run with grouped quiz questions.
+   * Individual imports don't get their own quiz questions.
+   */
+  const emitImportRunStep = (run: TreeSitterAstNode[]) => {
+    if (!run.length) return;
+
+    const first = run[0];
+    const last = run[run.length - 1];
+    const span = { start: first.startIndex, end: last.endIndex };
+
+    // Create virtual node for the import group
+    const virtualNode = {
+      ...first,
+      type: "import_group",
+      startIndex: span.start,
+      endIndex: span.end,
+      isVirtual: true,
+    };
+
+    // Generate grouped import questions if quiz is enabled
+    const questions = options.generateQuiz !== false
+      ? generateImportRunQuestions(root, run, code)
+      : [];
+
+    // Build child steps for individual imports (with generateQuiz:false)
+    // This enables "dig" into individual import lines for lesson view
+    const childSteps: EngineStep[] = run.map((importNode) => ({
+      id: randomString(8),
+      node: importNode,
+      displaySpan: { start: importNode.startIndex, end: importNode.endIndex },
+      lesson: {
+        semanticRole: importNode.type,
+        prompt: importNode.type === "import_from_statement"
+          ? "Import from statement."
+          : "Import statement.",
+        isDigable: false,
+      },
+      // No quiz on individual import child steps
+    }));
+
+    // Build lesson prompt
+    const moduleCount = run.length;
+    const lessonPrompt = moduleCount === 1
+      ? "We import dependencies for this module."
+      : `This block imports dependencies from ${moduleCount} import statement(s).`;
+
+    steps.push({
+      id: randomString(8),
+      node: virtualNode,
+      displaySpan: span,
+      lesson: {
+        semanticRole: "import_group",
+        prompt: lessonPrompt,
+        isDigable: childSteps.length > 0,
+        childSteps,
+      },
+      quiz: questions.length > 0 ? { questions } : undefined,
+    });
+  };
+
 
   const walkStmt = (stmt: TreeSitterAstNode) => {
     if (!isAnchorNode(stmt)) return;
@@ -3477,6 +3880,8 @@ type CustomQuizCard = {
   revealStart?: number;
   revealEndBeforeChild?: number;
   revealEndAfterChild?: number;
+  /** Request more distractors for grouped imports */
+  distractorPoolSize?: number;
 };
 
 export function buildCustomQuizPayload(params: {
@@ -3530,6 +3935,7 @@ export function buildCustomQuizPayload(params: {
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,
       revealEndAfterChild: q.revealEndAfterChild,
+      distractorPoolSize: q.distractorPoolSize,
     };
   };
 

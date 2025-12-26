@@ -32,6 +32,8 @@ export type SavedCustomQuizCardV11 = {
   revealStart?: number;
   revealEndBeforeChild?: number;
   revealEndAfterChild?: number;
+  // override distractor count for grouped imports
+  distractorPoolSize?: number;
 };
 
 export type SavedCustomQuizV11 = {
@@ -110,6 +112,10 @@ async function fetchSavedCustomQuizzes(fileKey?: {
         revealEndAfterChild:
           typeof c.revealEndAfterChild === "number"
             ? (c.revealEndAfterChild as number)
+            : undefined,
+        distractorPoolSize:
+          typeof c.distractorPoolSize === "number"
+            ? c.distractorPoolSize
             : undefined,
       })),
     }));
