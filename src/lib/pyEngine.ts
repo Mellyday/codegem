@@ -338,6 +338,18 @@ const buildModuleOptionPool = (
   );
 };
 
+// Helper: find all lambda nodes under a given node (for bubbling lambda questions)
+const findLambdaNodes = (n: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [n];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur.type === "lambda") out.push(cur);
+    (cur.namedChildren || []).forEach((c) => stack.push(c));
+  }
+  return out;
+};
+
 // ============================================================================
 // Quiz rules (copied from pyQuiz)
 // ============================================================================
@@ -375,15 +387,14 @@ const headerRule: Rule = ({ node, code, sourceRef }) => {
 
 const rules: Record<string, Rule[]> = {
   assignment: [
-    ({ root, node, code, sourceRef }) => {
+    ({ root, node, code, sourceRef, profile }) => {
       const left = getSectionFirstItem(node, "target");
       const right = getSectionFirstItem(node, "value");
       if (!left || !right) return;
       const leftText =
         textForRange(left.startIndex, left.endIndex, code) || left.type;
-      const rightText =
-        textForRange(right.startIndex, right.endIndex, code) || right.type;
-      return [
+
+      const qs: Q11[] = [
         {
           kind: "identify-field",
           stem: "What is the left-hand side (target) of this assignment?",
@@ -400,23 +411,41 @@ const rules: Record<string, Rule[]> = {
           ],
           generatorRule: "assignment.lhs",
         },
-        {
-          kind: "identify-field",
-          stem: "What is the right-hand side (value) of this assignment?",
-          answerLabel: rightText,
-          options: buildDistractors(rightText, { code }),
-          sourceRefs: [
-            sourceRef,
-            {
-              nodeType: right.type,
-              start: right.startIndex,
-              end: right.endIndex,
-              path: computeAstPath(root, right),
-            },
-          ],
-          generatorRule: "assignment.rhs",
-        },
       ];
+
+      // Bubble up lambda questions if RHS contains lambda(s)
+      const lambdas = findLambdaNodes(right);
+      if (lambdas.length > 0) {
+        let added = 0;
+        for (const lam of lambdas) {
+          const lambdaQs = generateQuestionsV11(root, lam, profile, code);
+          added += lambdaQs.length;
+          qs.push(...lambdaQs);
+        }
+        // Only skip generic RHS question if we actually added lambda questions
+        if (added > 0) return qs;
+      }
+
+      // Standard RHS question
+      const rightText =
+        textForRange(right.startIndex, right.endIndex, code) || right.type;
+      qs.push({
+        kind: "identify-field",
+        stem: "What is the right-hand side (value) of this assignment?",
+        answerLabel: rightText,
+        options: buildDistractors(rightText, { code }),
+        sourceRefs: [
+          sourceRef,
+          {
+            nodeType: right.type,
+            start: right.startIndex,
+            end: right.endIndex,
+            path: computeAstPath(root, right),
+          },
+        ],
+        generatorRule: "assignment.rhs",
+      });
+      return qs;
     },
   ],
   comparison_operator: [
@@ -671,10 +700,13 @@ const rules: Record<string, Rule[]> = {
         });
         // Keyword arguments
         for (const kw of keywords) {
-          const nameNode = (kw.namedChildren || [])[0];
+          // Use proper field access for robustness
+          const keyNode =
+            getSectionFirstItem(kw, "name") ||
+            (kw.namedChildren || []).find((c) => c.type === "identifier");
           const nameText =
-            nameNode &&
-            textForRange(nameNode.startIndex, nameNode.endIndex, code);
+            keyNode &&
+            textForRange(keyNode.startIndex, keyNode.endIndex, code);
           if (nameText) {
             qs.push({
               kind: "call-arg-keyword",
@@ -693,6 +725,16 @@ const rules: Record<string, Rule[]> = {
               generatorRule: "call.kwarg-name",
             });
           }
+        }
+      }
+
+      // Bubble up lambda questions from args/keywords (in all modes, including shallow)
+      const allArgNodes = [...args, ...keywords];
+      for (const argNode of allArgNodes) {
+        const lambdas = findLambdaNodes(argNode);
+        for (const lam of lambdas) {
+          const lambdaQs = generateQuestionsV11(root, lam, profile, code);
+          qs.push(...lambdaQs);
         }
       }
       return qs;
@@ -892,49 +934,200 @@ const rules: Record<string, Rule[]> = {
     ({ root, node, code, sourceRef, profile }) => {
       const params = getSectionItems(node, "args");
       const qs: Q11[] = [];
-      const names: string[] = [];
+      const defaults: Array<{ name: string; value: string; node: TreeSitterAstNode }> = [];
+
+      // Categorize parameters: positional-only (before /), normal, keyword-only (after *)
+      const positionalOnly: string[] = [];
+      const normal: string[] = [];
+      const keywordOnly: string[] = [];
+      let seenSlash = false; // /
+      let seenStar = false;  // * or *args
+
       for (const p of params) {
+        const raw = (textForRange(p.startIndex, p.endIndex, code) ?? "").trim();
+
+        // Handle / (positional-only separator)
+        if (raw === "/" || p.type === "positional_separator") {
+          seenSlash = true;
+          continue;
+        }
+
+        // Handle bare * (keyword-only separator)
+        if (raw === "*" || p.type === "keyword_separator") {
+          seenStar = true;
+          continue;
+        }
+
         const nameNode = (p.namedChildren || []).find(
           (c) => c.type === "identifier"
         );
-        if (nameNode) {
-          const nameText =
-            textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
-            "param";
-          names.push(nameText);
+        const id = nameNode
+          ? textForRange(nameNode.startIndex, nameNode.endIndex, code) || "param"
+          : raw.split(":")[0].split("=")[0].replace(/^\*+/, "").trim() || "param";
+
+        // Preserve * or ** prefix
+        let paramName: string;
+        if (raw.startsWith("**")) {
+          paramName = `**${id}`;
+          seenStar = true; // **kwargs also marks everything before as keyword-eligible
+        } else if (raw.startsWith("*") && raw !== "*") {
+          paramName = `*${id}`;
+          seenStar = true; // *args marks everything after as keyword-only
         } else {
-          const raw =
-            textForRange(p.startIndex, p.endIndex, code) || p.type || "param";
-          names.push(raw);
+          paramName = id;
+        }
+
+        // Categorize based on separators seen
+        if (!seenSlash && !seenStar) {
+          // Before any separator - could be positional-only if / comes later
+          // For now, add to a temporary list and recategorize after loop
+          positionalOnly.push(paramName);
+        } else if (seenSlash && !seenStar) {
+          normal.push(paramName);
+        } else if (seenStar) {
+          keywordOnly.push(paramName);
+        }
+
+        // Extract default value if present
+        if (raw.includes("=") && !raw.startsWith("*")) {
+          const defaultNode = (p.namedChildren || []).find(
+            (c) =>
+              c.type !== "identifier" &&
+              c.type !== "type" &&
+              c.type !== "type_annotation" &&
+              c.startIndex > (nameNode?.endIndex ?? p.startIndex)
+          );
+          if (defaultNode) {
+            const defaultValue =
+              textForRange(defaultNode.startIndex, defaultNode.endIndex, code) ??
+              "";
+            if (defaultValue.trim()) {
+              defaults.push({ name: id, value: defaultValue.trim(), node: defaultNode });
+            }
+          }
         }
       }
-      if (names.length > 0) {
-        const block = getSectionFirstItem(node, "body");
-        const spanStart = block ? block.startIndex : node.startIndex;
-        const spanEnd = block ? block.endIndex : node.endIndex;
-        const optionPool = buildMultiSelectOptionPool(
-          names,
-          code,
-          spanStart,
-          spanEnd
-        );
-        const argsSpan = getSectionSpan(node, "args");
+
+      // If we never saw /, the positionalOnly params are actually normal
+      if (!seenSlash) {
+        normal.unshift(...positionalOnly);
+        positionalOnly.length = 0;
+      }
+
+      // All params combined for the generic question
+      const allNames = [...positionalOnly, ...normal, ...keywordOnly];
+
+      const block = getSectionFirstItem(node, "body");
+      const spanStart = block ? block.startIndex : node.startIndex;
+      const spanEnd = block ? block.endIndex : node.endIndex;
+      const argsSpan = getSectionSpan(node, "args");
+
+      // Emit generic "all params" question
+      if (allNames.length > 0) {
+        const optionPool = buildMultiSelectOptionPool(allNames, code, spanStart, spanEnd);
         qs.push({
           kind: "function_params_multi",
           stem: "Which of the following are parameters of this function?",
-          answerLabel: names[0] ?? "param",
+          answerLabel: allNames[0] ?? "param",
           options: optionPool,
           sourceRefs: [sourceRef],
           generatorRule: "func.params-multi",
           questionType: "multi",
-          multiCorrect: names,
+          multiCorrect: allNames,
           optionPool,
           revealStart: node.startIndex,
           revealEndBeforeChild: argsSpan?.start,
           revealEndAfterChild: argsSpan?.end,
         });
       }
+
+      // Emit category-specific questions (only in deep mode and if category has items)
+      if (profile === "deep") {
+        if (positionalOnly.length > 0) {
+          const optionPool = buildMultiSelectOptionPool(positionalOnly, code, spanStart, spanEnd);
+          qs.push({
+            kind: "function_params_positional_only",
+            stem: "Which parameters are positional-only (before /)?",
+            answerLabel: positionalOnly[0] ?? "param",
+            options: optionPool,
+            sourceRefs: [sourceRef],
+            generatorRule: "func.params-positional-only",
+            questionType: "multi",
+            multiCorrect: positionalOnly,
+            optionPool,
+            revealStart: node.startIndex,
+            revealEndBeforeChild: argsSpan?.start,
+            revealEndAfterChild: argsSpan?.end,
+          });
+        }
+
+        if (keywordOnly.length > 0) {
+          const optionPool = buildMultiSelectOptionPool(keywordOnly, code, spanStart, spanEnd);
+          qs.push({
+            kind: "function_params_keyword_only",
+            stem: "Which parameters are keyword-only (after *)?",
+            answerLabel: keywordOnly[0] ?? "param",
+            options: optionPool,
+            sourceRefs: [sourceRef],
+            generatorRule: "func.params-keyword-only",
+            questionType: "multi",
+            multiCorrect: keywordOnly,
+            optionPool,
+            revealStart: node.startIndex,
+            revealEndBeforeChild: argsSpan?.start,
+            revealEndAfterChild: argsSpan?.end,
+          });
+        }
+      }
       if (profile !== "shallow") {
+        // Default parameter values
+        for (const def of defaults) {
+          qs.push({
+            kind: "param-default",
+            stem: `What is the default value of parameter ${def.name}?`,
+            answerLabel: def.value,
+            options: buildDistractors(def.value, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: def.node.type,
+                start: def.node.startIndex,
+                end: def.node.endIndex,
+                path: computeAstPath(root, def.node),
+              },
+            ],
+            generatorRule: "func.param-default",
+          });
+        }
+
+        // Type parameters (Python 3.12+ PEP 695)
+        const typeParamsNode = getSectionFirstItem(node, "type_params");
+        if (typeParamsNode) {
+          const typeParamChildren = typeParamsNode.namedChildren || [];
+          if (typeParamChildren.length > 0) {
+            const typeParamNames = typeParamChildren
+              .map((tp) => textForRange(tp.startIndex, tp.endIndex, code) || tp.type)
+              .filter(Boolean);
+            if (typeParamNames.length > 0) {
+              const tpSpan = getSectionSpan(node, "type_params");
+              qs.push({
+                kind: "func_type_params_multi",
+                stem: "Which are type parameters of this function?",
+                answerLabel: typeParamNames[0] ?? "T",
+                options: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+                sourceRefs: [sourceRef],
+                generatorRule: "func.type-params-multi",
+                questionType: "multi",
+                multiCorrect: typeParamNames,
+                optionPool: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+                revealStart: node.startIndex,
+                revealEndBeforeChild: tpSpan?.start,
+                revealEndAfterChild: tpSpan?.end,
+              });
+            }
+          }
+        }
+
         const ret = getSectionFirstItem(node, "returns");
         if (ret) {
           const retText =
@@ -958,6 +1151,339 @@ const rules: Record<string, Rule[]> = {
         }
       }
       return qs;
+    },
+  ],
+  class_definition: [
+    ({ root, node, code, sourceRef }) => {
+      const qs: Q11[] = [];
+
+      // 0. Type parameters (Python 3.12+ PEP 695, e.g. class Box[T]:)
+      const typeParamsNode = getSectionFirstItem(node, "type_params");
+      if (typeParamsNode) {
+        const typeParamChildren = typeParamsNode.namedChildren || [];
+        if (typeParamChildren.length > 0) {
+          const typeParamNames = typeParamChildren
+            .map((tp) => textForRange(tp.startIndex, tp.endIndex, code) || tp.type)
+            .filter(Boolean);
+          if (typeParamNames.length > 0) {
+            const tpSpan = getSectionSpan(node, "type_params");
+            qs.push({
+              kind: "class_type_params_multi",
+              stem: "Which are type parameters of this class?",
+              answerLabel: typeParamNames[0] ?? "T",
+              options: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+              sourceRefs: [sourceRef],
+              generatorRule: "class.type-params-multi",
+              questionType: "multi",
+              multiCorrect: typeParamNames,
+              optionPool: buildMultiSelectOptionPool(typeParamNames, code, node.startIndex, node.endIndex),
+              revealStart: node.startIndex,
+              revealEndBeforeChild: tpSpan?.start,
+              revealEndAfterChild: tpSpan?.end,
+            });
+          }
+        }
+      }
+
+      // 1. Base classes (multi-select)
+      const bases = getSectionItems(node, "bases");
+      if (bases.length > 0) {
+        const baseNames = bases
+          .map((b) => textForRange(b.startIndex, b.endIndex, code) || b.type)
+          .filter(Boolean);
+        const body = getSectionFirstItem(node, "body");
+        const spanStart = body ? body.startIndex : node.startIndex;
+        const spanEnd = body ? body.endIndex : node.endIndex;
+        const optionPool = buildMultiSelectOptionPool(
+          baseNames,
+          code,
+          spanStart,
+          spanEnd
+        );
+        const basesSpan = getSectionSpan(node, "bases");
+        qs.push({
+          kind: "class_bases_multi",
+          stem: "Which are base classes of this class?",
+          answerLabel: baseNames[0] ?? "base",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "class.bases-multi",
+          questionType: "multi",
+          multiCorrect: baseNames,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: basesSpan?.start,
+          revealEndAfterChild: basesSpan?.end,
+        });
+      }
+
+      // 2. Metaclass (from keywords like metaclass=X)
+      // Use proper field access for robustness
+      const keywords = getSectionItems(node, "keywords");
+      for (const kw of keywords) {
+        const children = kw.namedChildren || [];
+        // Prefer curated section access, fallback to first identifier
+        const keyNode =
+          getSectionFirstItem(kw, "name") ||
+          children.find((c) => c.type === "identifier");
+        // Prefer curated section access, fallback to last named child
+        const valueNode =
+          getSectionFirstItem(kw, "value") ||
+          (children.length > 0 ? children[children.length - 1] : undefined);
+
+        const keyText =
+          keyNode && textForRange(keyNode.startIndex, keyNode.endIndex, code);
+        if (keyText === "metaclass" && valueNode && valueNode !== keyNode) {
+          const valueText = (
+            textForRange(valueNode.startIndex, valueNode.endIndex, code) ||
+            valueNode.type
+          ).trim();
+          qs.push({
+            kind: "class_metaclass",
+            stem: "What is the metaclass of this class?",
+            answerLabel: valueText,
+            options: buildDistractors(valueText, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: valueNode.type,
+                start: valueNode.startIndex,
+                end: valueNode.endIndex,
+                path: computeAstPath(root, valueNode),
+              },
+            ],
+            generatorRule: "class.metaclass",
+          });
+        }
+      }
+
+      return qs;
+    },
+  ],
+  decorated_definition: [
+    ({ root, node, code, sourceRef, profile }) => {
+      const qs: Q11[] = [];
+
+      // Decorator names (multi-select)
+      const decorators = getSectionItems(node, "decorators");
+      if (decorators.length > 0) {
+        const decoratorNames = decorators.map((d) => {
+          const nameNode = getSectionFirstItem(d, "name");
+          if (nameNode) {
+            return (
+              textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+              nameNode.type
+            );
+          }
+          // Fallback: extract first identifier or dotted_name from decorator
+          const firstId = (d.namedChildren || []).find(
+            (c) =>
+              c.type === "identifier" ||
+              c.type === "dotted_name" ||
+              c.type === "attribute"
+          );
+          if (firstId) {
+            return (
+              textForRange(firstId.startIndex, firstId.endIndex, code) ||
+              firstId.type
+            );
+          }
+          // Last resort: full decorator text without @
+          const full =
+            textForRange(d.startIndex, d.endIndex, code) || d.type;
+          return full.replace(/^@/, "").split("(")[0];
+        });
+        const validNames = decoratorNames.filter(Boolean);
+        if (validNames.length > 0) {
+          // Use inner def's body span for better distractors
+          const innerDef = (node.namedChildren || []).find(
+            (c) =>
+              c.type === "function_definition" || c.type === "class_definition"
+          );
+          const innerBody = innerDef
+            ? getSectionFirstItem(innerDef, "body")
+            : null;
+          const spanStart = innerBody ? innerBody.startIndex : node.startIndex;
+          const spanEnd = innerBody ? innerBody.endIndex : node.endIndex;
+          const optionPool = buildMultiSelectOptionPool(
+            validNames,
+            code,
+            spanStart,
+            spanEnd
+          );
+          const decoSpan = getSectionSpan(node, "decorators");
+          qs.push({
+            kind: "decorators_multi",
+            stem: "Which decorators are applied to this definition?",
+            answerLabel: validNames[0] ?? "decorator",
+            options: optionPool,
+            sourceRefs: [sourceRef],
+            generatorRule: "decorated.decorators-multi",
+            questionType: "multi",
+            multiCorrect: validNames,
+            optionPool,
+            revealStart: node.startIndex,
+            revealEndBeforeChild: decoSpan?.start,
+            revealEndAfterChild: decoSpan?.end,
+          });
+        }
+      }
+
+      // Decorator arguments (for each decorator that has args)
+      for (const d of decorators) {
+        const decoArgs = getSectionItems(d, "args");
+        if (decoArgs.length === 0) continue;
+
+        const decoNameNode = getSectionFirstItem(d, "name");
+        const decoName = decoNameNode
+          ? textForRange(decoNameNode.startIndex, decoNameNode.endIndex, code)
+          : "decorator";
+
+        // Positional args (non-keyword_argument children)
+        const positionalArgs = decoArgs.filter(
+          (a) => a.type !== "keyword_argument"
+        );
+        for (let i = 0; i < positionalArgs.length; i++) {
+          const arg = positionalArgs[i];
+          const argText =
+            textForRange(arg.startIndex, arg.endIndex, code) || arg.type;
+          qs.push({
+            kind: "decorator-arg-positional",
+            stem: `What is argument #${i + 1} of @${decoName}?`,
+            answerLabel: argText,
+            options: buildDistractors(argText, { code }),
+            sourceRefs: [
+              sourceRef,
+              {
+                nodeType: arg.type,
+                start: arg.startIndex,
+                end: arg.endIndex,
+                path: computeAstPath(root, arg),
+              },
+            ],
+            generatorRule: "decorator.pos-arg",
+          });
+        }
+
+        // Keyword args
+        const kwArgs = decoArgs.filter((a) => a.type === "keyword_argument");
+        for (const kw of kwArgs) {
+          const children = kw.namedChildren || [];
+          const keyNode =
+            getSectionFirstItem(kw, "name") ||
+            children.find((c) => c.type === "identifier");
+          const valueNode =
+            getSectionFirstItem(kw, "value") ||
+            (children.length > 0 ? children[children.length - 1] : undefined);
+
+          if (keyNode && valueNode && valueNode !== keyNode) {
+            const keyText =
+              textForRange(keyNode.startIndex, keyNode.endIndex, code) || "key";
+            const valueText =
+              textForRange(valueNode.startIndex, valueNode.endIndex, code) ||
+              valueNode.type;
+            qs.push({
+              kind: "decorator-arg-keyword",
+              stem: `What is the value of ${keyText}= in @${decoName}?`,
+              answerLabel: valueText,
+              options: buildDistractors(valueText, { code }),
+              sourceRefs: [
+                sourceRef,
+                {
+                  nodeType: valueNode.type,
+                  start: valueNode.startIndex,
+                  end: valueNode.endIndex,
+                  path: computeAstPath(root, valueNode),
+                },
+              ],
+              generatorRule: "decorator.kwarg-value",
+            });
+          }
+        }
+      }
+
+      // Also generate questions for the inner function/class definition
+      const innerDef = (node.namedChildren || []).find(
+        (c) =>
+          c.type === "function_definition" || c.type === "class_definition"
+      );
+      if (innerDef) {
+        qs.push(...generateQuestionsV11(root, innerDef, profile, code));
+      }
+
+      return qs;
+    },
+  ],
+  lambda: [
+    ({ root, node, code, sourceRef }) => {
+      const params = getSectionItems(node, "args");
+      if (params.length === 0) return [];
+
+      const names: string[] = [];
+      for (const p of params) {
+        const nameNode = (p.namedChildren || []).find(
+          (c) => c.type === "identifier"
+        );
+        if (nameNode) {
+          const nameText =
+            textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+            "param";
+          names.push(nameText);
+        } else {
+          const raw =
+            textForRange(p.startIndex, p.endIndex, code) || p.type || "param";
+          names.push(raw);
+        }
+      }
+
+      if (names.length === 0) return [];
+
+      const body = getSectionFirstItem(node, "body");
+      const spanStart = body ? body.startIndex : node.startIndex;
+      const spanEnd = body ? body.endIndex : node.endIndex;
+      const optionPool = buildMultiSelectOptionPool(
+        names,
+        code,
+        spanStart,
+        spanEnd
+      );
+      const argsSpan = getSectionSpan(node, "args");
+
+      // Lambda-only fallback guard: if too many params (> 10), fall back to single-select
+      const MAX_MULTI_OPTIONS = 10;
+      if (names.length > MAX_MULTI_OPTIONS) {
+        // Fallback to single-select for first parameter
+        return [
+          {
+            kind: "lambda_params_single",
+            stem: "What is the first parameter of this lambda?",
+            answerLabel: names[0],
+            options: buildDistractors(names[0], { code }),
+            sourceRefs: [sourceRef],
+            generatorRule: "lambda.params-single-fallback",
+            revealStart: node.startIndex,
+            revealEndBeforeChild: argsSpan?.start,
+            revealEndAfterChild: argsSpan?.end,
+          },
+        ];
+      }
+
+      return [
+        {
+          kind: "lambda_params_multi",
+          stem: "Which are parameters of this lambda?",
+          answerLabel: names[0] ?? "param",
+          options: optionPool,
+          sourceRefs: [sourceRef],
+          generatorRule: "lambda.params-multi",
+          questionType: "multi",
+          multiCorrect: names,
+          optionPool,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: argsSpan?.start,
+          revealEndAfterChild: argsSpan?.end,
+        },
+      ];
     },
   ],
   if_statement: [headerRule],
