@@ -2908,6 +2908,37 @@ const rules: Record<string, Rule[]> = {
   ],
 
   // Yield expression (standalone or in expression statement)
+  expression_statement: [
+    ({ root, node, code, sourceRef, profile }) => {
+      const yieldNode = (node.namedChildren || []).find(
+        (c) =>
+          c.type === "yield" ||
+          c.type === "yield_expression" ||
+          c.type === "yield_expr" ||
+          c.type === "yield_statement"
+      );
+      if (!yieldNode) return;
+
+      if (profile === "shallow") {
+        const full = textForNode(node, code).trimEnd();
+        return [
+          {
+            kind: "yield_line",
+            stem: "Write the full yield statement",
+            answerLabel: full,
+            options: [],
+            sourceRefs: [sourceRef],
+            generatorRule: "yield.line",
+            revealStart: node.startIndex,
+            revealEndBeforeChild: node.startIndex,
+            revealEndAfterChild: node.endIndex,
+          },
+        ];
+      }
+
+      return generateQuestionsV11(root, yieldNode, profile, code);
+    },
+  ],
   yield: [
     ({ root, node, code, sourceRef }) => {
       const value = getSectionFirstItem(node, "value");
@@ -3254,6 +3285,7 @@ function groupTopLevelNodes(
 const ANCHOR_NODE_TYPES = new Set<string>([
   "assignment",
   "augmented_assignment",
+  "annotated_assignment",
   "class_definition",
   "function_definition",
   "async_function_definition",
