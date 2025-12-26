@@ -7,6 +7,8 @@ import {
   buildCuratedSections,
   getSectionItems,
   getSectionFirstItem,
+  getRevealAnchors,
+  getSectionSpan,
 } from "./pyCuration";
 import { randomString } from "./utils";
 
@@ -102,31 +104,8 @@ const headerAnswer = (stmt: TreeSitterAstNode, code?: string): string => {
 const headerSpanByAst = (
   node: TreeSitterAstNode
 ): { start: number; end: number } => {
-  const body =
-    firstChildOfType(node, "block") || firstChildOfType(node, "suite");
-  if (body && body.startIndex > node.startIndex) {
-    return { start: node.startIndex, end: body.startIndex };
-  }
-  if (node.type === "decorated_definition") {
-    const inner =
-      firstChildOfType(node, "function_definition") ||
-      firstChildOfType(node, "class_definition");
-    const innerBody =
-      inner &&
-      (firstChildOfType(inner, "block") || firstChildOfType(inner, "suite"));
-    if (innerBody && innerBody.startIndex > node.startIndex) {
-      return { start: node.startIndex, end: innerBody.startIndex };
-    }
-  }
-  if (node.type === "match_statement" || node.type === "match_stmt") {
-    const firstCase = (node.namedChildren || []).find(
-      (c) => c.type === "case_clause" || c.type === "case_block"
-    );
-    if (firstCase && firstCase.startIndex > node.startIndex) {
-      return { start: node.startIndex, end: firstCase.startIndex };
-    }
-  }
-  return { start: node.startIndex, end: node.endIndex };
+  const { headerEnd } = getRevealAnchors(node);
+  return { start: node.startIndex, end: headerEnd };
 };
 
 const displaySpanForNode = (
@@ -543,15 +522,7 @@ const rules: Record<string, Rule[]> = {
         spanStart,
         spanEnd
       );
-      const firstStart = items.length
-        ? items.reduce(
-          (m, it) => Math.min(m, it.startIndex),
-          items[0].startIndex
-        )
-        : undefined;
-      const lastEnd = items.length
-        ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
-        : undefined;
+      const namesSpan = getSectionSpan(node, "names");
       qs.push({
         kind: "imported_names_multi",
         stem: "Which names are imported?",
@@ -563,9 +534,8 @@ const rules: Record<string, Rule[]> = {
         multiCorrect: correct,
         optionPool,
         revealStart: node.startIndex,
-        // Match pyQuiz import reveal anchors (first name to last name).
-        revealEndBeforeChild: firstStart,
-        revealEndAfterChild: lastEnd,
+        revealEndBeforeChild: namesSpan?.start,
+        revealEndAfterChild: namesSpan?.end,
       });
       return qs;
     },
@@ -587,15 +557,7 @@ const rules: Record<string, Rule[]> = {
         spanStart,
         spanEnd
       );
-      const firstStart = items.length
-        ? items.reduce(
-          (m, it) => Math.min(m, it.startIndex),
-          items[0].startIndex
-        )
-        : undefined;
-      const lastEnd = items.length
-        ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
-        : undefined;
+      const namesSpan = getSectionSpan(node, "names");
       return [
         {
           kind: "imported_names_multi",
@@ -608,9 +570,8 @@ const rules: Record<string, Rule[]> = {
           multiCorrect: correct,
           optionPool,
           revealStart: node.startIndex,
-          // Match pyQuiz import reveal anchors (first name to last name).
-          revealEndBeforeChild: firstStart,
-          revealEndAfterChild: lastEnd,
+          revealEndBeforeChild: namesSpan?.start,
+          revealEndAfterChild: namesSpan?.end,
         },
       ];
     },
@@ -619,10 +580,8 @@ const rules: Record<string, Rule[]> = {
     ({ node, code, sourceRef }) => {
       const keyItems = getSectionItems(node, "keys");
       const keys: string[] = [];
-      const keyNodes: { start: number; end: number }[] = [];
       for (const k of keyItems) {
         keys.push(textForRange(k.startIndex, k.endIndex, code) || k.type);
-        keyNodes.push({ start: k.startIndex, end: k.endIndex });
       }
       const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
       const spanEnd = node.endIndex + 200;
@@ -650,19 +609,7 @@ const rules: Record<string, Rule[]> = {
         ...keys,
         ...extras.slice(0, Math.max(0, MAX - keys.length)),
       ]).slice(0, MAX);
-      let revealStart: number | undefined = node.startIndex;
-      let revealEndBeforeChild: number | undefined = undefined;
-      let revealEndAfterChild: number | undefined = undefined;
-      if (keyNodes.length > 0) {
-        revealEndBeforeChild = keyNodes.reduce(
-          (min, n) => Math.min(min, n.start),
-          keyNodes[0].start
-        );
-        revealEndAfterChild = keyNodes.reduce(
-          (max, n) => Math.max(max, n.end),
-          keyNodes[0].end
-        );
-      }
+      const keysSpan = getSectionSpan(node, "keys");
 
       return [
         {
@@ -675,9 +622,9 @@ const rules: Record<string, Rule[]> = {
           questionType: "multi",
           multiCorrect: keys,
           optionPool,
-          revealStart,
-          revealEndBeforeChild,
-          revealEndAfterChild,
+          revealStart: node.startIndex,
+          revealEndBeforeChild: keysSpan?.start,
+          revealEndAfterChild: keysSpan?.end,
         },
       ];
     },
@@ -971,18 +918,7 @@ const rules: Record<string, Rule[]> = {
           spanStart,
           spanEnd
         );
-        const firstParamStart = params.length
-          ? params.reduce(
-            (m, it) => Math.min(m, it.startIndex),
-            params[0].startIndex
-          )
-          : undefined;
-        const lastParamEnd = params.length
-          ? params.reduce(
-            (m, it) => Math.max(m, it.endIndex),
-            params[0].endIndex
-          )
-          : undefined;
+        const argsSpan = getSectionSpan(node, "args");
         qs.push({
           kind: "function_params_multi",
           stem: "Which of the following are parameters of this function?",
@@ -994,8 +930,8 @@ const rules: Record<string, Rule[]> = {
           multiCorrect: names,
           optionPool,
           revealStart: node.startIndex,
-          revealEndBeforeChild: firstParamStart,
-          revealEndAfterChild: lastParamEnd,
+          revealEndBeforeChild: argsSpan?.start,
+          revealEndAfterChild: argsSpan?.end,
         });
       }
       if (profile !== "shallow") {
@@ -1771,22 +1707,11 @@ function headerMaskAndAnswer(
   stmt: TreeSitterAstNode,
   code: string
 ): { masks: MaskRange[]; answerText: string } {
-  const nonStructural = new Set([
-    "block",
-    "else_clause",
-    "elif_clause",
-    "finally_clause",
-    "except_clause",
-  ]);
-  const firstNamed = (stmt.namedChildren || []).find(
-    (c) => !nonStructural.has(c.type)
-  );
-  const maskStart = stmt.startIndex;
-  const maskEnd = firstNamed ? firstNamed.startIndex : stmt.startIndex;
-
+  const { headerEnd } = getRevealAnchors(stmt);
   const answerText = headerAnswer(stmt, code);
-
-  const masks = maskEnd > maskStart ? [{ start: maskStart, end: maskEnd }] : [];
+  const masks = headerEnd > stmt.startIndex
+    ? [{ start: stmt.startIndex, end: headerEnd }]
+    : [];
   return { masks, answerText };
 }
 

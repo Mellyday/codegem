@@ -929,6 +929,83 @@ export const buildCuratedSections = (
   }
 };
 
+// ============================================================================
+// Reveal Anchors: Centralized header/content span computation
+// ============================================================================
+
+export type RevealAnchors = {
+  /** Where the "header" ends (before body/block). Used for display spans and masking. */
+  headerEnd: number;
+  /** First meaningful content for progressive reveal (e.g., first param, first imported name). */
+  contentStart?: number;
+  /** Last meaningful content for progressive reveal (e.g., last param, last imported name). */
+  contentEnd?: number;
+};
+
+/**
+ * Compute reveal anchors for a node using its curated sections.
+ * This centralizes the logic for determining header spans and content bounds.
+ */
+export function getRevealAnchors(node: TreeSitterAstNode): RevealAnchors {
+  const sections = buildCuratedSections(node);
+
+  // Find the body section (where the "header" ends)
+  const bodySection = sections.find((s) => s.key === "body");
+  const body = bodySection?.items[0];
+
+  // Default headerEnd: start of body, or end of node if no body
+  let headerEnd = body?.startIndex ?? node.endIndex;
+
+  // Special handling for nodes with known structure
+  // For match statements, header ends at first case
+  if (node.type === "match_statement" || node.type === "match_stmt") {
+    const casesSection = sections.find((s) => s.key === "cases");
+    const firstCase = casesSection?.items[0];
+    if (firstCase) {
+      headerEnd = firstCase.startIndex;
+    }
+  }
+
+  // For decorated definitions, find the inner definition's body
+  if (node.type === "decorated_definition") {
+    // The inner function/class body is included in the sections already
+    if (body) {
+      headerEnd = body.startIndex;
+    }
+  }
+
+  // Collect content items from non-body sections for progressive reveal
+  const contentSections = sections.filter(
+    (s) => s.key !== "body" && s.key !== "orelse" && s.key !== "finalbody" && s.items.length > 0
+  );
+  const allContentItems = contentSections.flatMap((s) => s.items);
+
+  let contentStart: number | undefined;
+  let contentEnd: number | undefined;
+
+  if (allContentItems.length > 0) {
+    contentStart = Math.min(...allContentItems.map((n) => n.startIndex));
+    contentEnd = Math.max(...allContentItems.map((n) => n.endIndex));
+  }
+
+  return { headerEnd, contentStart, contentEnd };
+}
+
+/**
+ * Get the span (start, end) of a specific curated section's items.
+ * Useful for quiz reveal anchors when you want to highlight specific parts.
+ */
+export function getSectionSpan(
+  node: TreeSitterAstNode,
+  sectionKey: string
+): { start: number; end: number } | undefined {
+  const items = getSectionItems(node, sectionKey);
+  if (items.length === 0) return undefined;
+  const start = Math.min(...items.map((n) => n.startIndex));
+  const end = Math.max(...items.map((n) => n.endIndex));
+  return { start, end };
+}
+
 // Utility: find the deepest named node that covers a given character span
 export function findDeepestNodeCoveringSpan(
   root: TreeSitterAstNode,
