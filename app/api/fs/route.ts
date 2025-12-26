@@ -2,24 +2,32 @@ export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { getDb } from "@/src/lib/mongodb";
 import { auth } from "@clerk/nextjs/server";
+import { ObjectId } from "mongodb";
 
 type FsAction =
   | {
-      action: "create_folder";
-      kind: "repo" | "project";
-      id: string;
-      prefix?: string;
-      name: string;
-    }
+    action: "create_folder";
+    kind: "repo" | "project";
+    id: string;
+    prefix?: string;
+    name: string;
+  }
   | {
-      action: "create_snippet";
-      kind: "repo" | "project";
-      id: string;
-      prefix?: string;
-      name: string; // file name, e.g. hello.py
-      language?: string;
-      sourceCode?: string;
-    };
+    action: "create_snippet";
+    kind: "repo" | "project";
+    id: string;
+    prefix?: string;
+    name: string; // file name, e.g. hello.py
+    language?: string;
+    sourceCode?: string;
+  }
+  | {
+    action: "delete";
+    kind: "repo" | "project";
+    id: string;
+    path: string; // full path to delete
+    isDir?: boolean; // if true, recursively delete folder contents
+  };
 
 function normalizePrefix(prefix?: string): string {
   return (prefix || "").replace(/^\/+|\/+$/g, "");
@@ -40,7 +48,7 @@ export async function POST(request: Request) {
 
     // Session is already validated by Clerk via auth(); no extra lookup needed
 
-    if (!body || (body.action !== "create_folder" && body.action !== "create_snippet")) {
+    if (!body || (body.action !== "create_folder" && body.action !== "create_snippet" && body.action !== "delete")) {
       return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
 
@@ -125,6 +133,55 @@ export async function POST(request: Request) {
       }
       const res = await files.insertOne(doc);
       return NextResponse.json({ ok: true, id: String(res.insertedId) });
+    }
+
+    if (body.action === "delete") {
+      const path = body.path?.trim();
+      if (!path) return NextResponse.json({ error: "Missing path" }, { status: 400 });
+
+      const match: any = { path };
+      // Coerce ID to ObjectId for proper matching with dev-pushed files
+      let idAsObject: any = body.id;
+      try {
+        idAsObject = new ObjectId(String(body.id));
+      } catch {
+        // Keep as string if not a valid ObjectId
+      }
+      if (body.kind === "repo") {
+        match.repoId = idAsObject;
+        match.projectId = null;
+      } else {
+        match.projectId = idAsObject;
+      }
+
+      let deletedCount = 0;
+
+      if (body.isDir) {
+        // Delete the folder marker and all files under this path prefix
+        const folderMatch: any = {
+          $or: [
+            { ...match }, // The folder itself
+            {
+              ...(body.kind === "repo"
+                ? { repoId: idAsObject, projectId: null }
+                : { projectId: idAsObject }),
+              path: { $regex: `^${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/` }
+            }
+          ]
+        };
+        const res = await files.deleteMany(folderMatch);
+        deletedCount = res.deletedCount ?? 0;
+      } else {
+        // Delete single file
+        const res = await files.deleteOne(match);
+        deletedCount = res.deletedCount ?? 0;
+      }
+
+      if (deletedCount === 0) {
+        return NextResponse.json({ error: "Not found" }, { status: 404 });
+      }
+
+      return NextResponse.json({ ok: true, deletedCount });
     }
 
     return NextResponse.json({ error: "Unsupported" }, { status: 400 });

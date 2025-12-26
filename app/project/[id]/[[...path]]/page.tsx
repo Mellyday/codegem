@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
 import { ExplorerActions } from "@/src/components/ExplorerActions";
+import { DeleteButton } from "@/src/components/DeleteButton";
 
 type Params = { id: string; path?: string[] };
 
@@ -36,22 +37,26 @@ export default async function ProjectBrowsePage({
         <Breadcrumb kind="project" id={id} prefix={listing.prefix} />
         <ExplorerActions kind="project" id={id} prefix={listing.prefix} />
         <ul className="mt-4 divide-y divide-rose-100 rounded-lg border border-rose-200 bg-white">
-          {listing.dirs.map((d) => (
-            <li key={`dir:${d}`} className="flex items-center justify-between px-4 py-3">
-              <Link
-                href={`/project/${encodeURIComponent(id)}/${[listing.prefix, d]
-                  .filter(Boolean)
-                  .join("/")
-                  .split("/")
-                  .map(encodeURIComponent)
-                  .join("/")}`}
-                className="font-medium text-rose-700 hover:underline"
-              >
-                {d}/
-              </Link>
-              <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">Folder</span>
-            </li>
-          ))}
+          {listing.dirs.map((d) => {
+            const dirPath = [listing.prefix, d].filter(Boolean).join("/");
+            return (
+              <li key={`dir:${d}`} className="flex items-center justify-between px-4 py-3">
+                <Link
+                  href={`/project/${encodeURIComponent(id)}/${dirPath
+                    .split("/")
+                    .map(encodeURIComponent)
+                    .join("/")}`}
+                  className="font-medium text-rose-700 hover:underline"
+                >
+                  {d}/
+                </Link>
+                <div className="flex items-center">
+                  <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">Folder</span>
+                  <DeleteButton kind="project" id={id} path={dirPath} isDir label="×" />
+                </div>
+              </li>
+            );
+          })}
           {listing.files.map((f) => (
             <li key={`file:${f.path}`} className="flex items-center justify-between px-4 py-3">
               <Link
@@ -63,7 +68,10 @@ export default async function ProjectBrowsePage({
               >
                 {f.name}
               </Link>
-              <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
+              <div className="flex items-center">
+                <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
+                <DeleteButton kind="project" id={id} path={f.path} label="×" />
+              </div>
             </li>
           ))}
           {listing.dirs.length === 0 && listing.files.length === 0 && (
