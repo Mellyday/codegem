@@ -1,4 +1,4 @@
-export type AstSupport = "babel" | "tree-sitter" | "none";
+export type AstSupport = "tree-sitter" | "none";
 
 export type SandboxRoute = {
   fileName: string;

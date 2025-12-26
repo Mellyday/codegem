@@ -5,16 +5,12 @@ import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
 import * as pyCuration from "../lib/languages/python/pyCuration";
 import { isDocstringNode } from "../lib/languages/python/pyCuration";
-import * as jsCuration from "../lib/jsCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
 import * as pyEngine from "../lib/languages/python/pyEngine";
-import * as jsQuiz from "../lib/jsQuiz";
-import * as jsLesson from "../lib/jsLesson";
 
-// Constants moved inside component to depend on language
+// Constants moved inside component
 type QuizMode = "setup" | "active" | "complete";
-type LanguageKind = "python" | "js";
 
 export type QuizViewerProps = {
   root: TreeSitterAstNode;
@@ -23,7 +19,6 @@ export type QuizViewerProps = {
   // File context to load saved custom quizzes
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
   mode: QuizMode;
-  language?: LanguageKind;
   onStart: () => void;
   onCancel: () => void;
   onComplete: () => void;
@@ -384,66 +379,44 @@ const revealAfterForQuestion = (q: Question | undefined): number | undefined => 
   return undefined;
 };
 
-// Heuristic helpers use pyEngine steps for Python and buildHeuristicQuiz from src/lib/jsQuiz for JS.
+// Heuristic helpers use pyEngine steps for Python.
 
 export const QuizViewer = ({
   root,
   code,
   fileKey,
   mode,
-  language = "python",
   onStart,
   onCancel,
   onComplete,
   onReturnToAst,
   onRevealChange,
 }: QuizViewerProps) => {
-  // Treat blocks/suites or JS BlockStatements as containers
+  // Treat blocks/suites as containers
   const BLOCK_TYPES = useMemo(
-    () =>
-      language === "python"
-        ? new Set(["block", "suite"])
-        : new Set(["BlockStatement"]),
-    [language]
+    () => new Set(["block", "suite"]),
+    []
   );
   const CURATABLE_ANCHORS = useMemo(
-    () =>
-      language === "python"
-        ? new Set([
-          "function_definition",
-          "decorated_definition",
-          "class_definition",
-          "assignment",
-          "expression_statement",
-          "call",
-          "if_statement",
-          "if_stmt",
-          "elif_clause",
-          "else_clause",
-          "for_statement",
-          "for_stmt",
-          "while_statement",
-          "while_stmt",
-          "with_statement",
-          "try_statement",
-        ])
-        : new Set([
-          "FunctionDeclaration",
-          "FunctionExpression",
-          "ArrowFunctionExpression",
-          "ClassDeclaration",
-          "ClassExpression",
-          "VariableDeclaration",
-          "ExpressionStatement",
-          "CallExpression",
-          "IfStatement",
-          "ForStatement",
-          "ForInStatement",
-          "ForOfStatement",
-          "WhileStatement",
-          "TryStatement",
-        ]),
-    [language]
+    () => new Set([
+      "function_definition",
+      "decorated_definition",
+      "class_definition",
+      "assignment",
+      "expression_statement",
+      "call",
+      "if_statement",
+      "if_stmt",
+      "elif_clause",
+      "else_clause",
+      "for_statement",
+      "for_stmt",
+      "while_statement",
+      "while_stmt",
+      "with_statement",
+      "try_statement",
+    ]),
+    []
   );
   // Setup state
   const containerTypes = useMemo(
@@ -595,36 +568,25 @@ export const QuizViewer = ({
     }
   };
 
-  // Save split quizzes using the same grouping heuristic as Lesson (Python via pyEngine steps, JS via jsQuiz)
+  // Save split quizzes using the same grouping heuristic as Lesson (Python via pyEngine steps)
   const saveSplitHeuristic = async (
     profile: "shallow" | "deep",
     opts?: { maxDeepPerStmt?: number }
   ) => {
     if (!root) return;
-    const plan =
-      language === "python"
-        ? (pyEngine.generateEngineSteps(root, root, code || "", {
-          profile: "shallow",
-          grouping: "auto",
-          includeNames: false,
-          generateQuiz: false,
-        }) as any[])
-        : (jsLesson.generateLessonPlan(root, {
-          includeNames: false,
-          enableGrouping: "auto" as const,
-        }) as any[]);
+    const plan = pyEngine.generateEngineSteps(root, root, code || "", {
+      profile: "shallow",
+      grouping: "auto",
+      includeNames: false,
+      generateQuiz: false,
+    }) as any[];
     const groups = plan.filter(
       (s: any) => (s.node as any)?.isVirtual || s.node.type === "group"
     );
     if (!groups.length) {
       // Fallback to single save
-      if (language === "python") {
-        const payload = buildPythonEnginePayload(root, profile);
-        await savePythonEngineQuiz(payload, root, `Heuristic ${profile}`, profile);
-      } else {
-        const single = jsQuiz.buildHeuristicQuiz(root, code || "", profile, opts);
-        await saveHeuristicQuiz(single, root, `Heuristic ${profile}`);
-      }
+      const payload = buildPythonEnginePayload(root, profile);
+      await savePythonEngineQuiz(payload, root, `Heuristic ${profile}`, profile);
       alert(`Saved 1 quiz (Heuristic ${profile}).`);
       return;
     }
@@ -659,13 +621,8 @@ export const QuizViewer = ({
           0,
           160
         ) || `Heuristic ${profile} (${i + 1})`;
-      if (language === "python") {
-        const payload = buildPythonEnginePayload(vroot, profile);
-        await savePythonEngineQuiz(payload, vroot, name, profile);
-      } else {
-        const quiz = jsQuiz.buildHeuristicQuiz(vroot, code || "", profile, opts);
-        await saveHeuristicQuiz(quiz, vroot, name);
-      }
+      const payload = buildPythonEnginePayload(vroot, profile);
+      await savePythonEngineQuiz(payload, vroot, name, profile);
       saved += 1;
     }
     alert(`Saved ${saved} quiz(es) for grouped sections.`);
@@ -792,26 +749,15 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                if (language === "python") {
-                  const payload = buildPythonEnginePayload(root, "shallow");
-                  savePythonEngineQuiz(
-                    payload,
-                    root,
-                    "Heuristic shallow",
-                    "shallow"
-                  )
-                    .then(() => alert("Saved heuristic shallow quiz."))
-                    .catch(() => alert("Failed to save heuristic shallow quiz."));
-                } else {
-                  const quiz = jsQuiz.buildHeuristicQuiz(
-                    root,
-                    code || "",
-                    "shallow"
-                  );
-                  saveHeuristicQuiz(quiz, root, "Heuristic shallow")
-                    .then(() => alert("Saved heuristic shallow quiz."))
-                    .catch(() => alert("Failed to save heuristic shallow quiz."));
-                }
+                const payload = buildPythonEnginePayload(root, "shallow");
+                savePythonEngineQuiz(
+                  payload,
+                  root,
+                  "Heuristic shallow",
+                  "shallow"
+                )
+                  .then(() => alert("Saved heuristic shallow quiz."))
+                  .catch(() => alert("Failed to save heuristic shallow quiz."));
               }}
             >
               Shallow (Line-by-Line)
@@ -821,19 +767,10 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                if (language === "python") {
-                  const payload = buildPythonEnginePayload(root, "deep");
-                  savePythonEngineQuiz(payload, root, "Heuristic deep", "deep")
-                    .then(() => alert("Saved heuristic deep quiz."))
-                    .catch(() => alert("Failed to save heuristic deep quiz."));
-                } else {
-                  const quiz = jsQuiz.buildHeuristicQuiz(root, code || "", "deep", {
-                    maxDeepPerStmt: 6,
-                  });
-                  saveHeuristicQuiz(quiz, root, "Heuristic deep")
-                    .then(() => alert("Saved heuristic deep quiz."))
-                    .catch(() => alert("Failed to save heuristic deep quiz."));
-                }
+                const payload = buildPythonEnginePayload(root, "deep");
+                savePythonEngineQuiz(payload, root, "Heuristic deep", "deep")
+                  .then(() => alert("Saved heuristic deep quiz."))
+                  .catch(() => alert("Failed to save heuristic deep quiz."));
               }}
             >
               Deep (With Expression Detail)
@@ -1353,20 +1290,12 @@ export const QuizViewer = ({
 
     // Prefer block/suite if the span is exactly a block, else land on a statement anchor
     const resolveAnchor = (s: number, e: number) => {
-      const deepest = (
-        language === "python"
-          ? pyCuration.findDeepestNodeCoveringSpan
-          : jsCuration.findDeepestNodeCoveringSpan
-      )(root, s, e);
+      const deepest = pyCuration.findDeepestNodeCoveringSpan(root, s, e);
       if (deepest && BLOCK_TYPES.has(deepest.type)) {
         // If user marked a body span exactly, keep the block as the anchor
         return deepest;
       }
-      const anchor = (
-        language === "python"
-          ? pyCuration.findNearestAnchorCoveringSpan
-          : jsCuration.findNearestAnchorCoveringSpan
-      )(root, s, e, CURATABLE_ANCHORS);
+      const anchor = pyCuration.findNearestAnchorCoveringSpan(root, s, e, CURATABLE_ANCHORS);
       return anchor ?? deepest;
     };
 
@@ -1456,13 +1385,11 @@ export const QuizViewer = ({
                       : undefined;
 
     let pieces =
-      (language === "python"
-        ? pyCuration.cardsFromCuratedSections
-        : jsCuration.cardsFromCuratedSections)(anchor, code, {
-          // Show a single "body" card whenever this node actually owns a block/suite
-          includeBody: hasBlock || isFunc,
-          groupOrder,
-        }) || [];
+      pyCuration.cardsFromCuratedSections(anchor, code, {
+        // Show a single "body" card whenever this node actually owns a block/suite
+        includeBody: hasBlock || isFunc,
+        groupOrder,
+      }) || [];
 
     // Fallback: if for any reason we still didn't get a body card but this node owns one,
     // synthesize exactly one body card from the block/suite span.
@@ -1571,9 +1498,7 @@ export const QuizViewer = ({
             nodeType: node.type,
             start: node.startIndex,
             end: node.endIndex,
-            path: (language === "python"
-              ? pyEngine.computeAstPath
-              : jsQuiz.computeAstPath)(root, node),
+            path: pyEngine.computeAstPath(root, node),
             preview:
               typeof code === "string"
                 ? code.substring(node.startIndex, node.endIndex).slice(0, 120)

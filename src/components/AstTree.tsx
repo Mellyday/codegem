@@ -1,6 +1,5 @@
 import { Fragment } from 'react'
 import type { JSX } from 'react'
-import type { File } from '@babel/types'
 
 import type { TreeSitterAstNode } from '../lib/treeSitter'
 
@@ -10,7 +9,7 @@ type AstNode = {
 }
 
 type AstTreeProps = {
-  root: File | AstNode | TreeSitterAstNode
+  root: AstNode | TreeSitterAstNode
   defaultOpenDepth?: number
 }
 

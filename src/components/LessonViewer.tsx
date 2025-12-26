@@ -2,18 +2,15 @@ import React, { useState, useEffect } from "react";
 import { type TreeSitterAstNode } from "../lib/treeSitter";
 import { BookOpen, ChevronsRight, ChevronsLeft, FileJson } from "lucide-react";
 import * as pyEngine from "../lib/languages/python/pyEngine";
-import * as jsLesson from "../lib/jsLesson";
 import type {
   EngineStep as PyEngineStep,
   LessonHistoryItem as PyEngineHistoryItem,
 } from "../lib/languages/python/pyEngine";
-import type { LessonStep as JsLessonStep, LessonHistoryItem as JsLessonHistoryItem } from "../lib/jsLesson";
 
 export type LessonViewerProps = {
   root: TreeSitterAstNode;
   code: string;
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
-  language?: "python" | "js";
   onReturnToAst: () => void;
   onRevealEndIndexChange: (endIndex: number | undefined) => void;
   onMaskRangesChange: (ranges: { start: number; end: number }[]) => void;
@@ -33,13 +30,12 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   root,
   code,
   fileKey,
-  language = "python",
   onReturnToAst,
   onRevealEndIndexChange,
   onMaskRangesChange,
 }) => {
-  type LessonStep = PyEngineStep | JsLessonStep;
-  type LessonHistoryItem = PyEngineHistoryItem | JsLessonHistoryItem;
+  type LessonStep = PyEngineStep;
+  type LessonHistoryItem = PyEngineHistoryItem;
   const [lessonQueue, setLessonQueue] = useState<LessonStep[]>([]);
   const [currentStep, setCurrentStep] = useState(0);
   const [history, setHistory] = useState<LessonHistoryItem[]>([]);
@@ -48,25 +44,18 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const [tocSteps, setTocSteps] = useState<LessonStep[] | null>(null);
   const inToc = !!tocSteps;
 
-  const isJsLessonStep = (
-    step: LessonStep | null | undefined
-  ): step is JsLessonStep => Boolean(step && "prompt" in step);
-
   const getPrompt = (step: LessonStep | null | undefined): string => {
     if (!step) return "";
-    if (isJsLessonStep(step)) return step.prompt ?? "";
     return step.lesson?.prompt ?? "";
   };
 
   const getIsDigable = (step: LessonStep | null | undefined): boolean => {
     if (!step) return false;
-    if (isJsLessonStep(step)) return step.isDigable;
     return step.lesson?.isDigable ?? false;
   };
 
   const getChildSteps = (step: LessonStep | null | undefined): LessonStep[] => {
     if (!step) return [];
-    if (isJsLessonStep(step)) return step.childSteps ?? [];
     return step.lesson?.childSteps ?? [];
   };
 
@@ -74,18 +63,12 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     if (root) {
       // Prefer semantic steps over raw namedChildren
       // Hide function/class names by default for more useful prompts
-      const plan: LessonStep[] =
-        language === "python"
-          ? (pyEngine.generateEngineSteps(root, root, code, {
-            profile: "shallow",
-            grouping: "auto",
-            includeNames: false,
-            generateQuiz: false,
-          }) as unknown as LessonStep[])
-          : (jsLesson.generateLessonPlan(root, {
-            includeNames: false,
-            enableGrouping: "auto",
-          }) as LessonStep[]);
+      const plan: LessonStep[] = pyEngine.generateEngineSteps(root, root, code, {
+        profile: "shallow",
+        grouping: "auto",
+        includeNames: false,
+        generateQuiz: false,
+      }) as unknown as LessonStep[];
       // If the plan is grouped (virtual group steps) and there are multiple groups,
       // show a TOC first. If only one group, jump straight into that group's child steps.
       const hasGroups = plan.some((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
@@ -106,7 +89,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       setCurrentStep(0);
       setHistory([]);
     }
-  }, [root, language]);
+  }, [root, code]);
 
   useEffect(() => {
     if (inToc) {
@@ -123,9 +106,7 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
     const curr = lessonQueue[currentStep];
     if (curr) {
-      const { masks } = (language === "python"
-        ? pyEngine.maskAndAnswerForStep
-        : jsLesson.maskAndAnswerForStep)(curr as any, root, code);
+      const { masks } = pyEngine.maskAndAnswerForStep(curr as any, root, code);
       onMaskRangesChange(masks);
     } else {
       onMaskRangesChange([]);
@@ -137,7 +118,6 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
     code,
     onRevealEndIndexChange,
     onMaskRangesChange,
-    language,
     inToc,
   ]);
 
@@ -179,17 +159,13 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       const childrenSteps =
         existingChildren.length > 0
           ? existingChildren
-          : (language === "python"
-            ? (pyEngine.generateEngineSteps(root, stepToExpand.node as any, code, {
-              profile: "shallow",
-              grouping: false,
-              includeNames: false,
-              generateQuiz: false,
-              __noGroup: true,
-            }) as unknown as LessonStep[])
-            : (jsLesson.generateLessonPlan(stepToExpand.node as any, {
-              includeNames: false,
-            }) as LessonStep[]));
+          : (pyEngine.generateEngineSteps(root, stepToExpand.node as any, code, {
+            profile: "shallow",
+            grouping: false,
+            includeNames: false,
+            generateQuiz: false,
+            __noGroup: true,
+          }) as unknown as LessonStep[]);
 
       if (childrenSteps.length > 0) {
         setHistory((prev) => [...prev, { ...stepToExpand, action: "dig" }]);
@@ -204,24 +180,14 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
 
   const handleSaveCustomQuiz = async () => {
     try {
-      const payload =
-        language === "python"
-          ? pyEngine.buildCustomQuizPayload({
-            fileKey,
-            root,
-            code,
-            history: history as PyEngineHistoryItem[],
-            lessonQueue: lessonQueue as PyEngineStep[],
-            currentStep,
-          })
-          : jsLesson.buildCustomQuizPayload({
-            fileKey,
-            root,
-            code,
-            history: history as JsLessonHistoryItem[],
-            lessonQueue: lessonQueue as JsLessonStep[],
-            currentStep,
-          });
+      const payload = pyEngine.buildCustomQuizPayload({
+        fileKey,
+        root,
+        code,
+        history: history as PyEngineHistoryItem[],
+        lessonQueue: lessonQueue as PyEngineStep[],
+        currentStep,
+      });
 
       const res = await fetch("/api/quizzes", {
         method: "POST",
@@ -240,7 +206,6 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
   const nextStep = !isComplete ? lessonQueue[currentStep] : null;
   const displaySnippet = (step: LessonStep | null | undefined): string => {
     if (!step) return "";
-    if (isJsLessonStep(step)) return jsLesson.textForNode(step.node, code);
     const span = step.displaySpan ?? {
       start: step.node.startIndex,
       end: step.node.endIndex,
