@@ -22,22 +22,3 @@ Original pyQuiz: Calculated revealEndBeforeChild very carefully inside specific 
 Current pyEngine:
 maskAndAnswerForStep handles headers (if/while/for) correctly.
 However, for Deep Drills (the quiz portion), the reveal logic is generic. buildCustomQuizPayload defaults to revealing the specific node. You lose the specific "Reveal the list brackets but hide the items" nuance unless you add logic to drillDown to return reveal anchors.
-
-DIFFERENCES (INVESTIGATE)
-1. pyQuiz is rule based, and pyEngine id drillDown based
-I'm not sure what this means in terms of logic but well there's difference.
-Is it only the question stem though? Or things more important?
-
-ZOMBIE CODE 
-At the bottom of your pyEngine.ts, you have re-exported buildHeuristicQuiz.
-The Issue: This function is a near-exact copy of the logic from pyQuiz.ts. It uses the old generateQuestionsV11 (which is not defined in pyEngine.ts except inside the body of that legacy function if you copied dependencies, but based on your imports, generateQuestionsV11 is missing).
-The Conflict:
-generateEngineSteps creates EngineStep objects (New Architecture).
-buildHeuristicQuiz creates cards directly (Old Architecture).
-Recommendation: You should likely delete buildHeuristicQuiz from pyEngine.ts entirely and rely on buildCustomQuizPayload (which converts EngineSteps to cards), OR you need to port the sophisticated logic (imports, multi-selects) from buildHeuristicQuiz into generateEngineSteps.
-
-
-LATER
-1. getprompt etc is an adapter layer for the js bcs the shape is now different, ie. when we are done refactoring the python part,
-let's make sure when we are refactoring the js part to get this cases right
-
