@@ -33,6 +33,20 @@ export const collectDescendants = (
   return out;
 };
 
+// Convenience helpers for consuming curated sections in quiz/lesson rules
+export const getSectionItems = (
+  node: TreeSitterAstNode,
+  key: string
+): TreeSitterAstNode[] => {
+  const sections = buildCuratedSections(node);
+  return sections.find((s) => s.key === key)?.items || [];
+};
+
+export const getSectionFirstItem = (
+  node: TreeSitterAstNode,
+  key: string
+): TreeSitterAstNode | undefined => getSectionItems(node, key)[0];
+
 // Detect a Python docstring statement: a standalone string literal as the first
 // named child within a module or a block (function/class body).
 export const isDocstringNode = (
@@ -462,8 +476,8 @@ export const buildCuratedSections = (
       const right = rightField
         ? [rightField]
         : children.length > 1
-        ? [children[children.length - 1]]
-        : [];
+          ? [children[children.length - 1]]
+          : [];
       return [
         { key: "left", items: left },
         { key: "right", items: right },
@@ -539,14 +553,14 @@ export const buildCuratedSections = (
 
       const keywordArgs = argList
         ? (argList.namedChildren || []).filter(
-            (c) => c.type === "keyword_argument"
-          )
+          (c) => c.type === "keyword_argument"
+        )
         : [];
 
       const bases = argList
         ? (argList.namedChildren || []).filter(
-            (c) => c.type !== "keyword_argument"
-          )
+          (c) => c.type !== "keyword_argument"
+        )
         : [];
 
       const body = block ? [block] : [];
@@ -793,8 +807,8 @@ export const buildCuratedSections = (
       const right = rightField
         ? [rightField]
         : children.length > 1
-        ? [children[children.length - 1]]
-        : [];
+          ? [children[children.length - 1]]
+          : [];
       return [
         { key: "target", items: left },
         { key: "value", items: right },
@@ -814,8 +828,8 @@ export const buildCuratedSections = (
       const value = rightField
         ? [rightField]
         : children.length > 1
-        ? [children[children.length - 1]]
-        : [];
+          ? [children[children.length - 1]]
+          : [];
       return [
         { key: "target", items: target },
         { key: "value", items: value },
