@@ -1,0 +1,31 @@
+---
+
+What we need to confirm work
+
+Import
+function definition (params, positional only, keyword only, default values, args & kwargs),
+class definition (inheritance, metaclass, decorators),
+generator function
+decorator in general
+
+Dictionary
+
+DEEP ASSIGNMENT DIVES
+assignment, walrus operator, binary operator, comparison operator
+deep call chains/attributes, subscripts & slices
+lambda functions?
+comprehensions of any kind
+
+OTHER STUFF 
+nested classes 
+nested functions
+type parameters
+f-strings
+Annotations on class vars
+global/nonlocal 
+
+pattern matching
+exception handling
+context manager 
+
+
