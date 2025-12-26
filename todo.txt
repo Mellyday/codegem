@@ -3,6 +3,9 @@ Original: pyQuiz uses buildCuratedSections to create sophisticated Multi-Select 
 Current pyEngine: The generateEngineSteps function has no specific handling for import_statement or import_from_statement.
 Consequence: You lose the specific "Select all imported names" quiz type.
 Note: buildCuratedSections is imported in pyEngine but only used in the legacy copy-pasted function at the bottom, not in the main generateEngineSteps.
+Current thinking: Let's make it two questions which module and which imports and also like we want to group 
+imports together. If there's too much then we may need to split into multiple questions.
+Possible Issue: String near a import statement may be detected as import statement or cause some other issues.
 3. Missing Logic: Call chains
 Original: extractCallChain allowed specifically quizzing on methods in a chain (e.g., df.groupby().mean()).
 Current pyEngine: The drillDown logic for attribute is shallow (object/attribute). It does not flatten a long chain into distinct steps, so deep chaining quizzes are lost.
@@ -14,6 +17,141 @@ Original pyQuiz: Calculated revealEndBeforeChild very carefully inside specific 
 Current pyEngine:
 maskAndAnswerForStep handles headers (if/while/for) correctly.
 However, for Deep Drills (the quiz portion), the reveal logic is generic. buildCustomQuizPayload defaults to revealing the specific node. You lose the specific "Reveal the list brackets but hide the items" nuance unless you add logic to drillDown to return reveal anchors.
+
+---
+
+FIX THE COMMENTARY
+
+SOME EXAMPLES DOCUMENT/EXPECTED BEHAVIOR 
+
+1. class_definition Quiz Questions
+python
+@decorator_one
+@decorator_two(arg)
+class MyClass(BaseClass1, BaseClass2, metaclass=SomeMeta):
+    """Docstring"""
+    pass
+Potential questions:
+
+Question	Type	Example Answer
+What is the class name?	single	MyClass
+Which are base classes?	multi-select	[BaseClass1, BaseClass2]
+What metaclass is used?	single	SomeMeta
+Which decorators are applied?	multi-select	[decorator_one, decorator_two]
+2. decorated_definition Quiz Questions
+python
+@app.route("/api")
+@login_required
+@cache(timeout=300)
+def my_function():
+    pass
+Currently missing:
+
+Question	Type	Example Answer
+Which decorators are applied?	multi-select	[app.route, login_required, cache]
+What decorator arguments?	single (per decorator)	"/api", timeout=300
+3. Methods Inside Classes (Nested function_definition)
+python
+class MyClass:
+    def __init__(self, name: str, age: int = 0) -> None:
+        self.name = name
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "MyClass":
+        pass
+    
+    @staticmethod
+    def helper() -> bool:
+        pass
+Special considerations:
+
+Issue	Current Behavior	Expected
+self/cls as first param	Counted as a parameter	Should exclude or mark as special
+@classmethod/@staticmethod	Not detected	Should identify method type
+Dunder methods (__init__)	Treated generically	Could have special handling
+Note: self/cls is treated as a normal parameter, which is the desired behavior.
+
+---
+
+NODES TO CHECK 
+
+import (grouping logic for select X out of N), function def, class def?
+assignment, binary operator comparison operator, Calls (function + args/keywords depending on depth)
+attributes/call chains (deeper mode), Subscripts and slices (indexing drills)
+Header-style statements (structured “header line” recall) -> not sure about these 
+Dict literal keys (multi-select)
+guard / cleanup
+more things to check:
+generator functions, walrus operators, comprehensions, f-strings,
+pattern matching, exception handling, context manager 
+global/nonlocal , nested functions, Annotations on class vars
+
+Other edge cases 
+b) Lambda Expressions
+python
+square = lambda x: x ** 2
+Should ask about lambda parameters
+c) Nested Classes
+python
+class Outer:
+    class Inner:
+        pass
+Currently would work but might not have proper context
+d) Type Parameters (Python 3.12+)
+python
+class Box[T]:
+    def __init__(self, item: T) -> None:
+        self.item = item
+Should ask: "What are the type parameters?"
+e) Default Parameter Values
+python
+def greet(name: str = "World", times: int = 1):
+    pass
+Could ask: "What is the default value of parameter X?"
+f) *args and **kwargs
+python
+def func(*args, **kwargs):
+    pass
+Should handle these specially in param questions
+g) Positional-Only and Keyword-Only Parameters
+python
+def func(pos_only, /, normal, *, kw_only):
+    pass
+
+---
+
+Reveal/masking 
+
+Normalize semanticRole across lesson+masking
+
+Right now masking still checks roles like if_condition / loop_condition, but your engine rarely emits those roles anymore. It works only because you also check isHeaderNode.
+
+Either remove role-based paths, or reintroduce those roles via structural substeps.
+
+
+Be intentional about reveal anchors
+
+If the UI expects progressive reveal for module/name questions, add revealStart / revealEnd* consistently (your import module question currently doesn’t).
+
+
+---
+
+Digability and related stuff
+
+Make “dig” semantics explicit
+
+Either commit to “dig = nested statements only” (and accept loss of structural decomposition), or
+
+Re-introduce structural child steps for key constructs (for/if/while/function/class) like old pyLesson did, but as virtual child steps under the same anchor.
+
+D) Grouping: new engine’s group steps are almost always diggable Old grouping diggability: 
+isDigable = childSteps.length > 1 || nodes.length > 1 New engine grouping: isDigable: childSteps.length > 0 and 
+also this 
+
+E) Custom quiz payload expansion is more aggressive in the new engine New buildCustomQuizPayload(): 
+recursively appends cards for step.lesson.childSteps too (both history and remaining queue) Old 
+pyLesson.buildCustomQuizPayload(): generally one card per lesson step, no recursive “expand every child step into c
+ards” behavior the same way. So a grouped import section can produce more quiz material downstream in the new system.
 
 ---
 
@@ -37,3 +175,15 @@ annotated_assignment ✅ rule exists, but ❌ may not trigger depending on gramm
 
 Net: the checkbox list at the top (“❌ could detect …”) will still largely be ❌ in practice, even though the rule map looks complete.
 
+---
+
+ASK TO SUMMARIZE
+
+grouping logic (code)
+Ask claude:
+What I mean is that I want you to summarize the quiz behaviors based on @pyengine
+Like for example what does common node/statements does it gets turned into mcq right? What kind of nodes are those.
+And there are special nodes right. Like function definition, or import for example with different question type, 
+grouping logic.
+I want an exhaustive look at the behavior we want based on our discussion.
+reference answer: https://chatgpt.com/c/694d656c-501c-8324-a3e7-2698f0e19bd0
