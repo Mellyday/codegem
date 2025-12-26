@@ -6,6 +6,7 @@ Original pyQuiz: Calculated revealEndBeforeChild very carefully inside specific 
 Current pyEngine:
 maskAndAnswerForStep handles headers (if/while/for) correctly.
 However, for Deep Drills (the quiz portion), the reveal logic is generic. buildCustomQuizPayload defaults to revealing the specific node. You lose the specific "Reveal the list brackets but hide the items" nuance unless you add logic to drillDown to return reveal anchors.
+DECORATOR NEED SOME SPECIAL HANDLING I THINK
 
 ---
 
