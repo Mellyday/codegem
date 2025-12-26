@@ -436,7 +436,7 @@ const collectDescendantsWithinScope = (
 // If a rule never fires, check the actual AST output for your grammar version.
 // Consider adding a dev-only utility to dump encountered node types for coverage testing.
 
-type DecompositionLevel = "shallow" | "normal" | "deep";
+type DecompositionLevel = "shallow" | "deep";
 
 type RuleCtx = {
   root: TreeSitterAstNode;
@@ -3559,7 +3559,7 @@ export function buildCustomQuizPayload(params: {
     fileKey,
     name: `Custom quiz ${new Date().toLocaleString()}`,
     type: "CustomQuizV1.1" as const,
-    profile: "normal" as const,
+    profile: "shallow" as const,
     rootNode: {
       type: root.type,
       text: textForNode(root, code),
