@@ -1209,6 +1209,29 @@ const spanForQuestion = (
   return undefined;
 };
 
+/**
+ * Overlap Guard: Removes redundant or nested quiz questions.
+ *
+ * Policy:
+ * 1. DUPLICATES: If two questions have identical span + stem + answer, drop the duplicate.
+ *
+ * 2. NESTED (containment): Questions are sorted smallest-first. If a larger question's
+ *    span fully contains a smaller question's span, drop the larger one. This keeps
+ *    the more specific question and removes the vague "umbrella" question.
+ *    Example: Keep "What is the left operand?" (span 3-4), drop "What is the condition?" (span 3-8).
+ *
+ * 3. HEADER EXCEPTION: Header questions ("Write the full header line") are exempt from
+ *    the nested-drop rule. We want to quiz the full header even if sub-parts are also quizzed.
+ *    Example: Keep both "Write the full header line: if x > 5:" AND "What is the condition?"
+ *
+ * Why this matters:
+ * Without this guard, quiz generation could produce overlapping questions where one
+ * asks about an entire expression and another asks about a sub-part. The guard ensures
+ * questions are specific and non-redundant.
+ *
+ * Debugging tip: If a question unexpectedly disappears, check if its span contains
+ * a smaller question's span — that would cause it to be dropped.
+ */
 const applyQuestionOverlapGuard = (steps: EngineStep[]): void => {
   const entries: Array<{
     question: QuizQuestion;
