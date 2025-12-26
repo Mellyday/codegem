@@ -36,6 +36,9 @@ export default function DevPushTestPage() {
             const data = await res.json();
 
             if (!res.ok) {
+                if (res.status === 409 && data.duplicates) {
+                    throw new Error(`Duplicate file(s): ${data.duplicates.join(", ")}`);
+                }
                 throw new Error(data.error || `HTTP ${res.status}`);
             }
 
@@ -112,10 +115,10 @@ export default function DevPushTestPage() {
                     {message && (
                         <div
                             className={`rounded-lg px-4 py-3 text-sm ${status === "success"
-                                    ? "bg-green-900/50 text-green-300"
-                                    : status === "error"
-                                        ? "bg-red-900/50 text-red-300"
-                                        : "bg-slate-800 text-slate-300"
+                                ? "bg-green-900/50 text-green-300"
+                                : status === "error"
+                                    ? "bg-red-900/50 text-red-300"
+                                    : "bg-slate-800 text-slate-300"
                                 }`}
                         >
                             {message}
@@ -127,9 +130,9 @@ export default function DevPushTestPage() {
                 <div className="mt-8 rounded-lg border border-slate-800 bg-slate-900/50 p-4">
                     <h2 className="mb-2 text-sm font-semibold text-slate-300">Quick Tips</h2>
                     <ul className="space-y-1 text-xs text-slate-400">
-                        <li>• All files are pushed to the "tests" project</li>
-                        <li>• Each push creates a new project instance</li>
-                        <li>• Browse your test files at <code className="text-amber-400">/project/[id]/python_features_showcase.py</code></li>
+                        <li>• All files go to the shared <code className="text-amber-400">tests</code> project</li>
+                        <li>• Duplicate file names are rejected</li>
+                        <li>• Find your files in the <code className="text-amber-400">tests</code> project on the home page</li>
                         <li>• Quizzes saved on these files will appear in the saved quizzes panel</li>
                     </ul>
                 </div>

@@ -65,8 +65,18 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     ])
     .toArray();
 
-  // Projects are stored in the "files" collection
-  const projectIds = (await files.distinct("projectId", { projectId: { $ne: null } })) as unknown[];
+  // Projects are stored in the "files" collection - aggregate to get projectName
+  const projectAgg = await files
+    .aggregate([
+      { $match: { projectId: { $ne: null } } },
+      {
+        $group: {
+          _id: "$projectId",
+          projectName: { $first: "$projectName" },
+        },
+      },
+    ])
+    .toArray();
 
   const repos: RepoOrProjectItem[] = repoAgg
     .map((g: any) => ({
@@ -76,9 +86,13 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     }))
     .sort((a: RepoOrProjectItem, b: RepoOrProjectItem) => a.label.localeCompare(b.label));
 
-  const projects: RepoOrProjectItem[] = projectIds
-    .filter(Boolean)
-    .map((id) => ({ id: String(id), type: "project" as const, label: `Project ${String(id)}` }))
+  const projects: RepoOrProjectItem[] = projectAgg
+    .filter((g: any) => g._id)
+    .map((g: any) => ({
+      id: String(g._id),
+      type: "project" as const,
+      label: g.projectName || `Project ${String(g._id)}`,
+    }))
     .sort((a: RepoOrProjectItem, b: RepoOrProjectItem) => a.label.localeCompare(b.label));
 
   return { repos, projects };
@@ -178,9 +192,9 @@ export async function getFileAtPath(input: {
   path: string;
 }): Promise<
   | (Pick<PathListing["files"][number], "path" | "extension" | "language" | "size"> & {
-      name: string;
-      sourceCode: string;
-    })
+    name: string;
+    sourceCode: string;
+  })
   | null
 > {
   const db = await getDb();

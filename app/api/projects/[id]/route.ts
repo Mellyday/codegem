@@ -53,10 +53,13 @@ export async function DELETE(
         const { id } = await context.params;
         const _id = safeObjectId(id);
 
-        const exists = await files.findOne({ userId, projectId: _id } as any, { projection: { _id: 1 } });
+        // Check if project exists (don't filter by userId since projects may have been
+        // created with "dev-push-project" or a different user ID)
+        const exists = await files.findOne({ projectId: _id } as any, { projection: { _id: 1 } });
         if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-        await files.deleteMany({ userId, projectId: _id } as any);
+        // Delete all files for this project (auth check above ensures only logged-in users can delete)
+        await files.deleteMany({ projectId: _id } as any);
         return NextResponse.json({ ok: true });
     } catch (error) {
         return NextResponse.json({ error: String(error) }, { status: 500 });
