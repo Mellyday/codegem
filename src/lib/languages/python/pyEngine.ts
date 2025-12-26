@@ -1595,6 +1595,30 @@ const rules: Record<string, Rule[]> = {
           });
         }
       }
+
+      // Always ask return type (even in shallow)
+      const ret = getSectionFirstItem(node, "returns");
+      if (ret) {
+        const retText =
+          textForRange(ret.startIndex, ret.endIndex, code) || ret.type;
+        qs.push({
+          kind: "return-type",
+          stem: "What is the return type of this function?",
+          answerLabel: retText,
+          options: buildDistractors(retText, { code }),
+          sourceRefs: [
+            sourceRef,
+            {
+              nodeType: ret.type,
+              start: ret.startIndex,
+              end: ret.endIndex,
+              path: computeAstPath(root, ret),
+            },
+          ],
+          generatorRule: "func.return-type",
+        });
+      }
+
       if (profile !== "shallow") {
         // Default parameter values
         for (const def of defaults) {
@@ -1643,28 +1667,6 @@ const rules: Record<string, Rule[]> = {
               });
             }
           }
-        }
-
-        const ret = getSectionFirstItem(node, "returns");
-        if (ret) {
-          const retText =
-            textForRange(ret.startIndex, ret.endIndex, code) || ret.type;
-          qs.push({
-            kind: "return-type",
-            stem: "What is the return type of this function?",
-            answerLabel: retText,
-            options: buildDistractors(retText, { code }),
-            sourceRefs: [
-              sourceRef,
-              {
-                nodeType: ret.type,
-                start: ret.startIndex,
-                end: ret.endIndex,
-                path: computeAstPath(root, ret),
-              },
-            ],
-            generatorRule: "func.return-type",
-          });
         }
 
         // Generator function detection (yield/yield from in function body)
@@ -3071,6 +3073,11 @@ if (rules.yield_expression) {
   rules.yield_expr = rules.yield_expr || rules.yield_expression;
 }
 
+// async_function_definition should use the same rules as function_definition
+if (rules.function_definition) {
+  rules.async_function_definition = rules.function_definition;
+}
+
 export function generateQuestionsV11(
   root: TreeSitterAstNode,
   node: TreeSitterAstNode,
@@ -3121,6 +3128,7 @@ function getSemanticCategory(node: TreeSitterAstNode): PyCategory {
       return "type";
     case "class_definition":
     case "function_definition":
+    case "async_function_definition":
     case "decorated_definition":
       return "definition";
     case "if_statement":
@@ -3244,6 +3252,7 @@ const ANCHOR_NODE_TYPES = new Set<string>([
   "augmented_assignment",
   "class_definition",
   "function_definition",
+  "async_function_definition",
   "decorated_definition",
   "elif_clause",
   "else_clause",
@@ -3564,11 +3573,15 @@ export const generateEngineSteps = (
         };
       }
 
+      case "async_function_definition":
       case "function_definition": {
         const name = firstChildOfType(anchor, "identifier");
         const nameText = name ? textForNode(name, code) : "function";
+        const isAsync = anchor.type === "async_function_definition";
         return {
-          prompt: `We define a function named: ${nameText}`,
+          prompt: isAsync
+            ? `We define an async function named: ${nameText}`
+            : `We define a function named: ${nameText}`,
           semanticRole: "function_definition",
           isDigable: hasChildStatements,
         };
@@ -3787,6 +3800,7 @@ export const generateEngineSteps = (
   const walkStmt = (stmt: TreeSitterAstNode) => {
     if (!isAnchorNode(stmt)) return;
     switch (stmt.type) {
+      case "async_function_definition":
       case "function_definition":
       case "class_definition": {
         const block = firstChildOfType(stmt, "block");

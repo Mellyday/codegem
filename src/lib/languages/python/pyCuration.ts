@@ -574,6 +574,7 @@ export const buildCuratedSections = (
       ];
     }
 
+    case "async_function_definition":
     case "function_definition": {
       // def NAME(parameters): block
       const params = firstChildOfType(node, "parameters");
@@ -585,9 +586,12 @@ export const buildCuratedSections = (
         "type_parameters",
         "type_parameter_list",
       ]);
-      // Return annotation can appear as a child of type 'type' or 'return_type' depending on grammar
+      // Return annotation: tree-sitter Python typically exposes it as a field named "return_type", 
+      // which can be of various types (identifier, subscript, etc.)
       const returnType =
-        firstChildOfType(node, "type") || firstChildOfType(node, "return_type");
+        childByField(node, "return_type") ||
+        firstChildOfType(node, "type") ||
+        firstChildOfType(node, "return_type");
 
       return [
         { key: "type_params", items: typeParams ? [typeParams] : [] },
