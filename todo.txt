@@ -1,6 +1,3 @@
-1. Missing Logic: Decorator
-Original: pyLesson explicitly handles decorated_definition. It iterates over decorators first, creating steps for them, before unwrapping the inner function/class.
-Current pyEngine: There is no case for decorated_definition. The engine will likely hit the default case or treat the decorator block as one giant unknown step, losing the granular lesson walk-through of decorators.
 2. Missing Logic: Import parsing
 Original: pyQuiz uses buildCuratedSections to create sophisticated Multi-Select questions ("Which names are imported?"). pyLesson also uses grouping for imports.
 Current pyEngine: The generateEngineSteps function has no specific handling for import_statement or import_from_statement.
@@ -9,16 +6,34 @@ Note: buildCuratedSections is imported in pyEngine but only used in the legacy c
 3. Missing Logic: Call chains
 Original: extractCallChain allowed specifically quizzing on methods in a chain (e.g., df.groupby().mean()).
 Current pyEngine: The drillDown logic for attribute is shallow (object/attribute). It does not flatten a long chain into distinct steps, so deep chaining quizzes are lost.
-4. Missing Logic: Distractors generation
-pyQuiz has buildDistractors, pyEngine has no such thing 
 5. Dictionary Quiz 
 pyQuiz has Multi-Select: "Which keys are present?" (Checks specifically for keys).
 pyEngine has individual drill with each pair, asking about dict_key and dict_value
-6. Function params
-pyQuiz has Multi-Select: "Which of the following are parameters?"
-pyEngine has Individual Drill: Drills down into generic argument_i or parameter.
 7. Progressive Reveal difference 
 Original pyQuiz: Calculated revealEndBeforeChild very carefully inside specific rules. For example, in a Dictionary, it would reveal the opening brace { but stop before the first key to ask "What keys are here?".
 Current pyEngine:
 maskAndAnswerForStep handles headers (if/while/for) correctly.
 However, for Deep Drills (the quiz portion), the reveal logic is generic. buildCustomQuizPayload defaults to revealing the specific node. You lose the specific "Reveal the list brackets but hide the items" nuance unless you add logic to drillDown to return reveal anchors.
+
+---
+
+These are unreachable, and yet it feels right?
+
+The biggest functional problem: most of the new rules are unreachable
+
+Right now generateQuestionsV11() is only called for anchor nodes (statements/defs) via buildQuestionsForAnchor(anchor).
+
+That means any rule whose node type is typically an expression will almost never run, because those nodes are rarely anchors:
+
+assignment_expression (walrus) ✅ rule exists, ❌ won’t trigger (walrus usually lives inside if headers / expressions)
+
+list_comprehension, dictionary_comprehension, set_comprehension, generator_expression ✅ rules exist, ❌ won’t trigger (usually inside assignment/call/return)
+
+f_string / formatted_string ✅ rules exist, ❌ won’t trigger (usually inside assignment/call/return)
+
+yield / yield_expression ✅ rules exist, ❌ won’t trigger (yield lives inside an expression_statement in a block, not treated as an anchor)
+
+annotated_assignment ✅ rule exists, but ❌ may not trigger depending on grammar and anchors
+
+Net: the checkbox list at the top (“❌ could detect …”) will still largely be ❌ in practice, even though the rule map looks complete.
+
