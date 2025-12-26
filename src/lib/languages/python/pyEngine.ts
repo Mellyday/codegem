@@ -2920,7 +2920,7 @@ const rules: Record<string, Rule[]> = {
       if (!yieldNode) return;
 
       if (profile === "shallow") {
-        const full = textForNode(node, code).trimEnd();
+        const full = (textForRange(node.startIndex, node.endIndex, code) ?? "yield").trimEnd();
         return [
           {
             kind: "yield_line",
