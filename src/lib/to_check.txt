@@ -18,6 +18,10 @@ attributes/call chains (deeper mode), Subscripts and slices (indexing drills)
 Header-style statements (structured “header line” recall) -> not sure about these 
 Dict literal keys (multi-select)
 guard / cleanup
+more things to check:
+generator functions, walrus operators, comprehensions, f-strings,
+pattern matching, exception handling, context manager 
+global/nonlocal , nested functions, Annotations on class vars
 
 grouping logic (code)
 Ask claude:
@@ -27,3 +31,86 @@ And there are special nodes right. Like function definition, or import for examp
 grouping logic.
 I want an exhaustive look at the behavior we want based on our discussion.
 reference answer: https://chatgpt.com/c/694d656c-501c-8324-a3e7-2698f0e19bd0
+
+---
+
+SOME EXAMPLES DOCUMENT/EXPECTED BEHAVIOR 
+
+1. class_definition Quiz Questions
+python
+@decorator_one
+@decorator_two(arg)
+class MyClass(BaseClass1, BaseClass2, metaclass=SomeMeta):
+    """Docstring"""
+    pass
+Potential questions:
+
+Question	Type	Example Answer
+What is the class name?	single	MyClass
+Which are base classes?	multi-select	[BaseClass1, BaseClass2]
+What metaclass is used?	single	SomeMeta
+Which decorators are applied?	multi-select	[decorator_one, decorator_two]
+2. decorated_definition Quiz Questions
+python
+@app.route("/api")
+@login_required
+@cache(timeout=300)
+def my_function():
+    pass
+Currently missing:
+
+Question	Type	Example Answer
+Which decorators are applied?	multi-select	[app.route, login_required, cache]
+What decorator arguments?	single (per decorator)	"/api", timeout=300
+3. Methods Inside Classes (Nested function_definition)
+python
+class MyClass:
+    def __init__(self, name: str, age: int = 0) -> None:
+        self.name = name
+    
+    @classmethod
+    def from_dict(cls, data: dict) -> "MyClass":
+        pass
+    
+    @staticmethod
+    def helper() -> bool:
+        pass
+Special considerations:
+
+Issue	Current Behavior	Expected
+self/cls as first param	Counted as a parameter	Should exclude or mark as special
+@classmethod/@staticmethod	Not detected	Should identify method type
+Dunder methods (__init__)	Treated generically	Could have special handling
+Note: self/cls is treated as a normal parameter, which is the desired behavior.
+
+Other edge cases 
+b) Lambda Expressions
+python
+square = lambda x: x ** 2
+Should ask about lambda parameters
+c) Nested Classes
+python
+class Outer:
+    class Inner:
+        pass
+Currently would work but might not have proper context
+d) Type Parameters (Python 3.12+)
+python
+class Box[T]:
+    def __init__(self, item: T) -> None:
+        self.item = item
+Should ask: "What are the type parameters?"
+e) Default Parameter Values
+python
+def greet(name: str = "World", times: int = 1):
+    pass
+Could ask: "What is the default value of parameter X?"
+f) *args and **kwargs
+python
+def func(*args, **kwargs):
+    pass
+Should handle these specially in param questions
+g) Positional-Only and Keyword-Only Parameters
+python
+def func(pos_only, /, normal, *, kw_only):
+    pass
