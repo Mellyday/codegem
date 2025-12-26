@@ -666,21 +666,11 @@ function splitCorrectIntoCards(correct: string[]): string[][] {
 }
 
 /**
- * Calculate required distractor pool size based on number of correct answers.
- * More correct = more cards = need more unique distractors.
- */
-function getImportDistractorCount(correctCount: number): number {
-  const numCards = Math.ceil(correctCount / 6);
-  // Each card needs ~(10 - avgCorrect) distractors
-  // numCards * 12 gives buffer for deduplication
-  return Math.max(20, numCards * 12);
-}
-
-/**
  * Build an option pool for import questions.
  * Includes correct answers + distractors, excluding aliases.
  * 
  * @param mode - "module" uses dotted identifiers, "name" uses simple identifiers
+ * @param importedNames - for module mode, exclude these (they're imported objects, not modules)
  */
 function buildImportOptionPool(
   correct: string[],
@@ -689,7 +679,8 @@ function buildImportOptionPool(
   code: string | undefined,
   span: { start: number; end: number },
   targetOptions: number = 10,
-  mode: "module" | "name" = "module"
+  mode: "module" | "name" = "module",
+  importedNames?: Set<string>
 ): string[] {
   // Collect identifiers from surrounding code as potential distractors
   const idPool: string[] = [];
@@ -708,6 +699,12 @@ function buildImportOptionPool(
       if (allCorrectInFamily.includes(candidate)) continue;
       if (aliases.has(candidate)) continue;
       if (["import", "from", "as", "None", "True", "False", "def", "class", "return"].includes(candidate)) continue;
+      // For module mode: exclude uppercase-starting identifiers (likely classes/types, not modules)
+      // and exclude imported names (they're objects, not modules)
+      if (mode === "module") {
+        if (/^[A-Z]/.test(candidate)) continue; // Avoid Path, List, OrderedDict
+        if (importedNames?.has(candidate)) continue;
+      }
       idPool.push(candidate);
     }
   } catch { }
@@ -763,11 +760,16 @@ function generateImportRunQuestions(
   };
 
   // === Module Questions (across whole run) ===
+  // Collect all imported names to exclude from module distractors
+  const allImportedNames = new Set<string>();
+  for (const set of importedByModule.values()) {
+    for (const n of set) allImportedNames.add(n);
+  }
+
   const moduleList = Array.from(modules);
   if (moduleList.length > 0) {
     const moduleCards = splitCorrectIntoCards(moduleList);
     const totalModuleCards = moduleCards.length;
-    const distractorCount = getImportDistractorCount(moduleList.length);
 
     moduleCards.forEach((cardCorrect, cardIdx) => {
       const partLabel = totalModuleCards > 1 ? ` (Part ${cardIdx + 1} of ${totalModuleCards})` : "";
@@ -778,7 +780,8 @@ function generateImportRunQuestions(
         code,
         span,
         10,
-        "module"  // Use dotted identifier pattern
+        "module",  // Use dotted identifier pattern
+        allImportedNames  // Exclude imported names from module distractors
       );
 
       qs.push({
@@ -794,7 +797,7 @@ function generateImportRunQuestions(
         revealStart: span.start,
         revealEndBeforeChild: span.start,
         revealEndAfterChild: span.end,
-        distractorPoolSize: distractorCount,
+        // No distractorPoolSize needed - curated MODULE_DISTRACTORS list is sufficient
       });
     });
   }
@@ -3192,7 +3195,8 @@ function createGroupStep(
     quiz: groupQuiz,
     displaySpan: { start: virtualNode.startIndex, end: virtualNode.endIndex },
     lesson: {
-      semanticRole: `group:${category}`,
+      // Use "import_group" for consistency with walk-time emitImportRunStep
+      semanticRole: category === "import" ? "import_group" : `group:${category}`,
       prompt: generateGroupPrompt(category, nodes.length),
       isDigable: childSteps.length > 0,
       childSteps,
