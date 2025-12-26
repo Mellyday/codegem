@@ -1,6 +1,3 @@
-3. Missing Logic: Call chains
-Original: extractCallChain allowed specifically quizzing on methods in a chain (e.g., df.groupby().mean()).
-Current pyEngine: The drillDown logic for attribute is shallow (object/attribute). It does not flatten a long chain into distinct steps, so deep chaining quizzes are lost.
 7. Progressive Reveal difference 
 Original pyQuiz: Calculated revealEndBeforeChild very carefully inside specific rules. For example, in a Dictionary, it would reveal the opening brace { but stop before the first key to ask "What keys are here?".
 Current pyEngine:
