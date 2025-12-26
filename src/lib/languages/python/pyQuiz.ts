@@ -1,4 +1,4 @@
-import type { TreeSitterAstNode } from "./treeSitter";
+import type { TreeSitterAstNode } from "../../treeSitter";
 import {
   buildCuratedSections,
   childrenOfType,
@@ -78,7 +78,7 @@ const extractCallChain = (
     const nameNode = kids[kids.length - 1];
     const name = nameNode
       ? textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
-        nameNode.type
+      nameNode.type
       : undefined;
     links.push({ kind: "attr", name });
   };
@@ -126,8 +126,8 @@ function buildDistractors(correct: string, _ctx?: { code?: string }): string[] {
           ? correct.toUpperCase()
           : correct.toLowerCase()
         : correct.replace(/[a-zA-Z]/, (c) =>
-            c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
-          );
+          c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
+        );
     if (variation !== correct) out.add(variation);
     if (out.size < 3) out.add(correct + "_");
     if (out.size < 3)
@@ -500,7 +500,7 @@ const rules: Record<string, Rule[]> = {
         let m: RegExpExecArray | null;
         while ((m = reId.exec(snippet))) idPool.push(m[0]);
         while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
-      } catch {}
+      } catch { }
       let pool = Array.from(new Set<string>([...keys, ...idPool, ...strPool]));
       if (pool.length < 10) {
         const needed = 10 - pool.length;
@@ -935,9 +935,9 @@ export function buildHeuristicQuiz(
         // Reveal anchors for import-from: show header up to first imported name, then reveal through last name
         const firstStart = items.length
           ? items.reduce(
-              (m, it) => Math.min(m, it.startIndex),
-              items[0].startIndex
-            )
+            (m, it) => Math.min(m, it.startIndex),
+            items[0].startIndex
+          )
           : undefined;
         const lastEnd = items.length
           ? items.reduce((m, it) => Math.max(m, it.endIndex), items[0].endIndex)
@@ -996,15 +996,15 @@ export function buildHeuristicQuiz(
         const items2 = namesGroup2?.items || [];
         const firstStart2 = items2.length
           ? items2.reduce(
-              (m, it) => Math.min(m, it.startIndex),
-              items2[0].startIndex
-            )
+            (m, it) => Math.min(m, it.startIndex),
+            items2[0].startIndex
+          )
           : undefined;
         const lastEnd2 = items2.length
           ? items2.reduce(
-              (m, it) => Math.max(m, it.endIndex),
-              items2[0].endIndex
-            )
+            (m, it) => Math.max(m, it.endIndex),
+            items2[0].endIndex
+          )
           : undefined;
         cards.push({
           order: order++,
@@ -1069,15 +1069,15 @@ export function buildHeuristicQuiz(
           // Reveal anchors for params: prefix through first param, then through last param
           const firstParamStart = params.length
             ? params.reduce(
-                (m, it) => Math.min(m, it.startIndex),
-                params[0].startIndex
-              )
+              (m, it) => Math.min(m, it.startIndex),
+              params[0].startIndex
+            )
             : undefined;
           const lastParamEnd = params.length
             ? params.reduce(
-                (m, it) => Math.max(m, it.endIndex),
-                params[0].endIndex
-              )
+              (m, it) => Math.max(m, it.endIndex),
+              params[0].endIndex
+            )
             : undefined;
           cards.push({
             order: order++,

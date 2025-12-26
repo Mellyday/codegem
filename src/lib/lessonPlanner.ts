@@ -3,4 +3,4 @@ export {
   generateLessonPlan,
   type LessonStep,
   type LessonPlanOptions,
-} from "./pyLesson";
+} from "./languages/python/pyLesson";

@@ -2,7 +2,7 @@ import type { TreeSitterAstNode } from "../lib/treeSitter";
 import {
   buildCuratedSections as buildCuratedSectionsShared,
   isYieldFrom,
-} from "../lib/pyCuration";
+} from "../lib/languages/python/pyCuration";
 
 type AstChildrenSidebarProps = {
   ast: TreeSitterAstNode;
@@ -97,8 +97,8 @@ const ItemRow = ({
         (isSelected
           ? "ring-2 ring-amber-400 bg-amber-100/60"
           : isHovered
-          ? "bg-amber-50"
-          : "hover:bg-slate-50")
+            ? "bg-amber-50"
+            : "hover:bg-slate-50")
       }
       onClick={() => onSelectNode?.(item)}
       onMouseEnter={() => onHoverNode?.(item)}
@@ -163,8 +163,8 @@ export const AstChildrenSidebar = ({
                     (isSelected
                       ? "ring-2 ring-amber-400 bg-amber-100/70"
                       : isHovered
-                      ? "bg-amber-50"
-                      : "")
+                        ? "bg-amber-50"
+                        : "")
                   }
                 >
                   <div
@@ -201,8 +201,8 @@ export const AstChildrenSidebar = ({
                               : undefined;
                           const label =
                             labelBase &&
-                            group.key === "value" &&
-                            isYieldFrom(node, code)
+                              group.key === "value" &&
+                              isYieldFrom(node, code)
                               ? `${labelBase} · from`
                               : labelBase;
                           return (
@@ -270,8 +270,8 @@ export const AstChildrenSidebar = ({
                       (isSelected
                         ? "ring-2 ring-amber-400 bg-amber-100/70"
                         : isHovered
-                        ? "bg-amber-50"
-                        : "")
+                          ? "bg-amber-50"
+                          : "")
                     }
                   >
                     <div
@@ -308,8 +308,8 @@ export const AstChildrenSidebar = ({
                                 : undefined;
                             const label =
                               labelBase &&
-                              group.key === "value" &&
-                              isYieldFrom(node, code)
+                                group.key === "value" &&
+                                isYieldFrom(node, code)
                                 ? `${labelBase} · from`
                                 : labelBase;
                             return (

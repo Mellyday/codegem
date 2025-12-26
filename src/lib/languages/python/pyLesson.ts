@@ -1,6 +1,6 @@
-import type { TreeSitterAstNode } from "./treeSitter";
+import type { TreeSitterAstNode } from "../../treeSitter";
 import { isDocstringNode } from "./pyCuration";
-import { randomString } from "./utils";
+import { randomString } from "../../utils";
 
 type VirtualAstNode = TreeSitterAstNode & { isVirtual?: boolean };
 
@@ -92,8 +92,8 @@ export const generateLessonPlan = (
       const argList = firstChildOfType(node, "argument_list");
       const bases = argList
         ? (argList.namedChildren || []).filter(
-            (c) => c.type !== "keyword_argument"
-          )
+          (c) => c.type !== "keyword_argument"
+        )
         : [];
       if (name && includeNames) {
         steps.push({

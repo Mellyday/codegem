@@ -3,12 +3,12 @@ import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
-import * as pyCuration from "../lib/pyCuration";
-import { isDocstringNode } from "../lib/pyCuration";
+import * as pyCuration from "../lib/languages/python/pyCuration";
+import { isDocstringNode } from "../lib/languages/python/pyCuration";
 import * as jsCuration from "../lib/jsCuration";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
-import * as pyEngine from "../lib/pyEngine";
+import * as pyEngine from "../lib/languages/python/pyEngine";
 import * as jsQuiz from "../lib/jsQuiz";
 import * as jsLesson from "../lib/jsLesson";
 
@@ -244,8 +244,8 @@ type SourceRef = {
   preview?: string;
 };
 
-  // Saved Custom Quiz structures (v1 and v1.1)
-  type SavedCustomQuizCardV11 = {
+// Saved Custom Quiz structures (v1 and v1.1)
+type SavedCustomQuizCardV11 = {
   order: number;
   type: string;
   text: string;
@@ -410,39 +410,39 @@ export const QuizViewer = ({
     () =>
       language === "python"
         ? new Set([
-            "function_definition",
-            "decorated_definition",
-            "class_definition",
-            "assignment",
-            "expression_statement",
-            "call",
-            "if_statement",
-            "if_stmt",
-            "elif_clause",
-            "else_clause",
-            "for_statement",
-            "for_stmt",
-            "while_statement",
-            "while_stmt",
-            "with_statement",
-            "try_statement",
-          ])
+          "function_definition",
+          "decorated_definition",
+          "class_definition",
+          "assignment",
+          "expression_statement",
+          "call",
+          "if_statement",
+          "if_stmt",
+          "elif_clause",
+          "else_clause",
+          "for_statement",
+          "for_stmt",
+          "while_statement",
+          "while_stmt",
+          "with_statement",
+          "try_statement",
+        ])
         : new Set([
-            "FunctionDeclaration",
-            "FunctionExpression",
-            "ArrowFunctionExpression",
-            "ClassDeclaration",
-            "ClassExpression",
-            "VariableDeclaration",
-            "ExpressionStatement",
-            "CallExpression",
-            "IfStatement",
-            "ForStatement",
-            "ForInStatement",
-            "ForOfStatement",
-            "WhileStatement",
-            "TryStatement",
-          ]),
+          "FunctionDeclaration",
+          "FunctionExpression",
+          "ArrowFunctionExpression",
+          "ClassDeclaration",
+          "ClassExpression",
+          "VariableDeclaration",
+          "ExpressionStatement",
+          "CallExpression",
+          "IfStatement",
+          "ForStatement",
+          "ForInStatement",
+          "ForOfStatement",
+          "WhileStatement",
+          "TryStatement",
+        ]),
     [language]
   );
   // Setup state
@@ -530,7 +530,7 @@ export const QuizViewer = ({
       try {
         const data = await res.json();
         if (data?.error) msg += ` — ${data.error}`;
-      } catch {}
+      } catch { }
       throw new Error(msg);
     }
   };
@@ -590,7 +590,7 @@ export const QuizViewer = ({
       try {
         const data = await res.json();
         if (data?.error) msg += ` — ${data.error}`;
-      } catch {}
+      } catch { }
       throw new Error(msg);
     }
   };
@@ -604,15 +604,15 @@ export const QuizViewer = ({
     const plan =
       language === "python"
         ? (pyEngine.generateEngineSteps(root, root, code || "", {
-            profile: "shallow",
-            grouping: "auto",
-            includeNames: false,
-            generateQuiz: false,
-          }) as any[])
+          profile: "shallow",
+          grouping: "auto",
+          includeNames: false,
+          generateQuiz: false,
+        }) as any[])
         : (jsLesson.generateLessonPlan(root, {
-            includeNames: false,
-            enableGrouping: "auto" as const,
-          }) as any[]);
+          includeNames: false,
+          enableGrouping: "auto" as const,
+        }) as any[]);
     const groups = plan.filter(
       (s: any) => (s.node as any)?.isVirtual || s.node.type === "group"
     );
@@ -906,13 +906,13 @@ export const QuizViewer = ({
     const isAnswered = answeredFlags[current] || false;
     const correct = isMulti
       ? isAnswered &&
-        ((): boolean => {
-          if (!isMulti) return false;
-          if (selectedMulti.size !== (currentQ.answerLabels?.length ?? 0))
-            return false;
-          for (const v of selectedMulti) if (!correctSet.has(v)) return false;
-          return true;
-        })()
+      ((): boolean => {
+        if (!isMulti) return false;
+        if (selectedMulti.size !== (currentQ.answerLabels?.length ?? 0))
+          return false;
+        for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+        return true;
+      })()
       : isAnswered && selected === currentQ.answerLabel;
 
     const handleSelect = (opt: string) => {
@@ -1259,15 +1259,14 @@ export const QuizViewer = ({
               const wrongCls = "border-rose-200 bg-rose-50 text-rose-700";
               const cls = !isAnswered
                 ? `${base} ${isSelected ? selectedCls : idle}`
-                : `${base} ${
-                    isSelected
-                      ? isCorrect
-                        ? correctCls
-                        : wrongCls
-                      : isCorrect
-                      ? correctCls
-                      : idle
-                  }`;
+                : `${base} ${isSelected
+                  ? isCorrect
+                    ? correctCls
+                    : wrongCls
+                  : isCorrect
+                    ? correctCls
+                    : idle
+                }`;
 
               const optionId = `${current}-${i}`;
               const isExpanded = !!expandedOptions[optionId];
@@ -1290,9 +1289,8 @@ export const QuizViewer = ({
                       }}
                     >
                       <span
-                        className={`font-mono whitespace-pre-wrap break-all sm:break-words ${
-                          isLong && !isExpanded ? "line-clamp-2" : ""
-                        }`}
+                        className={`font-mono whitespace-pre-wrap break-all sm:break-words ${isLong && !isExpanded ? "line-clamp-2" : ""
+                          }`}
                         style={{ overflowWrap: "anywhere" }}
                       >
                         {opt}
@@ -1324,19 +1322,18 @@ export const QuizViewer = ({
 
           {isAnswered && (
             <div
-              className={`mt-3 rounded-md px-3 py-2 text-sm ${
-                correct
-                  ? "bg-green-50 text-green-700 border border-green-200"
-                  : "bg-rose-50 text-rose-700 border border-rose-200"
-              }`}
+              className={`mt-3 rounded-md px-3 py-2 text-sm ${correct
+                ? "bg-green-50 text-green-700 border border-green-200"
+                : "bg-rose-50 text-rose-700 border border-rose-200"
+                }`}
             >
               {correct
                 ? "Correct!"
                 : isMulti
-                ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(
+                  ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(
                     ", "
                   )}`
-                : `Incorrect — answer: ${currentQ.answerLabel}`}
+                  : `Incorrect — answer: ${currentQ.answerLabel}`}
             </div>
           )}
 
@@ -1417,9 +1414,9 @@ export const QuizViewer = ({
     const innerDef =
       anchor.type === "decorated_definition"
         ? (anchor.namedChildren || []).find(
-            (c) =>
-              c.type === "function_definition" || c.type === "class_definition"
-          )
+          (c) =>
+            c.type === "function_definition" || c.type === "class_definition"
+        )
         : undefined;
     const effective = innerDef || anchor;
 
@@ -1441,31 +1438,31 @@ export const QuizViewer = ({
     const groupOrder = isFunc
       ? ["type_params", "args", "returns", "body", "decorators"]
       : isClass
-      ? ["type_params", "bases", "body", "decorators", "keywords"]
-      : isWhile
-      ? ["test", "body", "orelse"]
-      : isIf
-      ? ["test", "body", "orelse"]
-      : isElif
-      ? ["test", "body"]
-      : isElse
-      ? ["body"]
-      : isFor
-      ? ["target", "iter", "body", "orelse"]
-      : anchor.type === "with_statement"
-      ? ["items", "body"]
-      : anchor.type === "try_statement"
-      ? ["body", "handlers", "orelse", "finalbody"]
-      : undefined;
+        ? ["type_params", "bases", "body", "decorators", "keywords"]
+        : isWhile
+          ? ["test", "body", "orelse"]
+          : isIf
+            ? ["test", "body", "orelse"]
+            : isElif
+              ? ["test", "body"]
+              : isElse
+                ? ["body"]
+                : isFor
+                  ? ["target", "iter", "body", "orelse"]
+                  : anchor.type === "with_statement"
+                    ? ["items", "body"]
+                    : anchor.type === "try_statement"
+                      ? ["body", "handlers", "orelse", "finalbody"]
+                      : undefined;
 
     let pieces =
       (language === "python"
         ? pyCuration.cardsFromCuratedSections
         : jsCuration.cardsFromCuratedSections)(anchor, code, {
-        // Show a single "body" card whenever this node actually owns a block/suite
-        includeBody: hasBlock || isFunc,
-        groupOrder,
-      }) || [];
+          // Show a single "body" card whenever this node actually owns a block/suite
+          includeBody: hasBlock || isFunc,
+          groupOrder,
+        }) || [];
 
     // Fallback: if for any reason we still didn't get a body card but this node owns one,
     // synthesize exactly one body card from the block/suite span.
@@ -1506,8 +1503,8 @@ export const QuizViewer = ({
     return qs.map((q, i) => {
       const text =
         typeof q.revealEndBeforeChild === "number" &&
-        typeof q.revealEndAfterChild === "number" &&
-        code
+          typeof q.revealEndAfterChild === "number" &&
+          code
           ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
           : q.answerLabel;
       return {
@@ -1560,8 +1557,8 @@ export const QuizViewer = ({
         : typeof q.revealEndBeforeChild === "number" &&
           typeof q.revealEndAfterChild === "number" &&
           typeof code === "string"
-        ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
-        : q.answerLabel;
+          ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
+          : q.answerLabel;
       const card: SavedCustomQuizCardV11 = {
         order: order++,
         type: q.childType || q.kind || "unknown",
@@ -1571,17 +1568,17 @@ export const QuizViewer = ({
         semanticRole: q.parentType,
         sourceRef: node
           ? {
-              nodeType: node.type,
-              start: node.startIndex,
-              end: node.endIndex,
-              path: (language === "python"
-                ? pyEngine.computeAstPath
-                : jsQuiz.computeAstPath)(root, node),
-              preview:
-                typeof code === "string"
-                  ? code.substring(node.startIndex, node.endIndex).slice(0, 120)
-                  : undefined,
-            }
+            nodeType: node.type,
+            start: node.startIndex,
+            end: node.endIndex,
+            path: (language === "python"
+              ? pyEngine.computeAstPath
+              : jsQuiz.computeAstPath)(root, node),
+            preview:
+              typeof code === "string"
+                ? code.substring(node.startIndex, node.endIndex).slice(0, 120)
+                : undefined,
+          }
           : undefined,
       };
       out.push(card);
@@ -1706,18 +1703,18 @@ export const QuizViewer = ({
                   revealEndAfterChild: q.revealEndAfterChild,
                   codeSnippet:
                     typeof code === "string" &&
-                    typeof q.revealStart === "number" &&
-                    typeof q.revealEndBeforeChild === "number"
+                      typeof q.revealStart === "number" &&
+                      typeof q.revealEndBeforeChild === "number"
                       ? code.substring(q.revealStart, q.revealEndBeforeChild)
                       : undefined,
                   childText:
                     typeof code === "string" &&
-                    typeof q.revealEndBeforeChild === "number" &&
-                    typeof q.revealEndAfterChild === "number"
+                      typeof q.revealEndBeforeChild === "number" &&
+                      typeof q.revealEndAfterChild === "number"
                       ? code.substring(
-                          q.revealEndBeforeChild,
-                          q.revealEndAfterChild
-                        )
+                        q.revealEndBeforeChild,
+                        q.revealEndAfterChild
+                      )
                       : undefined,
                   options: q.options,
                 })),

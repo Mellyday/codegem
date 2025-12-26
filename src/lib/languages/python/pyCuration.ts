@@ -1,4 +1,4 @@
-import type { TreeSitterAstNode } from "./treeSitter";
+import type { TreeSitterAstNode } from "../../treeSitter";
 
 export type CuratedSection = {
   key: string;

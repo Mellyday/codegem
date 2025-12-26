@@ -1,4 +1,4 @@
-import type { TreeSitterAstNode } from "./treeSitter";
+import type { TreeSitterAstNode } from "../../treeSitter";
 import {
   isDocstringNode,
   childrenOfType,
@@ -11,7 +11,7 @@ import {
   getSectionSpan,
   isYieldFrom,
 } from "./pyCuration";
-import { randomString } from "./utils";
+import { randomString } from "../../utils";
 
 // ============================================================================
 // Types

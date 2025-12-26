@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
 import { type TreeSitterAstNode } from "../lib/treeSitter";
 import { BookOpen, ChevronsRight, ChevronsLeft, FileJson } from "lucide-react";
-import * as pyEngine from "../lib/pyEngine";
+import * as pyEngine from "../lib/languages/python/pyEngine";
 import * as jsLesson from "../lib/jsLesson";
 import type {
   EngineStep as PyEngineStep,
   LessonHistoryItem as PyEngineHistoryItem,
-} from "../lib/pyEngine";
+} from "../lib/languages/python/pyEngine";
 import type { LessonStep as JsLessonStep, LessonHistoryItem as JsLessonHistoryItem } from "../lib/jsLesson";
 
 export type LessonViewerProps = {
@@ -77,15 +77,15 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       const plan: LessonStep[] =
         language === "python"
           ? (pyEngine.generateEngineSteps(root, root, code, {
-              profile: "shallow",
-              grouping: "auto",
-              includeNames: false,
-              generateQuiz: false,
-            }) as unknown as LessonStep[])
+            profile: "shallow",
+            grouping: "auto",
+            includeNames: false,
+            generateQuiz: false,
+          }) as unknown as LessonStep[])
           : (jsLesson.generateLessonPlan(root, {
-              includeNames: false,
-              enableGrouping: "auto",
-            }) as LessonStep[]);
+            includeNames: false,
+            enableGrouping: "auto",
+          }) as LessonStep[]);
       // If the plan is grouped (virtual group steps) and there are multiple groups,
       // show a TOC first. If only one group, jump straight into that group's child steps.
       const hasGroups = plan.some((s: any) => (s.node as any)?.isVirtual || s.node.type === "group");
@@ -180,16 +180,16 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
         existingChildren.length > 0
           ? existingChildren
           : (language === "python"
-              ? (pyEngine.generateEngineSteps(root, stepToExpand.node as any, code, {
-                  profile: "shallow",
-                  grouping: false,
-                  includeNames: false,
-                  generateQuiz: false,
-                  __noGroup: true,
-                }) as unknown as LessonStep[])
-              : (jsLesson.generateLessonPlan(stepToExpand.node as any, {
-                  includeNames: false,
-                }) as LessonStep[]));
+            ? (pyEngine.generateEngineSteps(root, stepToExpand.node as any, code, {
+              profile: "shallow",
+              grouping: false,
+              includeNames: false,
+              generateQuiz: false,
+              __noGroup: true,
+            }) as unknown as LessonStep[])
+            : (jsLesson.generateLessonPlan(stepToExpand.node as any, {
+              includeNames: false,
+            }) as LessonStep[]));
 
       if (childrenSteps.length > 0) {
         setHistory((prev) => [...prev, { ...stepToExpand, action: "dig" }]);
@@ -207,21 +207,21 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
       const payload =
         language === "python"
           ? pyEngine.buildCustomQuizPayload({
-              fileKey,
-              root,
-              code,
-              history: history as PyEngineHistoryItem[],
-              lessonQueue: lessonQueue as PyEngineStep[],
-              currentStep,
-            })
+            fileKey,
+            root,
+            code,
+            history: history as PyEngineHistoryItem[],
+            lessonQueue: lessonQueue as PyEngineStep[],
+            currentStep,
+          })
           : jsLesson.buildCustomQuizPayload({
-              fileKey,
-              root,
-              code,
-              history: history as JsLessonHistoryItem[],
-              lessonQueue: lessonQueue as JsLessonStep[],
-              currentStep,
-            });
+            fileKey,
+            root,
+            code,
+            history: history as JsLessonHistoryItem[],
+            lessonQueue: lessonQueue as JsLessonStep[],
+            currentStep,
+          });
 
       const res = await fetch("/api/quizzes", {
         method: "POST",
@@ -365,9 +365,8 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
           <div
             className="h-full bg-amber-500 transition-all"
             style={{
-              width: `${
-                totalSteps ? ((currentStep + 1) / totalSteps) * 100 : 0
-              }%`,
+              width: `${totalSteps ? ((currentStep + 1) / totalSteps) * 100 : 0
+                }%`,
             }}
           />
         </div>

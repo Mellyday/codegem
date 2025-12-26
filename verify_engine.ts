@@ -4,7 +4,7 @@ import {
     generateEngineSteps,
     type EngineStep,
     type QuizQuestion,
-} from "./src/lib/pyEngine";
+} from "./src/lib/languages/python/pyEngine";
 import { parseWithTreeSitter } from "./src/lib/parser/treeSitterServer";
 
 // Mock AST Node
