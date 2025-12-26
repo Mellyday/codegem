@@ -115,6 +115,13 @@ export async function POST(request: Request) {
           fileDoc = await files.findOne(mRaw, {
             projection: { _id: 1, path: 1, projectId: 1 },
           });
+        // Fallback: search without userId for dev-pushed projects
+        if (!fileDoc) {
+          const devMatch = { path: body.fileKey!.path, projectId: idAsObject };
+          fileDoc = await files.findOne(devMatch, {
+            projection: { _id: 1, path: 1, projectId: 1 },
+          });
+        }
       }
       if (!fileDoc) {
         return NextResponse.json(
@@ -256,6 +263,11 @@ export async function GET(request: Request) {
       fileDoc = await files.findOne(mObj, { projection: { _id: 1 } });
       if (!fileDoc)
         fileDoc = await files.findOne(mRaw, { projection: { _id: 1 } });
+      // Fallback: search without userId for dev-pushed projects
+      if (!fileDoc) {
+        const devMatch = { path, projectId: idAsObject };
+        fileDoc = await files.findOne(devMatch, { projection: { _id: 1 } });
+      }
     }
     const list: any[] = [];
     if (fileDoc) {

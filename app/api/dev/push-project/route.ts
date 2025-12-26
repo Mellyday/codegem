@@ -2,6 +2,7 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { getDb } from "../../../../src/lib/mongodb";
 import { ObjectId } from "mongodb";
+import { auth } from "@clerk/nextjs/server";
 
 /**
  * DEV-ONLY endpoint to push test projects to MongoDB without authentication.
@@ -78,7 +79,16 @@ export async function POST(request: Request) {
 
         const projectId = new ObjectId();
         const now = new Date();
-        const devUserId = "dev-push-project"; // Fake userId for dev-pushed files
+
+        // Try to get the authenticated user's ID so quiz saves work
+        // Falls back to a dev placeholder if unauthenticated
+        let devUserId: string;
+        try {
+            const { userId: clerkUserId } = await auth();
+            devUserId = clerkUserId || "dev-push-project";
+        } catch {
+            devUserId = "dev-push-project";
+        }
 
         const docs = body.files.map((f) => {
             const inferred = inferLanguageAndExtension(f.path);
