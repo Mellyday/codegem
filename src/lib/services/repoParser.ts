@@ -86,6 +86,7 @@ export async function parseAndPersistRepo(
       progress.parsedFiles += 1;
     } catch (err) {
       progress.failedFiles += 1;
+      const sourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
       await targetCol.insertOne({
         userId,
         repoId,
@@ -96,11 +97,11 @@ export async function parseAndPersistRepo(
         path: relPath,
         language: "unknown",
         extension: ext,
-        sourceCode: "",
+        sourceCode, // Store source code for retry
         ast: null,
         parseStatus: "failed",
         parseError: String(err),
-        size: 0,
+        size: Buffer.byteLength(sourceCode, "utf8"),
         createdAt: new Date(),
         updatedAt: new Date(),
       } as any);
@@ -208,6 +209,7 @@ export async function parseAndPersistRepoWithProgress(
       onProgress({ type: 'parsed', file: relPath, success: true });
     } catch (err) {
       progress.failedFiles += 1;
+      const failedSourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
       await targetCol.insertOne({
         userId,
         repoId,
@@ -218,11 +220,11 @@ export async function parseAndPersistRepoWithProgress(
         path: relPath,
         language: "unknown",
         extension: ext,
-        sourceCode: "",
+        sourceCode: failedSourceCode, // Store source code for retry
         ast: null,
         parseStatus: "failed",
         parseError: String(err),
-        size: 0,
+        size: Buffer.byteLength(failedSourceCode, "utf8"),
         createdAt: new Date(),
         updatedAt: new Date(),
       } as any);

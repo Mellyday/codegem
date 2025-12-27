@@ -169,7 +169,7 @@ export const parseWithTreeSitter = async (
   const parser = new Parser();
   try {
     parser.setLanguage(language);
-    const tree = parser.parse(code);
+    const tree = parser.parse(code, undefined, { bufferSize: 1024 * 1024 }); // 1MB buffer for large files
     if (!tree) throw new Error("Tree-sitter failed to produce a tree");
     const ast = serialiseNode(tree.rootNode);
     return {

@@ -38,6 +38,8 @@ export type FetchLog = {
         parsedFiles: number;
         failedFiles: number;
     };
+    /** MongoDB repoId for retry functionality */
+    repoId?: string;
     /** Summary of parsed files by file type */
     fileTypeSummary?: FileTypeSummary;
 };

@@ -103,14 +103,29 @@ function LogItem({
     selected,
     onSelect,
     onDelete,
+    onRetry,
 }: {
     log: FetchLog;
     selected: boolean;
     onSelect: (checked: boolean) => void;
     onDelete: () => void;
+    onRetry?: () => Promise<void>;
 }) {
     const [expanded, setExpanded] = useState(false);
     const [showEvents, setShowEvents] = useState(false);
+    const [isRetrying, setIsRetrying] = useState(false);
+    const [retryResult, setRetryResult] = useState<{ succeeded: number; stillFailed: number } | null>(null);
+
+    const handleRetry = async () => {
+        if (!onRetry) return;
+        setIsRetrying(true);
+        setRetryResult(null);
+        try {
+            await onRetry();
+        } finally {
+            setIsRetrying(false);
+        }
+    };
 
     const statusColor = {
         pending: 'bg-amber-100 text-amber-700',
@@ -167,6 +182,27 @@ function LogItem({
                         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                     </svg>
                 </button>
+
+                {/* Retry button - show if there are failed files */}
+                {log.progress && log.progress.failedFiles > 0 && log.repoId && (
+                    <button
+                        onClick={handleRetry}
+                        disabled={isRetrying}
+                        className="rounded p-1 text-amber-500 transition hover:bg-amber-50 hover:text-amber-600 disabled:opacity-50"
+                        title={isRetrying ? "Retrying..." : `Retry ${log.progress.failedFiles} failed files`}
+                    >
+                        {isRetrying ? (
+                            <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                            </svg>
+                        ) : (
+                            <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                        )}
+                    </button>
+                )}
 
                 <button
                     onClick={onDelete}
@@ -227,7 +263,7 @@ function LogItem({
 }
 
 export default function FetchLogsPanel() {
-    const { logs, isLoading, deleteLog, deleteLogs, clearLogs } = useGitHubFetchLogs();
+    const { logs, isLoading, deleteLog, deleteLogs, clearLogs, updateLog } = useGitHubFetchLogs();
     const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
     const handleSelect = (id: string, checked: boolean) => {
@@ -330,6 +366,20 @@ export default function FetchLogsPanel() {
                         selected={selectedIds.has(log.id)}
                         onSelect={(checked) => handleSelect(log.id, checked)}
                         onDelete={() => deleteLog(log.id)}
+                        onRetry={log.repoId && log.progress && log.progress.failedFiles > 0 ? async () => {
+                            const res = await fetch(`/api/repos/${log.repoId}/retry`, { method: 'POST' });
+                            const data = await res.json();
+                            if (data.succeeded > 0) {
+                                // Update the log to reflect new success count
+                                updateLog(log.id, {
+                                    progress: {
+                                        totalFiles: log.progress!.totalFiles,
+                                        parsedFiles: log.progress!.parsedFiles + data.succeeded,
+                                        failedFiles: data.stillFailed,
+                                    }
+                                });
+                            }
+                        } : undefined}
                     />
                 ))}
             </div>

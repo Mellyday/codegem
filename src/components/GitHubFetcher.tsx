@@ -158,6 +158,7 @@ export default function GitHubFetcher() {
                                 updateLog(logId, {
                                     status: "success",
                                     completedAt: new Date().toISOString(),
+                                    repoId: event.repoId,
                                     progress: {
                                         totalFiles: event.totalFiles,
                                         parsedFiles: event.parsedFiles,
