@@ -326,8 +326,8 @@ export const buildCuratedSections = (
         childByField(node, "body") || firstChildOfType(node, "compound_statement");
       const cases = body
         ? collectDescendants(body, (n) =>
-            n.type === "case_statement" || n.type === "labeled_statement"
-          )
+          n.type === "case_statement" || n.type === "labeled_statement"
+        )
         : [];
       return [
         { key: "value", items: value ? [value] : [] },
@@ -507,11 +507,11 @@ export function cardsFromCuratedSections(
 
   const ordered = groupOrder
     ? [
-        ...groupOrder
-          .map((key) => sections.find((s) => s.key === key))
-          .filter(Boolean),
-        ...sections.filter((s) => !groupOrder.includes(s.key)),
-      ]
+      ...groupOrder
+        .map((key) => sections.find((s) => s.key === key))
+        .filter((s): s is CuratedSection => Boolean(s)),
+      ...sections.filter((s) => !groupOrder.includes(s.key)),
+    ]
     : sections;
 
   const filtered = includeBody

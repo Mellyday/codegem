@@ -6,7 +6,8 @@ import Java from "tree-sitter-java";
 import JavaScript from "tree-sitter-javascript";
 import Python from "tree-sitter-python";
 import Ruby from "tree-sitter-ruby";
-import * as TypeScript from "tree-sitter-typescript";
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const TypeScript = require("tree-sitter-typescript");
 
 type SupportedLanguageId =
   | "python"

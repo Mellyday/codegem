@@ -309,7 +309,7 @@ const extractCallParts = (
 const extractStringLiteral = (node: TreeSitterAstNode, code: string) => {
   const raw = textForRange(node.startIndex, node.endIndex, code)?.trim();
   if (!raw) return undefined;
-  const quoteMatch = raw.match(/^(['"])(.*)\1$/s);
+  const quoteMatch = raw.match(/^(['"])([\s\S]*)\1$/);
   if (quoteMatch) return quoteMatch[2];
   if (node.type.toLowerCase().includes("string")) {
     return raw.replace(/^['"]|['"]$/g, "");
