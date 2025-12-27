@@ -26,7 +26,7 @@ export default function GitHubFetcher() {
     const [currentProgress, setCurrentProgress] = useState<CurrentProgress | null>(null);
     const abortControllerRef = useRef<AbortController | null>(null);
 
-    const { addLog, updateLog, appendEvent } = useGitHubFetchLogs();
+    const { addLog, updateLog, appendEvent, finalizeLog } = useGitHubFetchLogs();
 
     const validateUrl = (input: string): boolean => {
         try {
@@ -185,23 +185,26 @@ export default function GitHubFetcher() {
             }
 
             setStatus("success");
+            finalizeLog(logId);
         } catch (err) {
             if ((err as Error).name === "AbortError") {
                 updateLog(logId, {
                     status: "failed",
                     completedAt: new Date().toISOString(),
                 });
+                finalizeLog(logId);
                 setError("Fetch cancelled");
             } else {
                 updateLog(logId, {
                     status: "failed",
                     completedAt: new Date().toISOString(),
                 });
+                finalizeLog(logId);
                 setError(String(err));
             }
             setStatus("error");
         }
-    }, [url, addLog, updateLog, appendEvent]);
+    }, [url, addLog, updateLog, appendEvent, finalizeLog]);
 
     const handleCancel = () => {
         if (abortControllerRef.current) {
