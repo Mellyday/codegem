@@ -9,8 +9,12 @@ const nextConfig: NextConfig = {
     if (isServer) {
       config.externals.push(
         "tree-sitter",
-        "tree-sitter-python",
+        "tree-sitter-c",
+        "tree-sitter-go",
+        "tree-sitter-java",
         "tree-sitter-javascript",
+        "tree-sitter-python",
+        "tree-sitter-ruby",
         "tree-sitter-typescript"
       );
     }
