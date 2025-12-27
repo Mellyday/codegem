@@ -403,7 +403,11 @@ export const QuizViewer = ({
   const { engine, curation, ui, id: languageId } = languageTools;
   const BLOCK_TYPES = ui.blockTypes;
   const CURATABLE_ANCHORS = ui.curatableAnchors;
-  const shouldSkipNode = curation.isDocstringNode || (() => false);
+  // Memoize to prevent infinite re-render loop when isDocstringNode is undefined (e.g., Go)
+  const shouldSkipNode = useMemo(
+    () => curation.isDocstringNode || (() => false),
+    [curation.isDocstringNode]
+  );
   // Setup state
   const containerTypes = useMemo(
     () => Array.from(gatherContainerTypes(root, new Set<string>())),
