@@ -3,6 +3,14 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   allowedDevOrigins: ["http://localhost:3001", "http://192.168.100.55:3001"],
 
+  // Ensure WASM files are served with correct MIME type for production/reverse proxies
+  headers: async () => [
+    {
+      source: "/wasm/:path*",
+      headers: [{ key: "Content-Type", value: "application/wasm" }],
+    },
+  ],
+
   webpack: (config, { isServer }) => {
     // --- SERVER-SIDE CONFIGURATION ---
     // For native tree-sitter packages used in API routes.
