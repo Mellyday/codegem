@@ -1,8 +1,22 @@
 import Parser from "tree-sitter";
 import type ParserType from "tree-sitter";
+import C from "tree-sitter-c";
+import Go from "tree-sitter-go";
+import Java from "tree-sitter-java";
+import JavaScript from "tree-sitter-javascript";
 import Python from "tree-sitter-python";
+import Ruby from "tree-sitter-ruby";
+import * as TypeScript from "tree-sitter-typescript";
 
-type SupportedLanguageId = "python";
+type SupportedLanguageId =
+  | "python"
+  | "javascript"
+  | "typescript"
+  | "tsx"
+  | "go"
+  | "java"
+  | "c"
+  | "ruby";
 
 type LanguageConfig = {
   id: SupportedLanguageId;
@@ -35,6 +49,48 @@ const supportedLanguages: LanguageConfig[] = [
     displayName: "Python",
     language: Python,
     extensions: new Set(["py"]),
+  },
+  {
+    id: "javascript",
+    displayName: "JavaScript",
+    language: JavaScript,
+    extensions: new Set(["js", "mjs", "cjs", "jsx"]),
+  },
+  {
+    id: "typescript",
+    displayName: "TypeScript",
+    language: (TypeScript as any).typescript,
+    extensions: new Set(["ts"]),
+  },
+  {
+    id: "tsx",
+    displayName: "TSX",
+    language: (TypeScript as any).tsx,
+    extensions: new Set(["tsx"]),
+  },
+  {
+    id: "c",
+    displayName: "C",
+    language: C,
+    extensions: new Set(["c", "h"]),
+  },
+  {
+    id: "go",
+    displayName: "Go",
+    language: Go,
+    extensions: new Set(["go"]),
+  },
+  {
+    id: "java",
+    displayName: "Java",
+    language: Java,
+    extensions: new Set(["java"]),
+  },
+  {
+    id: "ruby",
+    displayName: "Ruby",
+    language: Ruby,
+    extensions: new Set(["rb"]),
   },
 ];
 

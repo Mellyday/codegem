@@ -1,8 +1,5 @@
 import type { TreeSitterAstNode } from "../lib/treeSitter";
-import {
-  buildCuratedSections as buildCuratedSectionsShared,
-  isYieldFrom,
-} from "../lib/languages/python/pyCuration";
+import { getLanguageToolsForFileName } from "../lib/languages/registry";
 
 type AstChildrenSidebarProps = {
   ast: TreeSitterAstNode;
@@ -15,6 +12,7 @@ type AstChildrenSidebarProps = {
   flattenRoot?: boolean;
   // Optional full source text to enable token-level hints (e.g., "yield from")
   code?: string;
+  fileName?: string;
 };
 
 // Get highlight color based on node type (exact, intentional matches)
@@ -122,7 +120,11 @@ export const AstChildrenSidebar = ({
   onHoverNode,
   flattenRoot = false,
   code,
+  fileName,
 }: AstChildrenSidebarProps) => {
+  const { curation } = getLanguageToolsForFileName(fileName);
+  const buildCuratedSectionsShared = curation.buildCuratedSections;
+  const isYieldFrom = curation.isYieldFrom || (() => false);
   // Typically the root is a `module` node; render it and its top-level children.
   const topLevel = ast.namedChildren || [];
 

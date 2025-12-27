@@ -1,9 +1,24 @@
 import { Parser, Language, type Node as TreeSitterNode } from "web-tree-sitter";
 
 const pythonWasmUrl = "/wasm/tree-sitter-python.wasm";
+const javascriptWasmUrl = "/wasm/tree-sitter-javascript.wasm";
+const typescriptWasmUrl = "/wasm/tree-sitter-typescript.wasm";
+const tsxWasmUrl = "/wasm/tree-sitter-tsx.wasm";
+const rubyWasmUrl = "/wasm/tree-sitter-ruby.wasm";
+const goWasmUrl = "/wasm/tree-sitter-go.wasm";
+const javaWasmUrl = "/wasm/tree-sitter-java.wasm";
+const cWasmUrl = "/wasm/tree-sitter-c.wasm";
 const treeSitterWasmUrl = "/wasm/tree-sitter.wasm";
 
-type SupportedLanguageId = "python";
+type SupportedLanguageId =
+  | "python"
+  | "javascript"
+  | "typescript"
+  | "tsx"
+  | "ruby"
+  | "go"
+  | "java"
+  | "c";
 
 type LanguageConfig = {
   id: SupportedLanguageId;
@@ -38,6 +53,48 @@ const supportedLanguages: LanguageConfig[] = [
     displayName: "Python",
     wasmUrl: pythonWasmUrl,
     extensions: new Set(["py"]),
+  },
+  {
+    id: "javascript",
+    displayName: "JavaScript",
+    wasmUrl: javascriptWasmUrl,
+    extensions: new Set(["js", "mjs", "cjs", "jsx"]),
+  },
+  {
+    id: "typescript",
+    displayName: "TypeScript",
+    wasmUrl: typescriptWasmUrl,
+    extensions: new Set(["ts"]),
+  },
+  {
+    id: "tsx",
+    displayName: "TSX",
+    wasmUrl: tsxWasmUrl,
+    extensions: new Set(["tsx"]),
+  },
+  {
+    id: "ruby",
+    displayName: "Ruby",
+    wasmUrl: rubyWasmUrl,
+    extensions: new Set(["rb"]),
+  },
+  {
+    id: "c",
+    displayName: "C",
+    wasmUrl: cWasmUrl,
+    extensions: new Set(["c", "h"]),
+  },
+  {
+    id: "go",
+    displayName: "Go",
+    wasmUrl: goWasmUrl,
+    extensions: new Set(["go"]),
+  },
+  {
+    id: "java",
+    displayName: "Java",
+    wasmUrl: javaWasmUrl,
+    extensions: new Set(["java"]),
   },
 ];
 

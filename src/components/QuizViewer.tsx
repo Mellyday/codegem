@@ -3,11 +3,9 @@ import { useEffect, useMemo, useState } from "react";
 import { BookOpen, ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
-import * as pyCuration from "../lib/languages/python/pyCuration";
-import { isDocstringNode } from "../lib/languages/python/pyCuration";
+import { getLanguageToolsForFileName } from "../lib/languages/registry";
 import { ErrorBoundary } from "./ErrorBoundary";
 import { SavedCustomQuizzesPanel } from "./SavedCustomQuizzesPanel";
-import * as pyEngine from "../lib/languages/python/pyEngine";
 
 // Constants moved inside component
 type QuizMode = "setup" | "active" | "complete";
@@ -18,6 +16,7 @@ export type QuizViewerProps = {
   code?: string;
   // File context to load saved custom quizzes
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
+  fileName?: string;
   mode: QuizMode;
   onStart: () => void;
   onCancel: () => void;
@@ -183,18 +182,22 @@ const generateQuestions = (
   node: TreeSitterAstNode,
   breakdownTypes: Set<string>,
   code?: string,
-  opts?: { source?: "base" | "expanded" }
+  opts?: { source?: "base" | "expanded" },
+  shouldSkipNode?: (node: TreeSitterAstNode, parent?: TreeSitterAstNode) => boolean
 ): Question[] => {
   const questions: Question[] = [];
+  const skipNode = shouldSkipNode || (() => false);
   const children = (node.namedChildren || []).filter(
-    (c) => c.type !== "comment" && !isDocstringNode(c, node)
+    (c) => c.type !== "comment" && !skipNode(c, node)
   );
   children.forEach((child, idx) => {
     if (
       breakdownTypes.has(child.type) &&
       (child.namedChildren || []).length > 0
     ) {
-      questions.push(...generateQuestions(child, breakdownTypes, code, opts));
+      questions.push(
+        ...generateQuestions(child, breakdownTypes, code, opts, shouldSkipNode)
+      );
     } else {
       const childType = child.type;
       // Prefer the actual source text where available (identifier, parameters, etc.)
@@ -379,12 +382,13 @@ const revealAfterForQuestion = (q: Question | undefined): number | undefined => 
   return undefined;
 };
 
-// Heuristic helpers use pyEngine steps for Python.
+// Heuristic helpers use the language engine when available.
 
 export const QuizViewer = ({
   root,
   code,
   fileKey,
+  fileName,
   mode,
   onStart,
   onCancel,
@@ -392,39 +396,21 @@ export const QuizViewer = ({
   onReturnToAst,
   onRevealChange,
 }: QuizViewerProps) => {
-  // Treat blocks/suites as containers
-  const BLOCK_TYPES = useMemo(
-    () => new Set(["block", "suite"]),
-    []
+  const languageTools = useMemo(
+    () => getLanguageToolsForFileName(fileName ?? fileKey?.path),
+    [fileName, fileKey?.path]
   );
-  const CURATABLE_ANCHORS = useMemo(
-    () => new Set([
-      "function_definition",
-      "decorated_definition",
-      "class_definition",
-      "assignment",
-      "expression_statement",
-      "call",
-      "if_statement",
-      "if_stmt",
-      "elif_clause",
-      "else_clause",
-      "for_statement",
-      "for_stmt",
-      "while_statement",
-      "while_stmt",
-      "with_statement",
-      "try_statement",
-    ]),
-    []
-  );
+  const { engine, curation, ui, id: languageId } = languageTools;
+  const BLOCK_TYPES = ui.blockTypes;
+  const CURATABLE_ANCHORS = ui.curatableAnchors;
+  const shouldSkipNode = curation.isDocstringNode || (() => false);
   // Setup state
   const containerTypes = useMemo(
     () => Array.from(gatherContainerTypes(root, new Set<string>())),
     [root]
   );
   const [breakdownTypes, setBreakdownTypes] = useState<Set<string>>(
-    () => new Set(containerTypes.filter((t) => t === "block"))
+    () => new Set(containerTypes.filter((t) => BLOCK_TYPES.has(t)))
   );
 
   // Custom quiz selection state
@@ -507,16 +493,16 @@ export const QuizViewer = ({
     }
   };
 
-  const buildPythonEnginePayload = (
+  const buildEnginePayload = (
     vroot: TreeSitterAstNode,
     profile: "shallow" | "deep"
   ) => {
-    const steps = pyEngine.generateEngineSteps(vroot, vroot, code || "", {
+    const steps = engine.generateEngineSteps(vroot, vroot, code || "", {
       profile,
       includeNames: false,
       generateQuiz: true,
     }) as any[];
-    return pyEngine.buildCustomQuizPayload({
+    return engine.buildCustomQuizPayload({
       fileKey,
       root: vroot,
       code: code || "",
@@ -526,7 +512,7 @@ export const QuizViewer = ({
     }) as any;
   };
 
-  const savePythonEngineQuiz = async (
+  const saveEngineQuiz = async (
     payload: any,
     vroot: TreeSitterAstNode,
     name: string,
@@ -570,7 +556,7 @@ export const QuizViewer = ({
     if (mode === "active") {
       const qs = selectedCustom
         ? generateQuestionsFromCustom(selectedCustom, code, root)
-        : generateQuestions(root, breakdownTypes, code, { source: "base" });
+        : generateQuestions(root, breakdownTypes, code, { source: "base" }, shouldSkipNode);
       setQuestions(qs);
       setCurrent(0);
       setSelected(undefined);
@@ -583,7 +569,7 @@ export const QuizViewer = ({
       const initialReveal = qs.length > 0 ? revealBeforeForQuestion(qs[0]) : undefined;
       onRevealChange?.(initialReveal);
     }
-  }, [mode, root, breakdownTypes, code, selectedCustom]);
+  }, [mode, root, breakdownTypes, code, selectedCustom, shouldSkipNode]);
 
   // Clear reveal when leaving quiz modes
   useEffect(() => {
@@ -606,7 +592,7 @@ export const QuizViewer = ({
 
   const renderSetup = () => {
     // Show unique container-like types available for breakdown selection
-    const preview = generateQuestions(root, breakdownTypes);
+    const preview = generateQuestions(root, breakdownTypes, code, undefined, shouldSkipNode);
 
     return (
       <div className="space-y-4">
@@ -687,8 +673,8 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const payload = buildPythonEnginePayload(root, "shallow");
-                savePythonEngineQuiz(
+                const payload = buildEnginePayload(root, "shallow");
+                saveEngineQuiz(
                   payload,
                   root,
                   "Heuristic shallow",
@@ -705,8 +691,8 @@ export const QuizViewer = ({
               className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
               onClick={() => {
                 if (!root) return;
-                const payload = buildPythonEnginePayload(root, "deep");
-                savePythonEngineQuiz(payload, root, "Heuristic deep", "deep")
+                const payload = buildEnginePayload(root, "deep");
+                saveEngineQuiz(payload, root, "Heuristic deep", "deep")
                   .then(() => alert("Saved heuristic deep quiz."))
                   .catch(() => alert("Failed to save heuristic deep quiz."));
               }}
@@ -906,7 +892,7 @@ export const QuizViewer = ({
         return;
       const deeper = generateQuestions(childNode, breakdownTypes, code, {
         source: "expanded",
-      });
+      }, shouldSkipNode);
       if (!deeper.length) return;
       const before = questions.slice(0, current);
       const after = questions.slice(current + 1);
@@ -1208,12 +1194,17 @@ export const QuizViewer = ({
 
     // Prefer block/suite if the span is exactly a block, else land on a statement anchor
     const resolveAnchor = (s: number, e: number) => {
-      const deepest = pyCuration.findDeepestNodeCoveringSpan(root, s, e);
+      const deepest = curation.findDeepestNodeCoveringSpan(root, s, e);
       if (deepest && BLOCK_TYPES.has(deepest.type)) {
         // If user marked a body span exactly, keep the block as the anchor
         return deepest;
       }
-      const anchor = pyCuration.findNearestAnchorCoveringSpan(root, s, e, CURATABLE_ANCHORS);
+      const anchor = curation.findNearestAnchorCoveringSpan(
+        root,
+        s,
+        e,
+        CURATABLE_ANCHORS
+      );
       return anchor ?? deepest;
     };
 
@@ -1276,34 +1267,53 @@ export const QuizViewer = ({
     const hasBlock = !!findBlockChild(effective);
 
     // Optional stable group ordering for common statements (handle _stmt/_statement)
-    const isWhile =
-      anchor.type === "while_statement" || anchor.type === "while_stmt";
-    const isIf = anchor.type === "if_statement" || anchor.type === "if_stmt";
-    const isFor = anchor.type === "for_statement" || anchor.type === "for_stmt";
-    const isElif = anchor.type === "elif_clause";
-    const isElse = anchor.type === "else_clause";
-    const groupOrder = isFunc
-      ? ["type_params", "args", "returns", "body", "decorators"]
-      : isClass
-        ? ["type_params", "bases", "body", "decorators", "keywords"]
-        : isWhile
-          ? ["test", "body", "orelse"]
-          : isIf
-            ? ["test", "body", "orelse"]
-            : isElif
-              ? ["test", "body"]
-              : isElse
-                ? ["body"]
-                : isFor
-                  ? ["target", "iter", "body", "orelse"]
-                  : anchor.type === "with_statement"
-                    ? ["items", "body"]
-                    : anchor.type === "try_statement"
-                      ? ["body", "handlers", "orelse", "finalbody"]
-                      : undefined;
+    const groupOrder = (() => {
+      if (languageId === "python") {
+        const isWhile =
+          anchor.type === "while_statement" || anchor.type === "while_stmt";
+        const isIf = anchor.type === "if_statement" || anchor.type === "if_stmt";
+        const isFor = anchor.type === "for_statement" || anchor.type === "for_stmt";
+        const isElif = anchor.type === "elif_clause";
+        const isElse = anchor.type === "else_clause";
+        return isFunc
+          ? ["type_params", "args", "returns", "body", "decorators"]
+          : isClass
+            ? ["type_params", "bases", "body", "decorators", "keywords"]
+            : isWhile
+              ? ["test", "body", "orelse"]
+              : isIf
+                ? ["test", "body", "orelse"]
+                : isElif
+                  ? ["test", "body"]
+                  : isElse
+                    ? ["body"]
+                    : isFor
+                      ? ["target", "iter", "body", "orelse"]
+                      : anchor.type === "with_statement"
+                        ? ["items", "body"]
+                        : anchor.type === "try_statement"
+                          ? ["body", "handlers", "orelse", "finalbody"]
+                          : undefined;
+      }
+      if (languageId === "c") {
+        if (anchor.type === "function_definition") return ["name", "params", "body"];
+        if (anchor.type === "declaration" || anchor.type === "type_definition")
+          return ["type", "names", "initializers"];
+        if (anchor.type === "struct_specifier") return ["name", "fields"];
+        if (anchor.type === "enum_specifier") return ["name", "enumerators"];
+        if (anchor.type === "if_statement") return ["condition", "then", "else"];
+        if (anchor.type === "for_statement")
+          return ["init", "condition", "update", "body"];
+        if (anchor.type === "while_statement" || anchor.type === "do_statement")
+          return ["condition", "body"];
+        if (anchor.type === "switch_statement")
+          return ["value", "cases", "body"];
+      }
+      return undefined;
+    })();
 
     let pieces =
-      pyCuration.cardsFromCuratedSections(anchor, code, {
+      curation.cardsFromCuratedSections(anchor, code, {
         // Show a single "body" card whenever this node actually owns a block/suite
         includeBody: hasBlock || isFunc,
         groupOrder,
@@ -1416,7 +1426,7 @@ export const QuizViewer = ({
             nodeType: node.type,
             start: node.startIndex,
             end: node.endIndex,
-            path: pyEngine.computeAstPath(root, node),
+            path: engine.computeAstPath(root, node),
             preview:
               typeof code === "string"
                 ? code.substring(node.startIndex, node.endIndex).slice(0, 120)

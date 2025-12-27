@@ -522,6 +522,7 @@ export const SandboxViewer = ({
                             }
                             languageLabel={`${parseResult.language} via Tree-sitter`}
                             code={state.code}
+                            fileName={fileName}
                             selectedNode={selectedTsNode}
                             hoveredNode={hoveredTsNode}
                             flattenRoot
@@ -559,6 +560,7 @@ export const SandboxViewer = ({
                     }
                     code={state.code}
                     fileKey={fileKey}
+                    fileName={fileName}
                     mode={
                       viewMode.replace("quiz_", "") as
                       | "setup"
@@ -582,6 +584,7 @@ export const SandboxViewer = ({
                     }
                     code={state.code}
                     fileKey={fileKey}
+                    fileName={fileName}
                     onReturnToAst={() => setViewMode("ast")}
                     onRevealEndIndexChange={setRevealEndIndex}
                     onMaskRangesChange={setMaskRanges}
