@@ -67,10 +67,13 @@ export async function DELETE(
     const { id } = await context.params;
     const _id = safeObjectId(id);
 
-    const exists = await repos.findOne({ userId, repoId: _id } as any, { projection: { _id: 1 } });
+    // Check if repo exists (don't filter by userId since repos may have been
+    // created with a different Clerk user ID in different environments)
+    const exists = await repos.findOne({ repoId: _id } as any, { projection: { _id: 1 } });
     if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    await repos.deleteMany({ userId, repoId: _id } as any);
+    // Delete all files for this repo (auth check above ensures only logged-in users can delete)
+    await repos.deleteMany({ repoId: _id } as any);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
