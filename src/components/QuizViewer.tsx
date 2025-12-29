@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { useEffect, useMemo, useState } from "react";
-import { BookOpen, ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
 import { getLanguageToolsForFileName } from "../lib/languages/registry";
@@ -64,13 +64,6 @@ type Question = {
   revealEndAfterChild?: number;
 };
 
-const gatherContainerTypes = (node: TreeSitterAstNode, acc: Set<string>) => {
-  if ((node.namedChildren || []).length > 0) {
-    acc.add(node.type);
-    for (const c of node.namedChildren || []) gatherContainerTypes(c, acc);
-  }
-  return acc;
-};
 
 const generateDistractors = (correct: string): string[] => {
   const out = new Set<string>();
@@ -180,7 +173,6 @@ const textForNode = (
 
 const generateQuestions = (
   node: TreeSitterAstNode,
-  breakdownTypes: Set<string>,
   code?: string,
   opts?: { source?: "base" | "expanded" },
   shouldSkipNode?: (node: TreeSitterAstNode, parent?: TreeSitterAstNode) => boolean
@@ -191,42 +183,32 @@ const generateQuestions = (
     (c) => c.type !== "comment" && !skipNode(c, node)
   );
   children.forEach((child, idx) => {
-    if (
-      breakdownTypes.has(child.type) &&
-      (child.namedChildren || []).length > 0
-    ) {
-      questions.push(
-        ...generateQuestions(child, breakdownTypes, code, opts, shouldSkipNode)
-      );
-    } else {
-      const childType = child.type;
-      // Prefer the actual source text where available (identifier, parameters, etc.)
-      const preferredLabel = textForNode(child, code) || childType;
-      const distractors = generateDistractors(preferredLabel);
-      const options = shuffleArray([preferredLabel, ...distractors]);
+    const childType = child.type;
+    // Prefer the actual source text where available (identifier, parameters, etc.)
+    const preferredLabel = textForNode(child, code) || childType;
+    const distractors = generateDistractors(preferredLabel);
+    const options = shuffleArray([preferredLabel, ...distractors]);
 
-      // Compute reveal ranges relative to the parent
-      const parentStart = node.startIndex;
-      const revealStart = parentStart;
-      const revealEndBeforeChild = child.startIndex;
-      const revealEndAfterChild = child.endIndex;
+    // Compute reveal ranges relative to the parent
+    const parentStart = node.startIndex;
+    const revealStart = parentStart;
+    const revealEndBeforeChild = child.startIndex;
+    const revealEndAfterChild = child.endIndex;
 
-      questions.push({
-        stem: "What comes next?",
-        answerLabel: preferredLabel,
-        options,
-        parentType: node.type,
-        index: idx,
-        childType,
-        parentNode: node,
-        node: child,
-        source: opts?.source ?? "base",
-        isDigable: (child.namedChildren || []).length > 0,
-        revealStart,
-        revealEndBeforeChild,
-        revealEndAfterChild,
-      });
-    }
+    questions.push({
+      stem: "What comes next?",
+      answerLabel: preferredLabel,
+      options,
+      parentType: node.type,
+      index: idx,
+      childType,
+      parentNode: node,
+      node: child,
+      source: opts?.source ?? "base",
+      revealStart,
+      revealEndBeforeChild,
+      revealEndAfterChild,
+    });
   });
   return questions;
 };
@@ -408,15 +390,6 @@ export const QuizViewer = ({
     () => curation.isDocstringNode || (() => false),
     [curation.isDocstringNode]
   );
-  // Setup state
-  const containerTypes = useMemo(
-    () => Array.from(gatherContainerTypes(root, new Set<string>())),
-    [root]
-  );
-  const [breakdownTypes, setBreakdownTypes] = useState<Set<string>>(
-    () => new Set(containerTypes.filter((t) => BLOCK_TYPES.has(t)))
-  );
-
   // Custom quiz selection state
   const [selectedCustom, setSelectedCustom] = useState<
     SavedCustomQuizV11 | undefined
@@ -437,10 +410,6 @@ export const QuizViewer = ({
   const [expandedOptions, setExpandedOptions] = useState<
     Record<string, boolean>
   >({});
-  const hasExpanded = useMemo(
-    () => questions.some((q) => q.source === "expanded"),
-    [questions]
-  );
 
   // Save a generated heuristic quiz to the database via /api/quizzes
   const saveHeuristicQuiz = async (
@@ -560,7 +529,7 @@ export const QuizViewer = ({
     if (mode === "active") {
       const qs = selectedCustom
         ? generateQuestionsFromCustom(selectedCustom, code, root)
-        : generateQuestions(root, breakdownTypes, code, { source: "base" }, shouldSkipNode);
+        : generateQuestions(root, code, { source: "base" }, shouldSkipNode);
       setQuestions(qs);
       setCurrent(0);
       setSelected(undefined);
@@ -573,7 +542,7 @@ export const QuizViewer = ({
       const initialReveal = qs.length > 0 ? revealBeforeForQuestion(qs[0]) : undefined;
       onRevealChange?.(initialReveal);
     }
-  }, [mode, root, breakdownTypes, code, selectedCustom, shouldSkipNode]);
+  }, [mode, root, code, selectedCustom, shouldSkipNode]);
 
   // Clear reveal when leaving quiz modes
   useEffect(() => {
@@ -585,19 +554,9 @@ export const QuizViewer = ({
   const total = questions.length;
   const currentQ = questions[current];
 
-  const handleToggleType = (type: string) => {
-    setBreakdownTypes((prev) => {
-      const next = new Set(prev);
-      if (next.has(type)) next.delete(type);
-      else next.add(type);
-      return next;
-    });
-  };
+
 
   const renderSetup = () => {
-    // Show unique container-like types available for breakdown selection
-    const preview = generateQuestions(root, breakdownTypes, code, undefined, shouldSkipNode);
-
     return (
       <div className="space-y-4">
         <div className="mb-2">
@@ -607,46 +566,8 @@ export const QuizViewer = ({
           </p>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-          <p className="mb-2 text-sm text-slate-700">
-            Break down these node types into their children:
-          </p>
-          {containerTypes.length === 0 ? (
-            <p className="text-xs italic text-slate-400">
-              No container nodes detected
-            </p>
-          ) : (
-            <ul className="grid grid-cols-2 gap-2">
-              {containerTypes.map((t) => (
-                <li
-                  key={t}
-                  className="flex items-center gap-2 rounded bg-white px-2 py-1 text-sm shadow-sm"
-                >
-                  <input
-                    id={`bd-${t}`}
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500"
-                    checked={breakdownTypes.has(t)}
-                    onChange={() => handleToggleType(t)}
-                  />
-                  <label
-                    htmlFor={`bd-${t}`}
-                    className="font-mono text-xs text-slate-700"
-                  >
-                    {t}
-                  </label>
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
-
         <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <div className="flex items-center justify-between">
-            <span className="text-sm text-slate-700">
-              Preview questions:{" "}
-              <span className="font-semibold">{preview.length}</span>
-            </span>
+          <div className="flex items-center justify-end">
             <div className="flex gap-2">
               <button
                 type="button"
@@ -884,31 +805,6 @@ export const QuizViewer = ({
       return items;
     })();
 
-    const handleDigDeeper = () => {
-      if (selectedCustom) return; // Only supported for AST-sourced questions
-      const q = questions[current];
-      const childNode = q?.node;
-      if (
-        !childNode ||
-        !childNode.namedChildren ||
-        childNode.namedChildren.length === 0
-      )
-        return;
-      const deeper = generateQuestions(childNode, breakdownTypes, code, {
-        source: "expanded",
-      }, shouldSkipNode);
-      if (!deeper.length) return;
-      const before = questions.slice(0, current);
-      const after = questions.slice(current + 1);
-      const nextQs = [...before, ...deeper, ...after];
-      setQuestions(nextQs);
-      setAnswers(new Array(nextQs.length).fill(undefined));
-      setAnsweredFlags(new Array(nextQs.length).fill(false));
-      setSelected(undefined);
-      setCurrent(before.length);
-      const first = deeper[0];
-      onRevealChange?.(revealBeforeForQuestion(first));
-    };
 
     return (
       <div className="space-y-4">
@@ -925,9 +821,6 @@ export const QuizViewer = ({
           </div>
           <div className="text-xs text-slate-500">
             Q {current + 1} / {total} · Score {score}
-            {hasExpanded && (
-              <span className="ml-2 text-amber-600">· Expanded</span>
-            )}
           </div>
         </div>
 
@@ -1012,17 +905,7 @@ export const QuizViewer = ({
               <ChevronsLeft className="h-4 w-4" />
               Prev
             </button>
-            {!selectedCustom && (
-              <button
-                type="button"
-                className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-                onClick={handleDigDeeper}
-                disabled={!currentQ?.node || !currentQ?.isDigable}
-              >
-                <BookOpen className="h-4 w-4" />
-                Dig Deeper
-              </button>
-            )}
+
             <div className="flex items-center gap-2">
               <label htmlFor="q-input" className="text-xs text-slate-500">
                 Go to
