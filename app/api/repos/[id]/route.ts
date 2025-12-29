@@ -4,11 +4,20 @@ import { auth } from "@clerk/nextjs/server";
 import { getDb } from "../../../../src/lib/mongodb";
 import { ObjectId } from "mongodb";
 
+const DEV_USER_ID = "dev-push-project";
+
 export async function GET(
   _req: Request,
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const { userId } = await auth();
+
+    // Build user filter: allow access to own repos + dev repos
+    const userFilter = userId
+      ? { userId: { $in: [userId, DEV_USER_ID] } }
+      : { userId: DEV_USER_ID };
+
     const db = await getDb();
     const repos = db.collection("repos");
     const { id } = await context.params;
@@ -16,8 +25,8 @@ export async function GET(
 
     const agg = await repos
       .aggregate([
-        // Allow fetching repo info regardless of owner
-        { $match: { repoId: _id } as any },
+        // Filter by user: only show user's own repos + dev repos
+        { $match: { repoId: _id, ...userFilter } as any },
         {
           $group: {
             _id: "$repoId",
@@ -67,13 +76,13 @@ export async function DELETE(
     const { id } = await context.params;
     const _id = safeObjectId(id);
 
-    // Check if repo exists (don't filter by userId since repos may have been
-    // created with a different Clerk user ID in different environments)
-    const exists = await repos.findOne({ repoId: _id } as any, { projection: { _id: 1 } });
+    // Check if repo exists AND belongs to the user (or is a dev repo)
+    const userFilter = { userId: { $in: [userId, DEV_USER_ID] } };
+    const exists = await repos.findOne({ repoId: _id, ...userFilter } as any, { projection: { _id: 1 } });
     if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
-    // Delete all files for this repo (auth check above ensures only logged-in users can delete)
-    await repos.deleteMany({ repoId: _id } as any);
+    // Delete all files for this repo (only if user owns it per check above)
+    await repos.deleteMany({ repoId: _id, ...userFilter } as any);
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });

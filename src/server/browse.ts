@@ -38,6 +38,8 @@ async function getOptionalUserId(): Promise<string | null> {
   }
 }
 
+const DEV_USER_ID = "dev-push-project";
+
 export async function listReposAndProjects(): Promise<TopLevelListing> {
   // Be resilient when MongoDB is unavailable (e.g., offline or DNS SRV blocked)
   // If DB connection fails, return empty lists instead of erroring the page.
@@ -48,13 +50,22 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     return { repos: [], projects: [] };
   }
 
+  // Get current user (if logged in) for filtering
+  const userId = await getOptionalUserId();
+
+  // Build user filter: show current user's items + dev items
+  // If not logged in, only show dev items
+  const userFilter = userId
+    ? { userId: { $in: [userId, DEV_USER_ID] } }
+    : { userId: DEV_USER_ID };
+
   const files = db.collection("files");
   const reposCol = db.collection("repos");
 
-  // Repos are stored in the "repos" collection
+  // Repos are stored in the "repos" collection - filter by user
   const repoAgg = await reposCol
     .aggregate([
-      { $match: { repoId: { $ne: null } } },
+      { $match: { repoId: { $ne: null }, ...userFilter } },
       {
         $group: {
           _id: "$repoId",
@@ -65,10 +76,10 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     ])
     .toArray();
 
-  // Projects are stored in the "files" collection - aggregate to get projectName
+  // Projects are stored in the "files" collection - filter by user
   const projectAgg = await files
     .aggregate([
-      { $match: { projectId: { $ne: null } } },
+      { $match: { projectId: { $ne: null }, ...userFilter } },
       {
         $group: {
           _id: "$projectId",

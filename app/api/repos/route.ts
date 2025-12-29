@@ -8,13 +8,23 @@ import { ObjectId } from "mongodb";
 
 type PostBody = { url: string };
 
+const DEV_USER_ID = "dev-push-project";
+
 export async function GET(req: Request) {
   try {
+    const { userId } = await auth();
+
+    // Build user filter: show current user's repos + dev repos
+    // If not logged in, only show dev repos
+    const userFilter = userId
+      ? { userId: { $in: [userId, DEV_USER_ID] } }
+      : { userId: DEV_USER_ID };
+
     const db = await getDb();
     const reposCol = db.collection("repos");
     const pipeline = [
-      // Show all repos across all users
-      { $match: { repoId: { $ne: null } } },
+      // Filter by user: show user's own repos + dev repos
+      { $match: { repoId: { $ne: null }, ...userFilter } },
       {
         $group: {
           _id: "$repoId",
