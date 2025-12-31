@@ -558,44 +558,18 @@ export const QuizViewer = ({
 
   const renderSetup = () => {
     return (
-      <div className="space-y-4">
-        <div className="mb-2">
-          <h3 className="text-lg font-semibold text-slate-800">Quiz Setup</h3>
-          <p className="text-xs uppercase tracking-wide text-slate-500">
-            Starting from: <span className="font-mono">{root.type}</span>
-          </p>
-        </div>
+      <div className="space-y-6">
+        {/* Generate & Save Preset */}
+        <div className="space-y-3">
+          <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+            Generate & Save Preset
+          </h2>
 
-        <div className="flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 shadow-sm">
-          <div className="flex items-center justify-end">
-            <div className="flex gap-2">
-              <button
-                type="button"
-                className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-                onClick={onCancel}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
-                onClick={() => {
-                  setSelectedCustom(undefined);
-                  onStart();
-                }}
-              >
-                Start Quiz
-              </button>
-            </div>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2 pt-1">
-            <span className="text-xs uppercase tracking-wide text-slate-500">
-              Heuristic presets:
-            </span>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {/* Shallow Option */}
             <button
               type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition-all hover:border-purple-300 hover:shadow-md"
               onClick={() => {
                 if (!root) return;
                 const payload = buildEnginePayload(root, "shallow");
@@ -609,11 +583,23 @@ export const QuizViewer = ({
                   .catch(() => alert("Failed to save heuristic shallow quiz."));
               }}
             >
-              Shallow (Line-by-Line)
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-purple-50 transition-colors group-hover:bg-purple-100">
+                  <svg className="h-5 w-5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-slate-900">Shallow</h3>
+                  <p className="mt-1 text-sm text-slate-600">Line-by-line</p>
+                </div>
+              </div>
             </button>
+
+            {/* Deep Option */}
             <button
               type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
+              className="group relative overflow-hidden rounded-xl border border-slate-200 bg-white p-5 text-left shadow-sm transition-all hover:border-pink-300 hover:shadow-md"
               onClick={() => {
                 if (!root) return;
                 const payload = buildEnginePayload(root, "deep");
@@ -622,21 +608,32 @@ export const QuizViewer = ({
                   .catch(() => alert("Failed to save heuristic deep quiz."));
               }}
             >
-              Deep (With Expression Detail)
+              <div className="flex items-start gap-3">
+                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-pink-50 transition-colors group-hover:bg-pink-100">
+                  <svg className="h-5 w-5 text-pink-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
+                  </svg>
+                </div>
+                <div className="flex-1">
+                  <h3 className="font-semibold text-slate-900">Deep</h3>
+                  <p className="mt-1 text-sm text-slate-600">Expression detail</p>
+                </div>
+              </div>
             </button>
           </div>
         </div>
 
+        {/* Saved Quizzes */}
         <ErrorBoundary
           fallback={
-            <div className="rounded border border-rose-200 bg-rose-50 p-3 text-sm text-rose-600">
+            <div className="rounded-xl border border-rose-200 bg-rose-50 p-4 text-sm text-rose-600">
               Failed to load quizzes.
             </div>
           }
         >
           <Suspense
             fallback={
-              <div className="rounded border border-slate-200 bg-slate-50 p-3 text-sm text-slate-600">
+              <div className="rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-600">
                 Loading saved quizzes…
               </div>
             }
@@ -651,6 +648,27 @@ export const QuizViewer = ({
             />
           </Suspense>
         </ErrorBoundary>
+
+        {/* Action Buttons */}
+        <div className="flex items-center justify-end gap-3 pt-2">
+          <button
+            type="button"
+            className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+            onClick={onCancel}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600"
+            onClick={() => {
+              setSelectedCustom(undefined);
+              onStart();
+            }}
+          >
+            Start Quiz
+          </button>
+        </div>
       </div>
     );
   };

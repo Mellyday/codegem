@@ -420,35 +420,45 @@ export function SavedCustomQuizzesPanel({
   };
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <p className="text-sm text-slate-700">Saved Custom Quizzes</p>
+    <div className="space-y-3">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+          Saved Quizzes
+        </h2>
         <button
           type="button"
-          className="text-xs text-slate-500 underline decoration-dotted"
+          className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
           onClick={load}
           disabled={loading}
         >
+          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
           {loading ? "Loading…" : "Refresh"}
         </button>
       </div>
+
+      {/* Status Message */}
       {status && (
-        <div className="mb-2 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-700">
           {status}
         </div>
       )}
+
+      {/* Progress Indicator */}
       {progress && progress.total > 0 && (
-        <div className="mb-2 rounded border border-slate-200 bg-white px-3 py-2 text-xs text-slate-700 shadow-sm">
-          <div className="flex items-center justify-between text-[11px] uppercase tracking-wide text-slate-500">
+        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+          <div className="flex items-center justify-between text-xs font-medium text-slate-600">
             <span>Generating distractors</span>
-            <span>
+            <span className="font-mono">
               {progress.completed}/{progress.total}
               {progress.failed ? ` · ${progress.failed} failed` : ""}
             </span>
           </div>
-          <div className="mt-2 h-2 rounded-full bg-slate-200">
+          <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
             <div
-              className="h-2 rounded-full bg-amber-500 transition-all"
+              className="h-full bg-amber-500 transition-all duration-300"
               style={{
                 width: `${progress.total > 0
                   ? Math.min(
@@ -462,15 +472,24 @@ export function SavedCustomQuizzesPanel({
           </div>
         </div>
       )}
+
+      {/* Error Message */}
       {error && (
-        <div className="mb-2 rounded border border-rose-200 bg-rose-50 p-2 text-xs text-rose-600">
+        <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-700">
           {error}
         </div>
       )}
+
+      {/* Quiz List */}
       {list.length === 0 && !loading ? (
-        <p className="text-xs italic text-slate-400">No custom quizzes saved</p>
+        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-8 text-center">
+          <svg className="mx-auto h-10 w-10 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+          </svg>
+          <p className="mt-2 text-sm text-slate-500">No custom quizzes saved</p>
+        </div>
       ) : (
-        <ul className="space-y-2">
+        <ul className="space-y-3">
           {list.map((q) => {
             // Fix #11: Enforce minimum distractor counts (6 for single, 10 for multi)
             const hasDistractors =
@@ -484,30 +503,57 @@ export function SavedCustomQuizzesPanel({
             return (
               <li
                 key={q.id}
-                className="flex items-center justify-between rounded bg-white px-3 py-2 text-xs shadow-sm"
+                className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition-shadow hover:shadow-md"
               >
-                <div className="flex-1">
-                  <div className="text-slate-700">
-                    {q.root.type}
-                    <span className="ml-2 text-slate-400">· {q.totalCards} cards</span>
+                {/* Quiz Info */}
+                <div className="mb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex-1">
+                      <h3 className="font-semibold text-slate-900">{q.root.type}</h3>
+                      <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                        <span>{new Date(q.createdAt).toLocaleDateString()}</span>
+                        <span className="flex items-center gap-1">
+                          <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                          </svg>
+                          {q.totalCards} cards
+                        </span>
+                      </div>
+                    </div>
+                    {/* Action Overflow Menu Trigger can go here if needed */}
                   </div>
-                  <div className="flex items-center gap-2 text-slate-400">
-                    <span>{new Date(q.createdAt).toLocaleString()}</span>
+
+                  {/* Badges */}
+                  <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    {q.profile && (
+                      <span
+                        className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${q.profile === "shallow"
+                          ? "bg-purple-50 text-purple-700"
+                          : q.profile === "deep"
+                            ? "bg-pink-50 text-pink-700"
+                            : "bg-blue-50 text-blue-700"
+                          }`}
+                      >
+                        {q.profile === "shallow" ? "Shallow" : q.profile === "deep" ? "Deep" : "Normal"}
+                      </span>
+                    )}
                     <span
-                      className={
-                        hasDistractors
-                          ? "text-green-600 font-semibold"
-                          : "text-amber-600 font-semibold"
-                      }
+                      className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${hasDistractors
+                        ? "bg-green-50 text-green-700"
+                        : "bg-amber-50 text-amber-700"
+                        }`}
                     >
-                      {hasDistractors ? "Distractors ready" : "Not generated"}
+                      <span className={`h-1.5 w-1.5 rounded-full ${hasDistractors ? "bg-green-500" : "bg-amber-500"}`} />
+                      {hasDistractors ? "With Distractors" : "No Distractors"}
                     </span>
                   </div>
                 </div>
-                <div className="ml-3 flex gap-2">
+
+                {/* Actions */}
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className="rounded-md bg-amber-500 px-2.5 py-1 text-white shadow hover:bg-amber-600"
+                    className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
                     onClick={() => onStartSaved(q)}
                     disabled={loading}
                   >
@@ -515,7 +561,7 @@ export function SavedCustomQuizzesPanel({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
                     onClick={() => handleGenerateDistractors(q.id)}
                     disabled={loading || generatingId === q.id}
                   >
@@ -523,7 +569,7 @@ export function SavedCustomQuizzesPanel({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
+                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
                     onClick={async () => {
                       const payload = buildQuizExportJson(q);
                       await copyTextToClipboard(JSON.stringify(payload, null, 2));
@@ -534,7 +580,7 @@ export function SavedCustomQuizzesPanel({
                   </button>
                   <button
                     type="button"
-                    className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-slate-700 shadow-sm hover:bg-slate-50"
+                    className="ml-auto rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 shadow-sm transition-colors hover:bg-rose-50 disabled:opacity-50"
                     onClick={async () => {
                       try {
                         await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, {
