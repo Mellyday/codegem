@@ -77,6 +77,10 @@ export const SandboxViewer = ({
     undefined
   );
 
+  // Quiz metadata for medal tracking
+  const [currentQuizId, setCurrentQuizId] = useState<string | undefined>(undefined);
+  const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0);
+
   // Compute parent folder URL based on fileKey
   const parentFolderUrl = useMemo(() => {
     if (!fileKey) return "/";
@@ -577,6 +581,12 @@ export const SandboxViewer = ({
                     onComplete={() => setViewMode("quiz_complete")}
                     onReturnToAst={() => setViewMode("ast")}
                     onRevealChange={setRevealEndIndex}
+                    quizId={currentQuizId}
+                    sectionIndex={currentSectionIndex}
+                    onQuizMetadataChange={(quizId, sectionIndex) => {
+                      setCurrentQuizId(quizId);
+                      setCurrentSectionIndex(sectionIndex);
+                    }}
                   />
                 )}
 

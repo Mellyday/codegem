@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { MedalBadge } from "./MedalBadge";
 
 export type SourceRef = {
   nodeType: string;
@@ -138,7 +139,7 @@ export function SavedCustomQuizzesPanel({
   onStartSaved,
 }: {
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
-  onStartSaved: (quiz: SavedCustomQuizV11) => void;
+  onStartSaved: (quiz: SavedCustomQuizV11, quizId: string, sectionIndex: number) => void;
 }) {
   const [list, setList] = useState<SavedCustomQuizV11[]>([]);
   const [loading, setLoading] = useState(false);
@@ -161,6 +162,10 @@ export function SavedCustomQuizzesPanel({
 
   // Context viewer state
   const [viewingContext, setViewingContext] = useState<number | null>(null);
+
+  // Medal state - keyed by quizId, then sectionIndex
+  type MedalInfo = { type: "bronze" | "silver" | "gold"; stars: 1 | 2 | 3 };
+  const [medals, setMedals] = useState<Record<string, Record<number, { medals: MedalInfo[] }>>>({});
 
   const copyTextToClipboard = async (text: string) => {
     const fallbackCopy = (value: string) => {
@@ -223,6 +228,21 @@ export function SavedCustomQuizzesPanel({
       setError(undefined);
       const data = await fetchSavedCustomQuizzes(fileKey);
       setList(data);
+
+      // Fetch medals for all quizzes
+      const medalData: Record<string, Record<number, { medals: MedalInfo[] }>> = {};
+      for (const quiz of data) {
+        try {
+          const res = await fetch(`/api/quiz-attempts/medals?quizId=${encodeURIComponent(quiz.id)}`);
+          if (res.ok) {
+            const quizMedals = await res.json();
+            medalData[quiz.id] = quizMedals;
+          }
+        } catch (e) {
+          console.error(`Failed to fetch medals for quiz ${quiz.id}:`, e);
+        }
+      }
+      setMedals(medalData);
     } catch (e) {
       setError("Could not load saved quizzes.");
     } finally {
@@ -659,7 +679,7 @@ export function SavedCustomQuizzesPanel({
     const sections = getSections(quiz);
     if (sectionIndex === undefined || sections.length === 1) {
       // Start entire quiz
-      onStartSaved(quiz);
+      onStartSaved(quiz, quiz.id, 0);
     } else {
       // Start specific section
       const section = sections[sectionIndex];
@@ -668,7 +688,7 @@ export function SavedCustomQuizzesPanel({
         cards: quiz.cards.slice(section.start, section.end),
         totalCards: section.end - section.start,
       };
-      onStartSaved(sectionQuiz);
+      onStartSaved(sectionQuiz, quiz.id, sectionIndex);
     }
   };
 
@@ -915,18 +935,22 @@ export function SavedCustomQuizzesPanel({
                       const sections = getSections(q);
                       if (sections.length === 1) {
                         // No sections, single Start button
+                        const sectionMedals = medals[q.id]?.[0]?.medals || [];
                         return (
-                          <button
-                            type="button"
-                            className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
-                            onClick={() => handleStartSection(q)}
-                            disabled={loading}
-                          >
-                            Start
-                          </button>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+                              onClick={() => handleStartSection(q)}
+                              disabled={loading}
+                            >
+                              Start
+                            </button>
+                            <MedalBadge medals={sectionMedals} />
+                          </div>
                         );
                       } else {
-                        // Has sections, show all section buttons
+                        // Has sections, show all section buttons with medals
                         return (
                           <>
                             <button
@@ -937,18 +961,23 @@ export function SavedCustomQuizzesPanel({
                             >
                               Start All
                             </button>
-                            {sections.map((section) => (
-                              <button
-                                key={section.index}
-                                type="button"
-                                className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:opacity-50"
-                                onClick={() => handleStartSection(q, section.index)}
-                                disabled={loading}
-                                title={`Cards ${section.start + 1}-${section.end} (${section.end - section.start} questions)`}
-                              >
-                                {section.name}
-                              </button>
-                            ))}
+                            {sections.map((section) => {
+                              const sectionMedals = medals[q.id]?.[section.index]?.medals || [];
+                              return (
+                                <div key={section.index} className="flex items-center gap-1.5">
+                                  <button
+                                    type="button"
+                                    className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:opacity-50"
+                                    onClick={() => handleStartSection(q, section.index)}
+                                    disabled={loading}
+                                    title={`Cards ${section.start + 1}-${section.end} (${section.end - section.start} questions)`}
+                                  >
+                                    {section.name}
+                                  </button>
+                                  <MedalBadge medals={sectionMedals} />
+                                </div>
+                              );
+                            })}
                           </>
                         );
                       }

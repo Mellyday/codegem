@@ -24,6 +24,11 @@ export type QuizViewerProps = {
   onReturnToAst: () => void;
   // Notify parent of the absolute end index to reveal in the code viewer
   onRevealChange?: (endIndex: number | undefined) => void;
+  // Medal tracking for saved quizzes
+  quizId?: string;
+  sectionIndex?: number;
+  // Callback to notify parent when quiz metadata changes (starting saved quiz)
+  onQuizMetadataChange?: (quizId: string, sectionIndex: number) => void;
 };
 
 type Question = {
@@ -382,6 +387,9 @@ export const QuizViewer = ({
   onComplete,
   onReturnToAst,
   onRevealChange,
+  quizId,
+  sectionIndex,
+  onQuizMetadataChange,
 }: QuizViewerProps) => {
   const languageTools = useMemo(
     () => getLanguageToolsForFileName(fileName ?? fileKey?.path),
@@ -645,9 +653,11 @@ export const QuizViewer = ({
           >
             <SavedCustomQuizzesPanel
               fileKey={fileKey}
-              onStartSaved={(q) => {
+              onStartSaved={(q, qId, secIdx) => {
                 // panel is isolated; only it remounts on refresh/errors
                 setSelectedCustom(q as any);
+                // Notify parent of quiz metadata for medal tracking
+                onQuizMetadataChange?.(qId, secIdx);
                 onStart();
               }}
             />
@@ -753,8 +763,26 @@ export const QuizViewer = ({
       onRevealChange?.(revealAfterForQuestion(currentQ));
     };
 
-    const next = () => {
+    const next = async () => {
       if (current + 1 >= total) {
+        // Quiz complete - record attempt if quizId exists
+        if (quizId) {
+          try {
+            await fetch("/api/quiz-attempts", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                quizId,
+                sectionIndex: sectionIndex ?? 0,
+                totalQuestions: total,
+                correctAnswers: score,
+              }),
+            });
+          } catch (error) {
+            console.error("Failed to record quiz attempt:", error);
+            // Continue to onComplete even if recording fails
+          }
+        }
         onComplete();
       } else {
         const nextIdx = current + 1;
