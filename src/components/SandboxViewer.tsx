@@ -69,7 +69,8 @@ export const SandboxViewer = ({
   const [maskRanges, setMaskRanges] = useState<
     { start: number; end: number }[]
   >([]);
-
+  // Ref to the scrollable code container so we can control scroll position
+  const codeScrollRef = useRef<HTMLDivElement | null>(null);
   // Zoom state for Tree-sitter AST: stack of previous roots and current zoom root
   const [zoomStackTs, setZoomStackTs] = useState<TreeSitterAstNode[]>([]);
   const [zoomRootTs, setZoomRootTs] = useState<TreeSitterAstNode | undefined>(
@@ -218,9 +219,40 @@ export const SandboxViewer = ({
     }
   }, [storageKey, viewMode, revealEndIndex, maskRanges]);
 
+  // When in quiz mode, keep the code view scrolled to the bottom (show latest lines)
+  useEffect(() => {
+    if (
+      (viewMode === "quiz_active" || viewMode === "quiz_complete") &&
+      codeScrollRef.current
+    ) {
+      const el = codeScrollRef.current;
+      // Use requestAnimationFrame to ensure DOM updates are flushed
+      requestAnimationFrame(() => {
+        try {
+          el.scrollTop = el.scrollHeight;
+        } catch {
+          // ignore scroll errors
+        }
+      });
+    }
+  }, [viewMode, revealEndIndex]);
 
+  // Helper: check if a Tree-sitter node covers a given row
+  const nodeCoversRow = (node: TreeSitterAstNode, row: number): boolean =>
+    row >= node.startPosition.row && row <= node.endPosition.row;
 
-
+  // Helper: find the smallest Tree-sitter node that covers a given row
+  const findSmallestCoveringNode = (
+    node: TreeSitterAstNode,
+    row: number
+  ): TreeSitterAstNode | undefined => {
+    if (!nodeCoversRow(node, row)) return undefined;
+    for (const child of node.namedChildren || []) {
+      const found = findSmallestCoveringNode(child, row);
+      if (found) return found;
+    }
+    return node;
+  };
 
   // Active Tree-sitter root: either zoomed root or top-level AST (Tree-sitter only)
   const activeTsRoot: TreeSitterAstNode | undefined = useMemo(() => {
@@ -236,7 +268,79 @@ export const SandboxViewer = ({
 
 
 
+  // When zoomed, restrict the displayed code precisely to the node's character span,
+  // and when in quiz mode, further clip to the currently revealed prefix.
+  const codeSlice = useMemo(() => {
+    if (state.status !== "loaded") {
+      return { lines: [] as string[], baseRow: 0 };
+    }
 
+    // Determine slice bounds (zoomed or full file)
+    const sliceStart = zoomRootTs?.startIndex ?? 0;
+    const sliceEnd = zoomRootTs?.endIndex ?? state.code.length;
+    const baseRow = zoomRootTs?.startPosition.row ?? 0;
+    let visible = state.code.substring(sliceStart, sliceEnd);
+
+    // Apply reveal clipping for lesson/quiz modes
+    if (viewMode !== "ast" && typeof revealEndIndex === "number") {
+      const relativeLimit = Math.max(
+        0,
+        Math.min(visible.length, revealEndIndex - sliceStart)
+      );
+      visible = visible.substring(0, relativeLimit);
+    }
+
+    // Apply masking after clipping to avoid leaking keywords like "while"/"if"
+    if (viewMode !== "ast" && maskRanges.length) {
+      const chars = Array.from(visible);
+      for (const { start, end } of maskRanges) {
+        const s = Math.max(0, start - sliceStart);
+        const e = Math.min(visible.length, end - sliceStart);
+        for (let i = s; i < e; i++) {
+          if (chars[i] !== "\n") chars[i] = " ";
+        }
+      }
+      visible = chars.join("");
+    }
+
+    return { lines: visible.split("\n"), baseRow };
+  }, [
+    state.status,
+    state.status === "loaded" ? state.code : undefined,
+    zoomRootTs,
+    viewMode,
+    revealEndIndex,
+    maskRanges,
+  ]);
+
+  // Responsive, content-sized line number gutter width (in ch units)
+  const lineDigits = useMemo(() => {
+    const count = codeSlice.lines.length || 0;
+    const digits = Math.max(2, String(count).length);
+    return digits;
+  }, [codeSlice.lines.length]);
+
+  // Character-range helpers (slice-relative) for precise highlighting
+  const selectedCharRange = useMemo(() => {
+    if (!selectedTsNode) return undefined;
+    // If not zoomed, the slice starts at 0. If zoomed, it starts at the root's index.
+    const sliceStartIndex = zoomRootTs?.startIndex ?? 0;
+
+    const start = selectedTsNode.startIndex - sliceStartIndex;
+    const end = selectedTsNode.endIndex - sliceStartIndex;
+
+    return { start, end };
+  }, [selectedTsNode, zoomRootTs]);
+
+  const hoveredCharRange = useMemo(() => {
+    if (!hoveredTsNode) return undefined;
+    const sliceStartIndex = zoomRootTs?.startIndex ?? 0;
+
+    const start = hoveredTsNode.startIndex - sliceStartIndex;
+    const end = hoveredTsNode.endIndex - sliceStartIndex;
+
+    return { start, end };
+  }, [hoveredTsNode, zoomRootTs]);
 
   return (
     <div className="min-h-screen bg-[#E8EBF0] px-8 py-12">
@@ -281,9 +385,9 @@ export const SandboxViewer = ({
         )}
 
         {state.status === "loaded" && (
-          <div>
+          <div className={viewMode === "quiz_setup" ? "" : "grid grid-cols-1 gap-6 lg:grid-cols-2"}>
             {/* Main Content - AST / Quiz / Lesson */}
-            <div className="rounded-xl bg-white p-6 shadow-sm flex flex-col">
+            <div className={viewMode === "quiz_setup" ? "rounded-xl bg-white p-6 shadow-sm flex flex-col" : "order-2 lg:order-1 rounded-xl bg-white p-6 shadow-sm flex flex-col"}>
               {viewMode === "ast" && (
                 <>
                   <div className="mb-4 space-y-1">
@@ -492,6 +596,158 @@ export const SandboxViewer = ({
                   />
                 )}
             </div>
+
+            {/* Right Column - Source Code (hidden in quiz_setup mode) */}
+            {viewMode !== "quiz_setup" && (
+              <div className="order-1 lg:order-2 rounded-xl bg-white p-6 shadow-sm">
+                <h2 className="mb-4 text-lg font-semibold text-slate-800">
+                  SOURCE CODE
+                </h2>
+                <div
+                  ref={codeScrollRef}
+                  className="min-h-[45vh] overflow-auto rounded-lg bg-slate-50 p-4 lg:min-h-0 lg:max-h-[600px]"
+                >
+                  {/*
+                  Use a normal div with explicit whitespace + monospace so the
+                  inner line <div>s don't break <pre> semantics on some browsers.
+                  This fixes jagged line numbers and collapsed indentation,
+                  especially on mobile Safari.
+                */}
+                  <div className="text-xs leading-relaxed font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
+                    {(() => {
+                      let charIndex = 0; // slice-relative character index
+                      const activeRange = selectedCharRange ?? hoveredCharRange;
+
+                      return codeSlice.lines.map((line: string, i: number) => {
+                        const lineStart = charIndex;
+                        const lineEnd = lineStart + line.length;
+                        charIndex += line.length + 1; // +1 for the newline character
+
+                        const getHighlightClasses = (isFullLine: boolean) => {
+                          if (!activeRange) return "";
+                          const isSelected = !!selectedCharRange;
+                          if (isFullLine) {
+                            return isSelected ? "bg-amber-100/70" : "bg-amber-50";
+                          }
+                          return isSelected
+                            ? "bg-amber-200/80 rounded"
+                            : "bg-amber-100 rounded";
+                        };
+
+                        const handleLineClick = () => {
+                          if (
+                            parseResult?.status === "success" &&
+                            parseResult.parser === "tree-sitter"
+                          ) {
+                            const root =
+                              activeTsRoot ??
+                              (parseResult.ast as TreeSitterAstNode);
+                            const absoluteRow = i + codeSlice.baseRow;
+                            const found = findSmallestCoveringNode(
+                              root,
+                              absoluteRow
+                            );
+                            if (found) setSelectedTsNode(found);
+                          }
+                        };
+
+                        // Case 1: No active highlight on this line
+                        if (
+                          !activeRange ||
+                          lineEnd < activeRange.start ||
+                          lineStart > activeRange.end
+                        ) {
+                          return (
+                            <div
+                              key={i}
+                              className="flex items-start cursor-pointer"
+                              onClick={handleLineClick}
+                            >
+                              <span
+                                className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                                style={{ width: `${lineDigits}ch` }}
+                              >
+                                {i + 1}
+                              </span>
+                              <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                                {line || " "}
+                              </code>
+                            </div>
+                          );
+                        }
+
+                        // Case 2: The entire line is inside the highlight
+                        if (
+                          lineStart >= activeRange.start &&
+                          lineEnd <= activeRange.end
+                        ) {
+                          return (
+                            <div
+                              key={i}
+                              className={`flex items-start cursor-pointer ${getHighlightClasses(
+                                true
+                              )}`}
+                              onClick={handleLineClick}
+                            >
+                              <span
+                                className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                                style={{ width: `${lineDigits}ch` }}
+                              >
+                                {i + 1}
+                              </span>
+                              <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                                {line || " "}
+                              </code>
+                            </div>
+                          );
+                        }
+
+                        // Case 3: Partial highlight
+                        const startHighlight = Math.max(
+                          lineStart,
+                          activeRange.start
+                        );
+                        const endHighlight = Math.min(lineEnd, activeRange.end);
+                        const startIndexInLine = startHighlight - lineStart;
+                        const endIndexInLine = endHighlight - lineStart;
+
+                        const before = line.substring(0, startIndexInLine);
+                        const highlighted = line.substring(
+                          startIndexInLine,
+                          endIndexInLine
+                        );
+                        const after = line.substring(endIndexInLine);
+
+                        return (
+                          <div
+                            key={i}
+                            className="flex items-start cursor-pointer"
+                            onClick={handleLineClick}
+                          >
+                            <span
+                              className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                              style={{ width: `${lineDigits}ch` }}
+                            >
+                              {i + 1}
+                            </span>
+                            <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
+                              {before && <span>{before}</span>}
+                              {highlighted && (
+                                <span className={getHighlightClasses(false)}>
+                                  {highlighted}
+                                </span>
+                              )}
+                              {after && <span>{after}</span>}
+                              {!before && !highlighted && !after && " "}
+                            </code>
+                          </div>
+                        );
+                      });
+                    })()}
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
