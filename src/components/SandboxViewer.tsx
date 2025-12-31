@@ -753,14 +753,27 @@ export const SandboxViewer = ({
 
         {/* Footer and Navigation */}
         <div className="mt-8 flex items-end justify-between">
-          {/* Back Button - goes to parent folder */}
-          <Link
-            href={parentFolderUrl}
-            className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
-          >
-            <FolderOpen className="h-4 w-4" />
-            Back to Folder
-          </Link>
+          {/* Navigation Buttons */}
+          <div className="flex items-center gap-3">
+            {/* Back to File - shown when in lesson or quiz views */}
+            {viewMode !== "ast" && (
+              <button
+                onClick={() => setViewMode("ast")}
+                className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
+              >
+                <FileText className="h-4 w-4" />
+                Back to File
+              </button>
+            )}
+            {/* Back to Folder - goes to parent folder */}
+            <Link
+              href={parentFolderUrl}
+              className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
+            >
+              <FolderOpen className="h-4 w-4" />
+              Back to Folder
+            </Link>
+          </div>
 
           {/* Made with Gemini Badge */}
           <div className="flex items-center gap-2 text-xs text-slate-500">

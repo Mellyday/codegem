@@ -232,13 +232,6 @@ export const LessonViewer: React.FC<LessonViewerProps> = ({
             <FileJson className="h-4 w-4" />
             Save Custom Quiz
           </button>
-          <button
-            type="button"
-            className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
-            onClick={onReturnToAst}
-          >
-            Return to AST
-          </button>
         </div>
       </div>
     );

@@ -656,7 +656,7 @@ export const QuizViewer = ({
             className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
             onClick={onCancel}
           >
-            Cancel
+            Back to File
           </button>
           <button
             type="button"
@@ -1512,13 +1512,6 @@ export const QuizViewer = ({
             Copy JSON
           </button>
         )}
-        <button
-          type="button"
-          className="rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600"
-          onClick={onReturnToAst}
-        >
-          Return to AST
-        </button>
       </div>
     </div>
   );
