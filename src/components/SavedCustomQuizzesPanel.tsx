@@ -45,6 +45,11 @@ export type SavedCustomQuizV11 = {
   root: { type: string; text?: string; start?: number; end?: number; path?: number[] };
   totalCards: number;
   cards: SavedCustomQuizCardV11[];
+  // Section markers: array of card indices where new sections begin
+  // e.g., [0, 5, 10] creates sections: 0-4, 5-9, 10-end
+  sectionMarkers?: number[];
+  // Optional custom names for each section
+  sectionNames?: string[];
 };
 
 async function fetchSavedCustomQuizzes(fileKey?: {
@@ -118,6 +123,9 @@ async function fetchSavedCustomQuizzes(fileKey?: {
             ? c.distractorPoolSize
             : undefined,
       })),
+      // Parse section markers and names
+      sectionMarkers: Array.isArray(q.sectionMarkers) ? q.sectionMarkers : undefined,
+      sectionNames: Array.isArray(q.sectionNames) ? q.sectionNames : undefined,
     }));
     return out;
   } catch {
@@ -142,6 +150,17 @@ export function SavedCustomQuizzesPanel({
     completed: number;
     failed: number;
   } | null>(null);
+
+  // Section editor state
+  const [editingSections, setEditingSections] = useState<SavedCustomQuizV11 | null>(null);
+  const [sectionMarkers, setSectionMarkers] = useState<number[]>([]);
+  const [sectionNames, setSectionNames] = useState<string[]>([]);
+
+  // Section selector state
+  const [selectingSection, setSelectingSection] = useState<SavedCustomQuizV11 | null>(null);
+
+  // Context viewer state
+  const [viewingContext, setViewingContext] = useState<number | null>(null);
 
   const copyTextToClipboard = async (text: string) => {
     const fallbackCopy = (value: string) => {
@@ -605,6 +624,138 @@ export function SavedCustomQuizzesPanel({
     }
   };
 
+  // Section helper functions
+  const getSections = (quiz: SavedCustomQuizV11) => {
+    const markers = quiz.sectionMarkers || [];
+    if (markers.length === 0) {
+      return [{ start: 0, end: quiz.totalCards, name: "All", index: 0 }];
+    }
+
+    const sections = [];
+    const sortedMarkers = [...markers].sort((a, b) => a - b);
+
+    // Always start with a section from 0
+    for (let i = 0; i < sortedMarkers.length; i++) {
+      const start = i === 0 ? 0 : sortedMarkers[i - 1];
+      const end = sortedMarkers[i];
+      const name = quiz.sectionNames?.[i] || `Section ${i + 1}`;
+      sections.push({ start, end, name, index: i });
+    }
+
+    // Add the final section from last marker to end
+    const lastMarker = sortedMarkers[sortedMarkers.length - 1];
+    const finalName = quiz.sectionNames?.[sortedMarkers.length] || `Section ${sortedMarkers.length + 1}`;
+    sections.push({
+      start: lastMarker,
+      end: quiz.totalCards,
+      name: finalName,
+      index: sortedMarkers.length
+    });
+
+    return sections;
+  };
+
+  const handleStartSection = (quiz: SavedCustomQuizV11, sectionIndex?: number) => {
+    const sections = getSections(quiz);
+    if (sectionIndex === undefined || sections.length === 1) {
+      // Start entire quiz
+      onStartSaved(quiz);
+    } else {
+      // Start specific section
+      const section = sections[sectionIndex];
+      const sectionQuiz: SavedCustomQuizV11 = {
+        ...quiz,
+        cards: quiz.cards.slice(section.start, section.end),
+        totalCards: section.end - section.start,
+      };
+      onStartSaved(sectionQuiz);
+    }
+  };
+
+  const handleEditSections = (quiz: SavedCustomQuizV11) => {
+    setEditingSections(quiz);
+    setSectionMarkers(quiz.sectionMarkers || []);
+    // Initialize with at least one section name if none exist
+    const names = quiz.sectionNames || [];
+    if (names.length === 0) {
+      setSectionNames(["Section 1"]);
+    } else {
+      setSectionNames(names);
+    }
+  };
+
+  const toggleMarker = (index: number) => {
+    if (sectionMarkers.includes(index)) {
+      // Remove marker
+      const markerIndex = sectionMarkers.indexOf(index);
+      const newMarkers = sectionMarkers.filter((m) => m !== index);
+
+      // Remove the section name that comes AFTER this marker
+      // (marker at position i creates section i+1, so remove sectionNames[i+1])
+      const newNames = sectionNames.filter((_, i) => i !== markerIndex + 1);
+
+      console.log('Removing marker:', { index, markerIndex, newMarkers, newNames });
+      setSectionMarkers(newMarkers);
+      setSectionNames(newNames);
+    } else {
+      // Add marker
+      const newMarkers = [...sectionMarkers, index].sort((a, b) => a - b);
+      const insertIndex = newMarkers.indexOf(index);
+
+      // Insert a new section name AFTER this marker position
+      // If we have markers [5, 10], we need names for: [0-4, 5-9, 10-end] = 3 names
+      const newNames = [...sectionNames];
+      newNames.splice(insertIndex + 1, 0, `Section ${insertIndex + 2}`);
+
+      console.log('Adding marker:', { index, insertIndex, newMarkers, newNames, totalSections: newMarkers.length + 1 });
+      setSectionMarkers(newMarkers);
+      setSectionNames(newNames);
+    }
+  };
+
+  const updateSectionName = (index: number, name: string) => {
+    setSectionNames((prev) => {
+      const newNames = [...prev];
+      newNames[index] = name;
+      return newNames;
+    });
+  };
+
+  const handleSaveSections = async () => {
+    if (!editingSections) return;
+
+    try {
+      const payload = {
+        sectionMarkers,
+        sectionNames,
+      };
+
+      console.log('Saving sections:', {
+        markers: sectionMarkers,
+        names: sectionNames,
+        markersLength: sectionMarkers.length,
+        namesLength: sectionNames.length,
+      });
+
+      const res = await fetch(`/api/quizzes/${encodeURIComponent(editingSections.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${res.status}`);
+      }
+
+      setEditingSections(null);
+      await load();
+    } catch (e: any) {
+      console.error('Save sections error:', e);
+      alert(e?.message || "Failed to save sections");
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Header */}
@@ -733,18 +884,18 @@ export function SavedCustomQuizzesPanel({
                     )}
                     <span
                       className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${hasDistractors
-                          ? "bg-green-50 text-green-700"
-                          : hasPartialDistractors
-                            ? "bg-blue-50 text-blue-700"
-                            : "bg-amber-50 text-amber-700"
+                        ? "bg-green-50 text-green-700"
+                        : hasPartialDistractors
+                          ? "bg-blue-50 text-blue-700"
+                          : "bg-amber-50 text-amber-700"
                         }`}
                     >
                       <span
                         className={`h-1.5 w-1.5 rounded-full ${hasDistractors
-                            ? "bg-green-500"
-                            : hasPartialDistractors
-                              ? "bg-blue-500"
-                              : "bg-amber-500"
+                          ? "bg-green-500"
+                          : hasPartialDistractors
+                            ? "bg-blue-500"
+                            : "bg-amber-500"
                           }`}
                       />
                       {hasDistractors
@@ -757,67 +908,438 @@ export function SavedCustomQuizzesPanel({
                 </div>
 
                 {/* Actions */}
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
-                    onClick={() => onStartSaved(q)}
-                    disabled={loading}
-                  >
-                    Start
-                  </button>
-                  {distractorStats.missing > 0 && (
+                <div className="space-y-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {/* Start buttons with section support */}
+                    {(() => {
+                      const sections = getSections(q);
+                      if (sections.length === 1) {
+                        // No sections, single Start button
+                        return (
+                          <button
+                            type="button"
+                            className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+                            onClick={() => handleStartSection(q)}
+                            disabled={loading}
+                          >
+                            Start
+                          </button>
+                        );
+                      } else {
+                        // Has sections, show all section buttons
+                        return (
+                          <>
+                            <button
+                              type="button"
+                              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+                              onClick={() => handleStartSection(q)}
+                              disabled={loading}
+                            >
+                              Start All
+                            </button>
+                            {sections.map((section) => (
+                              <button
+                                key={section.index}
+                                type="button"
+                                className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:opacity-50"
+                                onClick={() => handleStartSection(q, section.index)}
+                                disabled={loading}
+                                title={`Cards ${section.start + 1}-${section.end} (${section.end - section.start} questions)`}
+                              >
+                                {section.name}
+                              </button>
+                            ))}
+                          </>
+                        );
+                      }
+                    })()}
+
+                    {/* Edit Sections Button */}
                     <button
                       type="button"
-                      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm transition-colors hover:bg-blue-100 disabled:opacity-50"
-                      onClick={() => handleRegenerateMissing(q.id)}
-                      disabled={loading || generatingId === q.id}
-                      title={`Regenerate ${distractorStats.missing} missing card${distractorStats.missing === 1 ? '' : 's'}`}
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
+                      onClick={() => handleEditSections(q)}
+                      disabled={loading}
                     >
-                      {generatingId === q.id ? "Generating…" : `Regenerate Missing (${distractorStats.missing})`}
+                      Edit Sections
                     </button>
-                  )}
-                  <button
-                    type="button"
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
-                    onClick={() => handleGenerateDistractors(q.id)}
-                    disabled={loading || generatingId === q.id}
-                  >
-                    {generatingId === q.id ? "Generating…" : "Regenerate All"}
-                  </button>
-                  <button
-                    type="button"
-                    className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
-                    onClick={async () => {
-                      const payload = buildQuizExportJson(q);
-                      await copyTextToClipboard(JSON.stringify(payload, null, 2));
-                    }}
-                    disabled={loading}
-                  >
-                    Copy JSON
-                  </button>
-                  <button
-                    type="button"
-                    className="ml-auto rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 shadow-sm transition-colors hover:bg-rose-50 disabled:opacity-50"
-                    onClick={async () => {
-                      try {
-                        await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, {
-                          method: "DELETE",
-                          cache: "no-store",
-                        });
-                      } catch { }
-                      await load();
-                    }}
-                    disabled={loading}
-                  >
-                    Delete
-                  </button>
+
+                    {distractorStats.missing > 0 && (
+                      <button
+                        type="button"
+                        className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm transition-colors hover:bg-blue-100 disabled:opacity-50"
+                        onClick={() => handleRegenerateMissing(q.id)}
+                        disabled={loading || generatingId === q.id}
+                        title={`Regenerate ${distractorStats.missing} missing card${distractorStats.missing === 1 ? '' : 's'}`}
+                      >
+                        {generatingId === q.id ? "Generating…" : `Regenerate Missing (${distractorStats.missing})`}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
+                      onClick={() => handleGenerateDistractors(q.id)}
+                      disabled={loading || generatingId === q.id}
+                    >
+                      {generatingId === q.id ? "Generating…" : "Regenerate All"}
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
+                      onClick={async () => {
+                        const payload = buildQuizExportJson(q);
+                        await copyTextToClipboard(JSON.stringify(payload, null, 2));
+                      }}
+                      disabled={loading}
+                    >
+                      Copy JSON
+                    </button>
+                    <button
+                      type="button"
+                      className="ml-auto rounded-lg border border-rose-200 bg-white px-3 py-1.5 text-xs font-medium text-rose-600 shadow-sm transition-colors hover:bg-rose-50 disabled:opacity-50"
+                      onClick={async () => {
+                        try {
+                          await fetch(`/api/quizzes?id=${encodeURIComponent(q.id)}`, {
+                            method: "DELETE",
+                            cache: "no-store",
+                          });
+                        } catch { }
+                        await load();
+                      }}
+                      disabled={loading}
+                    >
+                      Delete
+                    </button>
+                  </div>
+
+                  {/* Sections List */}
+                  {(() => {
+                    const sections = getSections(q);
+                    if (sections.length > 1) {
+                      return (
+                        <div className="space-y-2">
+                          <div className="text-xs font-semibold text-slate-500 uppercase tracking-wider">
+                            Sections ({sections.length})
+                          </div>
+                          <div className="space-y-2">
+                            {sections.map((section) => (
+                              <div
+                                key={section.index}
+                                className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
+                              >
+                                <div className="flex-1 min-w-0">
+                                  <div className="font-medium text-sm text-slate-900">
+                                    {section.name}
+                                  </div>
+                                  <div className="text-xs text-slate-500 mt-0.5">
+                                    Cards {section.start + 1}-{section.end} · {section.end - section.start} questions
+                                  </div>
+                                </div>
+                                <button
+                                  type="button"
+                                  className="flex-shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+                                  onClick={() => handleStartSection(q, section.index)}
+                                  disabled={loading}
+                                >
+                                  Start
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    }
+                    return null;
+                  })()}
                 </div>
               </li>
             );
           })}
         </ul>
       )}
+
+      {/* Section Selector Modal */}
+      {selectingSection && (() => {
+        const sections = getSections(selectingSection);
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center"
+            onClick={() => setSelectingSection(null)}
+          >
+            <div
+              className="w-full max-w-md rounded-t-2xl bg-white sm:rounded-2xl shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="border-b border-slate-200 px-6 py-4">
+                <h3 className="text-lg font-semibold text-slate-900">Select Section</h3>
+                <p className="mt-1 text-sm text-slate-500">{selectingSection.root.type}</p>
+              </div>
+              <div className="max-h-96 overflow-y-auto p-4">
+                <div className="space-y-2">
+                  {sections.map((section) => (
+                    <button
+                      key={section.index}
+                      type="button"
+                      className="w-full rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition-all hover:border-amber-300 hover:bg-amber-50"
+                      onClick={() => {
+                        handleStartSection(selectingSection, section.index);
+                        setSelectingSection(null);
+                      }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-medium text-slate-900">{section.name}</span>
+                        <span className="text-sm text-slate-500">
+                          Cards {section.start + 1}-{section.end}
+                        </span>
+                      </div>
+                      <div className="mt-1 text-xs text-slate-500">
+                        {section.end - section.start} questions
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="border-t border-slate-200 px-6 py-4">
+                <button
+                  type="button"
+                  className="w-full rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+                  onClick={() => setSelectingSection(null)}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Section Editor Modal */}
+      {editingSections && (() => {
+        const cards = editingSections.cards;
+        const sortedMarkers = [...sectionMarkers].sort((a, b) => a - b);
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-end justify-center bg-black/50 p-4 sm:items-center overflow-y-auto"
+            onClick={() => setEditingSections(null)}
+          >
+            <div
+              className="w-full max-w-2xl my-8 rounded-t-2xl bg-white sm:rounded-2xl shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="border-b border-slate-200 px-6 py-4">
+                <h3 className="text-lg font-semibold text-slate-900">Edit Sections</h3>
+                <p className="mt-1 text-sm text-slate-500">{editingSections.root.type} - {cards.length} cards</p>
+              </div>
+
+              <div className="max-h-[60vh] overflow-y-auto p-6">
+                <div className="space-y-1">
+                  {cards.map((card, index) => {
+                    const isMarker = sortedMarkers.includes(index);
+                    const markerIndex = sortedMarkers.indexOf(index);
+                    const sectionName = sectionNames[markerIndex];
+
+                    return (
+                      <div key={index}>
+                        {/* Section Header (if this is a marker) */}
+                        {isMarker && (
+                          <div className="mb-2 flex items-center gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
+                            <input
+                              type="text"
+                              value={sectionName || `Section ${markerIndex + 1}`}
+                              onChange={(e) => updateSectionName(markerIndex, e.target.value)}
+                              className="flex-1 rounded border border-amber-200 bg-white px-2 py-1 text-sm font-medium text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                              placeholder="Section name"
+                            />
+                            <button
+                              type="button"
+                              className="rounded-lg border border-rose-200 bg-white px-3 py-1 text-xs font-medium text-rose-600 shadow-sm transition-colors hover:bg-rose-50"
+                              onClick={() => toggleMarker(index)}
+                              title="Remove section marker"
+                            >
+                              Remove
+                            </button>
+                          </div>
+                        )}
+
+                        {/* Card Preview */}
+                        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2">
+                                <div className="text-xs font-medium text-slate-500">
+                                  Card {index + 1} · {card.type}
+                                </div>
+                                {card.questionType === "multi" && (
+                                  <span className="flex-shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                                    Multi
+                                  </span>
+                                )}
+                              </div>
+                              <div className="mt-1 font-mono text-sm text-slate-900 break-all line-clamp-2">
+                                {card.text || "No answer"}
+                              </div>
+                              {card.questionType === "multi" && card.multiCorrect && card.multiCorrect.length > 1 && (
+                                <div className="mt-1 text-xs text-slate-500">
+                                  + {card.multiCorrect.length - 1} more answer{card.multiCorrect.length > 2 ? 's' : ''}
+                                </div>
+                              )}
+                            </div>
+                            {/* View Context Button */}
+                            <button
+                              type="button"
+                              className="flex-shrink-0 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50"
+                              onClick={() => setViewingContext(index)}
+                              title="View code context"
+                            >
+                              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                              </svg>
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Add Marker Button (between cards, except after last card) */}
+                        {index < cards.length - 1 && (
+                          <div className="flex justify-center py-2">
+                            <button
+                              type="button"
+                              className={`rounded-lg px-4 py-2 text-xs font-medium shadow-sm transition-all ${sortedMarkers.includes(index + 1)
+                                ? "border border-amber-300 bg-amber-50 text-amber-700 hover:bg-amber-100"
+                                : "border border-slate-200 bg-white text-slate-600 hover:bg-slate-50"
+                                }`}
+                              onClick={() => toggleMarker(index + 1)}
+                            >
+                              {sortedMarkers.includes(index + 1) ? (
+                                <span className="flex items-center gap-1">
+                                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
+                                  </svg>
+                                  Section Marker
+                                </span>
+                              ) : (
+                                <span className="flex items-center gap-1">
+                                  <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+                                  </svg>
+                                  Add Section Marker
+                                </span>
+                              )}
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Section Summary */}
+                {sortedMarkers.length > 0 && (
+                  <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
+                    <h4 className="text-sm font-semibold text-blue-900">
+                      {sortedMarkers.length} Section{sortedMarkers.length === 1 ? "" : "s"}
+                    </h4>
+                    <div className="mt-2 space-y-1 text-xs text-blue-700">
+                      {sortedMarkers.map((marker, idx) => {
+                        const start = marker;
+                        const end = idx < sortedMarkers.length - 1 ? sortedMarkers[idx + 1] : cards.length;
+                        const name = sectionNames[idx] || `Section ${idx + 1}`;
+                        return (
+                          <div key={idx}>
+                            {name}: Cards {start + 1}-{end} ({end - start} questions)
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="border-t border-slate-200 px-6 py-4">
+                <div className="flex gap-3">
+                  <button
+                    type="button"
+                    className="flex-1 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+                    onClick={() => setEditingSections(null)}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    className="flex-1 rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600"
+                    onClick={handleSaveSections}
+                  >
+                    Save Sections
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Context Viewer Modal */}
+      {viewingContext !== null && editingSections && (() => {
+        const cards = editingSections.cards;
+        const currentCard = cards[viewingContext];
+
+        // Build progressive reveal text
+        const buildContext = () => {
+          const lines: string[] = [];
+
+          // Accumulate all cards up to and including the current one
+          for (let i = 0; i <= viewingContext; i++) {
+            const card = cards[i];
+            if (card.text) {
+              lines.push(card.text);
+            }
+          }
+
+          return lines.join('\n');
+        };
+
+        const contextText = buildContext();
+
+        return (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+            onClick={() => setViewingContext(null)}
+          >
+            <div
+              className="w-full max-w-3xl max-h-[80vh] rounded-2xl bg-white shadow-xl overflow-hidden flex flex-col"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="border-b border-slate-200 px-6 py-4">
+                <h3 className="text-lg font-semibold text-slate-900">Code Context</h3>
+                <p className="mt-1 text-sm text-slate-500">
+                  Showing code up to Card {viewingContext + 1}
+                </p>
+              </div>
+
+              <div className="flex-1 overflow-y-auto p-6 bg-slate-900">
+                <pre className="font-mono text-sm text-slate-100 whitespace-pre-wrap break-words">
+                  {contextText || "No code context available"}
+                </pre>
+              </div>
+
+              <div className="border-t border-slate-200 px-6 py-4 bg-slate-50">
+                <div className="flex items-center justify-between">
+                  <div className="text-xs text-slate-600">
+                    {viewingContext + 1} / {cards.length} cards shown
+                  </div>
+                  <button
+                    type="button"
+                    className="rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50"
+                    onClick={() => setViewingContext(null)}
+                  >
+                    Close
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

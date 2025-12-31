@@ -282,6 +282,9 @@ export async function GET(request: Request) {
           cards: (q as any).cards,
           origin: (q as any).origin,
           createdAt: (q as any).createdAt,
+          profile: (q as any).profile,
+          sectionMarkers: (q as any).sectionMarkers,
+          sectionNames: (q as any).sectionNames,
         }));
       list.push(...(await cursor.toArray()));
     }

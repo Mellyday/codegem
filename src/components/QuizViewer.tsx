@@ -264,6 +264,11 @@ type SavedCustomQuizV11 = {
   };
   totalCards: number;
   cards: SavedCustomQuizCardV11[];
+  // Section markers: array of card indices where new sections begin
+  // e.g., [0, 5, 10] creates sections: 0-4, 5-9, 10-end
+  sectionMarkers?: number[];
+  // Optional custom names for each section
+  sectionNames?: string[];
 };
 
 // fetching of saved quizzes moved to SavedCustomQuizzesPanel
