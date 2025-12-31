@@ -82,6 +82,7 @@ export async function POST(
       : undefined;
   const wantsProgress = url.searchParams.get("progress") === "1";
   const wantsDebug = url.searchParams.get("debug") === "1";
+  const missingOnly = url.searchParams.get("missingOnly") === "1";
 
   const updatedCards: number[] = [];
   const failures: Array<{ order: number; error: string }> = [];
@@ -97,6 +98,8 @@ export async function POST(
     question?: string;
     snippet?: string;
   }> = [];
+
+  let skippedCount = 0;
 
   for (let i = 0; i < (quiz.cards || []).length; i++) {
     const card = quiz.cards[i] as QuizCard;
@@ -116,6 +119,17 @@ export async function POST(
         error: "Missing correct answer for card",
       });
       continue;
+    }
+
+    // If missingOnly mode, skip cards that already have sufficient distractors
+    if (missingOnly) {
+      const hasDistractors =
+        Array.isArray(card.llmDistractors) &&
+        card.llmDistractors.length >= targetCount;
+      if (hasDistractors) {
+        skippedCount++;
+        continue;
+      }
     }
 
     generationQueue.push({
@@ -193,6 +207,7 @@ export async function POST(
             batchSize: LLM_DISTRACTOR_BATCH_SIZE,
             provider,
             model,
+            skipped: skippedCount,
           });
           await runGeneration(
             (progress) => emit({ type: "progress", ...progress }),
@@ -212,6 +227,7 @@ export async function POST(
             model,
             updatedCards,
             failures,
+            skipped: skippedCount,
           });
         } catch (err: any) {
           emit({
@@ -245,5 +261,6 @@ export async function POST(
     model,
     updatedCards,
     failures,
+    skipped: skippedCount,
   });
 }

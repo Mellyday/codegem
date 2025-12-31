@@ -419,6 +419,192 @@ export function SavedCustomQuizzesPanel({
     }
   };
 
+  const handleRegenerateMissing = async (quizId: string) => {
+    // Reuse the same logic as handleGenerateDistractors but with missingOnly flag
+    const isDev = process.env.NODE_ENV === "development";
+
+    let debugStore: {
+      createRun: typeof import("@/src/lib/distractorDebugStore").createRun;
+      addBatchToRun: typeof import("@/src/lib/distractorDebugStore").addBatchToRun;
+      updateBatch: typeof import("@/src/lib/distractorDebugStore").updateBatch;
+      completeRun: typeof import("@/src/lib/distractorDebugStore").completeRun;
+    } | null = null;
+
+    if (isDev) {
+      debugStore = await import("@/src/lib/distractorDebugStore");
+    }
+
+    const abortController = new AbortController();
+    let cancelled = false;
+
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let runId: string | undefined;
+    let batchSize = 20;
+    let totalCards = 0;
+    let serverProvider = "deepseek";
+    let serverModel = "deepseek-chat";
+
+    const handleLine = (line: string) => {
+      if (!line || cancelled) return;
+      let evt;
+      try {
+        evt = JSON.parse(line);
+      } catch (e) {
+        console.warn("[SavedCustomQuizzesPanel] Invalid JSON line:", line.slice(0, 100));
+        return;
+      }
+      if (evt.type === "start") {
+        totalCards = evt.total ?? 0;
+        batchSize = evt.batchSize ?? 20;
+        serverProvider = evt.provider ?? "deepseek";
+        serverModel = evt.model ?? "deepseek-chat";
+        const skipped = evt.skipped ?? 0;
+        if (!cancelled) {
+          setProgress({
+            total: evt.total ?? 0,
+            completed: 0,
+            failed: 0,
+          });
+          if (skipped > 0) {
+            setStatus(`Skipped ${skipped} card${skipped === 1 ? '' : 's'} with distractors. Regenerating ${totalCards} missing...`);
+          }
+        }
+        if (isDev && debugStore) {
+          const run = debugStore.createRun({
+            quizId,
+            totalCards,
+            batchSize,
+            provider: serverProvider,
+            model: serverModel,
+          });
+          runId = run.runId;
+        }
+      } else if (evt.type === "progress") {
+        if (!cancelled) {
+          setProgress({
+            total: evt.total ?? 0,
+            completed: evt.completed ?? 0,
+            failed: evt.failed ?? 0,
+          });
+        }
+      } else if (evt.type === "batch-detail" && runId && isDev && debugStore) {
+        if (evt.phase === "start") {
+          debugStore.addBatchToRun(runId, {
+            batchId: evt.batchId,
+            batchIndex: evt.batchIndex,
+            batchTotal: evt.batchTotal,
+            startedAt: evt.startedAt,
+            requests: (evt.requests || []).map((r: any) => ({
+              cardIndex: r.index,
+              question: r.question || "",
+              correctAnswers: r.correctAnswers || [],
+              snippet: r.snippet || "",
+              preview: r.preview,
+            })),
+            prompt: evt.prompt,
+            fullPromptPayload: evt.fullPromptPayload,
+          });
+        } else if (evt.phase === "complete") {
+          debugStore.updateBatch(runId, evt.batchId, {
+            status: (evt.responses || []).some((r: any) => r.error)
+              ? "error"
+              : "success",
+            responses: (evt.responses || []).map((r: any) => ({
+              cardIndex: r.index,
+              distractors: r.distractors || [],
+              error: r.error,
+              rawResponse: r.raw,
+              promptPayload: r.promptPayload,
+              usage: r.usage,
+            })),
+            completedAt: evt.completedAt,
+            fullPromptPayload: evt.fullPromptPayload,
+          });
+        }
+      } else if (evt.type === "complete") {
+        const updated = Array.isArray(evt.updatedCards)
+          ? evt.updatedCards.length
+          : 0;
+        const skipped = evt.skipped ?? 0;
+        if (!cancelled) {
+          setStatus(
+            `Generated distractors for ${updated} missing card${updated === 1 ? "" : "s"}. ${skipped > 0 ? `Skipped ${skipped} complete.` : ''}`
+          );
+        }
+        if (runId && isDev && debugStore) {
+          debugStore.completeRun(runId, "completed");
+        }
+      } else if (evt.type === "error") {
+        if (runId && isDev && debugStore) {
+          debugStore.completeRun(runId, "failed");
+        }
+        throw new Error(evt.error || "Failed to generate distractors.");
+      }
+    };
+
+    try {
+      setGeneratingId(quizId);
+      setStatus(undefined);
+      setProgress(null);
+      const res = await fetch(
+        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1&missingOnly=1${isDev ? "&debug=1" : ""}`,
+        {
+          method: "POST",
+          cache: "no-store",
+          signal: abortController.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Accept: "application/x-ndjson",
+          },
+        }
+      );
+      if (!res.ok || !res.body) {
+        const txt = await res.text();
+        throw new Error(`HTTP ${res.status}: ${txt || "failed"}`);
+      }
+      const reader = res.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        let idx: number;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          handleLine(line);
+        }
+      }
+      const final = decoder.decode();
+      buffer += final;
+      let idx: number;
+      while ((idx = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, idx).trim();
+        buffer = buffer.slice(idx + 1);
+        if (!line) continue;
+        handleLine(line);
+      }
+      if (buffer.trim()) {
+        handleLine(buffer.trim());
+      }
+    } catch (e: any) {
+      if (!cancelled && e?.name !== "AbortError") {
+        setStatus(e?.message || "Failed to generate distractors.");
+      }
+      if (runId && isDev && debugStore) {
+        debugStore.completeRun(runId, "failed");
+      }
+    } finally {
+      cancelled = true;
+      if (!abortController.signal.aborted) {
+        setGeneratingId(undefined);
+        setProgress(null);
+        await load();
+      }
+    }
+  };
+
   return (
     <div className="space-y-3">
       {/* Header */}
@@ -491,15 +677,23 @@ export function SavedCustomQuizzesPanel({
       ) : (
         <ul className="space-y-3">
           {list.map((q) => {
-            // Fix #11: Enforce minimum distractor counts (6 for single, 10 for multi)
-            const hasDistractors =
-              q.cards.length > 0 &&
-              q.cards.every((c) => {
-                if (!Array.isArray(c.llmDistractors)) return false;
-                const count = c.llmDistractors.length;
+            // Count cards with/without sufficient distractors
+            const distractorStats = q.cards.reduce(
+              (acc, c) => {
                 const required = c.questionType === "multi" ? 10 : 6;
-                return count >= required;
-              });
+                const hasEnough =
+                  Array.isArray(c.llmDistractors) &&
+                  c.llmDistractors.length >= required;
+                return {
+                  total: acc.total + 1,
+                  complete: acc.complete + (hasEnough ? 1 : 0),
+                  missing: acc.missing + (hasEnough ? 0 : 1),
+                };
+              },
+              { total: 0, complete: 0, missing: 0 }
+            );
+            const hasDistractors = distractorStats.complete === distractorStats.total && distractorStats.total > 0;
+            const hasPartialDistractors = distractorStats.complete > 0 && distractorStats.complete < distractorStats.total;
             return (
               <li
                 key={q.id}
@@ -539,12 +733,25 @@ export function SavedCustomQuizzesPanel({
                     )}
                     <span
                       className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ${hasDistractors
-                        ? "bg-green-50 text-green-700"
-                        : "bg-amber-50 text-amber-700"
+                          ? "bg-green-50 text-green-700"
+                          : hasPartialDistractors
+                            ? "bg-blue-50 text-blue-700"
+                            : "bg-amber-50 text-amber-700"
                         }`}
                     >
-                      <span className={`h-1.5 w-1.5 rounded-full ${hasDistractors ? "bg-green-500" : "bg-amber-500"}`} />
-                      {hasDistractors ? "With Distractors" : "No Distractors"}
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${hasDistractors
+                            ? "bg-green-500"
+                            : hasPartialDistractors
+                              ? "bg-blue-500"
+                              : "bg-amber-500"
+                          }`}
+                      />
+                      {hasDistractors
+                        ? "Complete"
+                        : hasPartialDistractors
+                          ? `Partial: ${distractorStats.complete}/${distractorStats.total} cards`
+                          : "No Distractors"}
                     </span>
                   </div>
                 </div>
@@ -559,13 +766,24 @@ export function SavedCustomQuizzesPanel({
                   >
                     Start
                   </button>
+                  {distractorStats.missing > 0 && (
+                    <button
+                      type="button"
+                      className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm transition-colors hover:bg-blue-100 disabled:opacity-50"
+                      onClick={() => handleRegenerateMissing(q.id)}
+                      disabled={loading || generatingId === q.id}
+                      title={`Regenerate ${distractorStats.missing} missing card${distractorStats.missing === 1 ? '' : 's'}`}
+                    >
+                      {generatingId === q.id ? "Generating…" : `Regenerate Missing (${distractorStats.missing})`}
+                    </button>
+                  )}
                   <button
                     type="button"
                     className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
                     onClick={() => handleGenerateDistractors(q.id)}
                     disabled={loading || generatingId === q.id}
                   >
-                    {generatingId === q.id ? "Generating…" : "Generate"}
+                    {generatingId === q.id ? "Generating…" : "Regenerate All"}
                   </button>
                   <button
                     type="button"
