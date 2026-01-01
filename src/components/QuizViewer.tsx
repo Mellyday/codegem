@@ -423,6 +423,10 @@ export const QuizViewer = ({
   const [expandedOptions, setExpandedOptions] = useState<
     Record<string, boolean>
   >({});
+  const [activeQuizMeta, setActiveQuizMeta] = useState<{
+    quizId?: string;
+    sectionIndex?: number;
+  }>({});
 
   // Save a generated heuristic quiz to the database via /api/quizzes
   const saveHeuristicQuiz = async (
@@ -656,6 +660,7 @@ export const QuizViewer = ({
               onStartSaved={(q, qId, secIdx) => {
                 // panel is isolated; only it remounts on refresh/errors
                 setSelectedCustom(q as any);
+                setActiveQuizMeta({ quizId: qId, sectionIndex: secIdx });
                 // Notify parent of quiz metadata for medal tracking
                 onQuizMetadataChange?.(qId, secIdx);
                 onStart();
@@ -678,6 +683,7 @@ export const QuizViewer = ({
             className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600"
             onClick={() => {
               setSelectedCustom(undefined);
+              setActiveQuizMeta({});
               onStart();
             }}
           >
@@ -766,22 +772,35 @@ export const QuizViewer = ({
     const next = async () => {
       if (current + 1 >= total) {
         // Quiz complete - record attempt if quizId exists
-        if (quizId) {
+        const attemptQuizId = activeQuizMeta.quizId ?? quizId ?? selectedCustom?.id;
+        const attemptSectionIndex =
+          typeof activeQuizMeta.sectionIndex === "number"
+            ? activeQuizMeta.sectionIndex
+            : sectionIndex ?? 0;
+        if (attemptQuizId) {
           try {
-            await fetch("/api/quiz-attempts", {
+            const requestPayload = {
+              quizId: attemptQuizId,
+              sectionIndex: attemptSectionIndex,
+              totalQuestions: total,
+              correctAnswers: score,
+            };
+            const response = await fetch("/api/quiz-attempts", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                quizId,
-                sectionIndex: sectionIndex ?? 0,
-                totalQuestions: total,
-                correctAnswers: score,
-              }),
+              body: JSON.stringify(requestPayload),
             });
+            const result = await response.json().catch(() => null);
+            if (!response.ok) {
+              const msg = result?.error || `HTTP ${response.status}`;
+              console.error("[QuizViewer] Attempt failed:", msg, result);
+            } else {
+            }
           } catch (error) {
             console.error("Failed to record quiz attempt:", error);
             // Continue to onComplete even if recording fails
           }
+        } else {
         }
         onComplete();
       } else {

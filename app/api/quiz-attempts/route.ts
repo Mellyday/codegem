@@ -190,6 +190,7 @@ export async function POST(request: Request) {
             .toArray();
 
         // Calculate medals and stars
+        const medalRank = { bronze: 1, silver: 2, gold: 3 };
         const medalMap = new Map<string, { stars: 1 | 2 | 3 }>();
         const attemptsList = allAttempts as unknown as QuizAttempt[];
 
@@ -203,7 +204,6 @@ export async function POST(request: Request) {
             }
         }
 
-        const medalRank = { bronze: 1, silver: 2, gold: 3 };
         const medalsToDisplay = getMedalsToDisplay(medalMap);
 
         return NextResponse.json({

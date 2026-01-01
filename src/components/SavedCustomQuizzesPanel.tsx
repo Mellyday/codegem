@@ -137,9 +137,11 @@ async function fetchSavedCustomQuizzes(fileKey?: {
 export function SavedCustomQuizzesPanel({
   fileKey,
   onStartSaved,
+  onQuizComplete,
 }: {
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
   onStartSaved: (quiz: SavedCustomQuizV11, quizId: string, sectionIndex: number) => void;
+  onQuizComplete?: () => void;
 }) {
   const [list, setList] = useState<SavedCustomQuizV11[]>([]);
   const [loading, setLoading] = useState(false);
@@ -222,12 +224,18 @@ export function SavedCustomQuizzesPanel({
     };
   };
 
-  const load = async () => {
+  const load = async (opts?: { shouldUpdate?: () => boolean }) => {
+    const shouldUpdate = opts?.shouldUpdate ?? (() => true);
+    const runIfActive = (fn: () => void) => {
+      if (shouldUpdate()) fn();
+    };
     try {
-      setLoading(true);
-      setError(undefined);
+      runIfActive(() => {
+        setLoading(true);
+        setError(undefined);
+      });
       const data = await fetchSavedCustomQuizzes(fileKey);
-      setList(data);
+      runIfActive(() => setList(data));
 
       // Fetch medals for all quizzes
       const medalData: Record<string, Record<number, { medals: MedalInfo[] }>> = {};
@@ -242,27 +250,43 @@ export function SavedCustomQuizzesPanel({
           console.error(`Failed to fetch medals for quiz ${quiz.id}:`, e);
         }
       }
-      setMedals(medalData);
+      runIfActive(() => setMedals(medalData));
     } catch (e) {
-      setError("Could not load saved quizzes.");
+      runIfActive(() => setError("Could not load saved quizzes."));
     } finally {
-      setLoading(false);
+      runIfActive(() => setLoading(false));
     }
   };
+
+  // Reload only medals without reloading full quiz list
+  const reloadMedals = async () => {
+    const medalData: Record<string, Record<number, { medals: MedalInfo[] }>> = {};
+    for (const quiz of list) {
+      try {
+        const res = await fetch(`/api/quiz-attempts/medals?quizId=${encodeURIComponent(quiz.id)}`);
+        if (res.ok) {
+          const quizMedals = await res.json();
+          medalData[quiz.id] = quizMedals;
+        }
+      } catch (e) {
+        console.error(`Failed to fetch medals for quiz ${quiz.id}:`, e);
+      }
+    }
+    setMedals(medalData);
+  };
+
+  // Expose reload function to parent via callback
+  useEffect(() => {
+    if (onQuizComplete) {
+      // Store the reload function so parent can call it
+      (window as any).__reloadQuizMedals = reloadMedals;
+    }
+  }, [list, onQuizComplete]);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      setLoading(true);
-      setError(undefined);
-      try {
-        const data = await fetchSavedCustomQuizzes(fileKey);
-        if (!cancelled) setList(data);
-      } catch {
-        if (!cancelled) setError("Could not load saved quizzes.");
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
+      await load({ shouldUpdate: () => !cancelled });
     })();
     return () => {
       cancelled = true;
@@ -714,7 +738,6 @@ export function SavedCustomQuizzesPanel({
       // (marker at position i creates section i+1, so remove sectionNames[i+1])
       const newNames = sectionNames.filter((_, i) => i !== markerIndex + 1);
 
-      console.log('Removing marker:', { index, markerIndex, newMarkers, newNames });
       setSectionMarkers(newMarkers);
       setSectionNames(newNames);
     } else {
@@ -727,7 +750,6 @@ export function SavedCustomQuizzesPanel({
       const newNames = [...sectionNames];
       newNames.splice(insertIndex + 1, 0, `Section ${insertIndex + 2}`);
 
-      console.log('Adding marker:', { index, insertIndex, newMarkers, newNames, totalSections: newMarkers.length + 1 });
       setSectionMarkers(newMarkers);
       setSectionNames(newNames);
     }
@@ -749,13 +771,6 @@ export function SavedCustomQuizzesPanel({
         sectionMarkers,
         sectionNames,
       };
-
-      console.log('Saving sections:', {
-        markers: sectionMarkers,
-        names: sectionNames,
-        markersLength: sectionMarkers.length,
-        namesLength: sectionNames.length,
-      });
 
       const res = await fetch(`/api/quizzes/${encodeURIComponent(editingSections.id)}`, {
         method: "PATCH",
@@ -786,7 +801,7 @@ export function SavedCustomQuizzesPanel({
         <button
           type="button"
           className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
-          onClick={load}
+          onClick={() => load()}
           disabled={loading}
         >
           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
