@@ -44,10 +44,13 @@ export async function PATCH(
         }
 
         // If both are provided, validate they match in length
+        // N markers create N+1 sections: [0, marker1), [marker1, marker2), ..., [lastMarker, end)
+        // So we need N+1 section names for N markers
         if (updateDoc.sectionMarkers && updateDoc.sectionNames) {
-            if (updateDoc.sectionMarkers.length !== updateDoc.sectionNames.length) {
+            const expectedNames = updateDoc.sectionMarkers.length + 1;
+            if (updateDoc.sectionNames.length !== expectedNames) {
                 return NextResponse.json(
-                    { error: "Section markers and names must have the same length" },
+                    { error: `Expected ${expectedNames} section names for ${updateDoc.sectionMarkers.length} markers, got ${updateDoc.sectionNames.length}` },
                     { status: 400 }
                 );
             }

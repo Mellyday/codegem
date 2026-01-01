@@ -1166,7 +1166,7 @@ export function SavedCustomQuizzesPanel({
                   {cards.map((card, index) => {
                     const isMarker = sortedMarkers.includes(index);
                     const markerIndex = sortedMarkers.indexOf(index);
-                    const sectionName = sectionNames[markerIndex];
+                    const sectionName = sectionNames[markerIndex + 1];
 
                     return (
                       <div key={index}>
@@ -1175,8 +1175,8 @@ export function SavedCustomQuizzesPanel({
                           <div className="mb-2 flex items-center gap-2 rounded-lg border-2 border-amber-300 bg-amber-50 p-3">
                             <input
                               type="text"
-                              value={sectionName || `Section ${markerIndex + 1}`}
-                              onChange={(e) => updateSectionName(markerIndex, e.target.value)}
+                              value={sectionName || `Section ${markerIndex + 2}`}
+                              onChange={(e) => updateSectionName(markerIndex + 1, e.target.value)}
                               className="flex-1 rounded border border-amber-200 bg-white px-2 py-1 text-sm font-medium text-amber-900 focus:outline-none focus:ring-2 focus:ring-amber-500"
                               placeholder="Section name"
                             />
@@ -1266,19 +1266,42 @@ export function SavedCustomQuizzesPanel({
                 {sortedMarkers.length > 0 && (
                   <div className="mt-6 rounded-lg border border-blue-200 bg-blue-50 p-4">
                     <h4 className="text-sm font-semibold text-blue-900">
-                      {sortedMarkers.length} Section{sortedMarkers.length === 1 ? "" : "s"}
+                      {sortedMarkers.length + 1} Section{sortedMarkers.length + 1 === 1 ? "" : "s"}
                     </h4>
                     <div className="mt-2 space-y-1 text-xs text-blue-700">
-                      {sortedMarkers.map((marker, idx) => {
-                        const start = marker;
-                        const end = idx < sortedMarkers.length - 1 ? sortedMarkers[idx + 1] : cards.length;
-                        const name = sectionNames[idx] || `Section ${idx + 1}`;
+                      {/* First section: from 0 to first marker */}
+                      {(() => {
+                        const start = 0;
+                        const end = sortedMarkers[0];
+                        const name = sectionNames[0] || "Section 1";
                         return (
-                          <div key={idx}>
+                          <div key={0}>
+                            {name}: Cards {start + 1}-{end} ({end - start} questions)
+                          </div>
+                        );
+                      })()}
+                      {/* Middle sections: from marker[i] to marker[i+1] */}
+                      {sortedMarkers.slice(0, -1).map((marker, idx) => {
+                        const start = marker;
+                        const end = sortedMarkers[idx + 1];
+                        const name = sectionNames[idx + 1] || `Section ${idx + 2}`;
+                        return (
+                          <div key={idx + 1}>
                             {name}: Cards {start + 1}-{end} ({end - start} questions)
                           </div>
                         );
                       })}
+                      {/* Last section: from last marker to end */}
+                      {(() => {
+                        const start = sortedMarkers[sortedMarkers.length - 1];
+                        const end = cards.length;
+                        const name = sectionNames[sortedMarkers.length] || `Section ${sortedMarkers.length + 1}`;
+                        return (
+                          <div key={sortedMarkers.length}>
+                            {name}: Cards {start + 1}-{end} ({end - start} questions)
+                          </div>
+                        );
+                      })()}
                     </div>
                   </div>
                 )}
