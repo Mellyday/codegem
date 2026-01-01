@@ -953,6 +953,7 @@ export function SavedCustomQuizzesPanel({
                         const sectionMedals = medals[q.id]?.[0]?.medals || [];
                         return (
                           <div className="flex items-center gap-2">
+                            <MedalBadge medals={sectionMedals} />
                             <button
                               type="button"
                               className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
@@ -961,11 +962,10 @@ export function SavedCustomQuizzesPanel({
                             >
                               Start
                             </button>
-                            <MedalBadge medals={sectionMedals} />
                           </div>
                         );
                       } else {
-                        // Has sections, show all section buttons with medals
+                        // Has sections, show all section buttons (no medals on individual sections)
                         return (
                           <>
                             <button
@@ -976,23 +976,18 @@ export function SavedCustomQuizzesPanel({
                             >
                               Start All
                             </button>
-                            {sections.map((section) => {
-                              const sectionMedals = medals[q.id]?.[section.index]?.medals || [];
-                              return (
-                                <div key={section.index} className="flex items-center gap-1.5">
-                                  <button
-                                    type="button"
-                                    className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:opacity-50"
-                                    onClick={() => handleStartSection(q, section.index)}
-                                    disabled={loading}
-                                    title={`Cards ${section.start + 1}-${section.end} (${section.end - section.start} questions)`}
-                                  >
-                                    {section.name}
-                                  </button>
-                                  <MedalBadge medals={sectionMedals} />
-                                </div>
-                              );
-                            })}
+                            {sections.map((section) => (
+                              <button
+                                key={section.index}
+                                type="button"
+                                className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:opacity-50"
+                                onClick={() => handleStartSection(q, section.index)}
+                                disabled={loading}
+                                title={`Cards ${section.start + 1}-${section.end} (${section.end - section.start} questions)`}
+                              >
+                                {section.name}
+                              </button>
+                            ))}
                           </>
                         );
                       }
@@ -1066,29 +1061,33 @@ export function SavedCustomQuizzesPanel({
                             Sections ({sections.length})
                           </div>
                           <div className="space-y-2">
-                            {sections.map((section) => (
-                              <div
-                                key={section.index}
-                                className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
-                              >
-                                <div className="flex-1 min-w-0">
-                                  <div className="font-medium text-sm text-slate-900">
-                                    {section.name}
-                                  </div>
-                                  <div className="text-xs text-slate-500 mt-0.5">
-                                    Cards {section.start + 1}-{section.end} · {section.end - section.start} questions
-                                  </div>
-                                </div>
-                                <button
-                                  type="button"
-                                  className="flex-shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
-                                  onClick={() => handleStartSection(q, section.index)}
-                                  disabled={loading}
+                            {sections.map((section) => {
+                              const sectionMedals = medals[q.id]?.[section.index]?.medals || [];
+                              return (
+                                <div
+                                  key={section.index}
+                                  className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3"
                                 >
-                                  Start
-                                </button>
-                              </div>
-                            ))}
+                                  <div className="flex-1 min-w-0">
+                                    <div className="font-medium text-sm text-slate-900">
+                                      {section.name}
+                                    </div>
+                                    <div className="text-xs text-slate-500 mt-0.5">
+                                      Cards {section.start + 1}-{section.end} · {section.end - section.start} questions
+                                    </div>
+                                  </div>
+                                  <MedalBadge medals={sectionMedals} />
+                                  <button
+                                    type="button"
+                                    className="flex-shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+                                    onClick={() => handleStartSection(q, section.index)}
+                                    disabled={loading}
+                                  >
+                                    Start
+                                  </button>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       );

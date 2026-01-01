@@ -10,51 +10,127 @@ type MedalBadgeProps = {
     className?: string;
 };
 
+// Medal color configurations
 const MEDAL_COLORS = {
     bronze: {
-        bg: "bg-amber-100",
-        text: "text-amber-800",
-        border: "border-amber-300",
+        primary: "#CD7F32",
+        secondary: "#A0522D",
+        ribbon: "#8B4513",
     },
     silver: {
-        bg: "bg-slate-100",
-        text: "text-slate-700",
-        border: "border-slate-300",
+        primary: "#C0C0C0",
+        secondary: "#A8A8A8",
+        ribbon: "#6B7280",
     },
     gold: {
-        bg: "bg-yellow-100",
-        text: "text-yellow-800",
-        border: "border-yellow-400",
+        primary: "#FFD700",
+        secondary: "#DAA520",
+        ribbon: "#B8860B",
     },
 };
 
-const MEDAL_EMOJI = {
-    bronze: "🥉",
-    silver: "🥈",
-    gold: "🥇",
+// Medal ranking for determining the best medal
+const MEDAL_RANK = {
+    bronze: 1,
+    silver: 2,
+    gold: 3,
 };
 
-export function MedalBadge({ medals, className = "" }: MedalBadgeProps) {
-    if (medals.length === 0) return null;
+// Custom SVG medal icon with star below
+function MedalIcon({ type, stars }: { type: "bronze" | "silver" | "gold"; stars: 1 | 2 | 3 }) {
+    const colors = MEDAL_COLORS[type];
+    const starColor = type === "gold" ? "#FFA500" : type === "silver" ? "#4B5563" : "#D97706";
 
     return (
-        <div className={`flex items-center gap-1.5 ${className}`}>
-            {medals.map((medal, index) => {
-                const colors = MEDAL_COLORS[medal.type];
-                const emoji = MEDAL_EMOJI[medal.type];
-                const stars = "★".repeat(medal.stars);
-
+        <svg
+            width="28"
+            height="38"
+            viewBox="0 0 28 38"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+            className="drop-shadow-sm"
+        >
+            {/* Ribbon */}
+            <path
+                d="M8 0L14 8L20 0L20 12L8 12L8 0Z"
+                fill={colors.ribbon}
+            />
+            {/* Medal circle */}
+            <circle cx="14" cy="18" r="10" fill={colors.primary} stroke={colors.secondary} strokeWidth="2" />
+            {/* Inner circle */}
+            <circle cx="14" cy="18" r="6" fill={colors.secondary} opacity="0.3" />
+            {/* Star icon inside medal */}
+            <path
+                d="M14 13L15.2 16.2L18.6 16.4L16 18.6L16.8 22L14 20.2L11.2 22L12 18.6L9.4 16.4L12.8 16.2L14 13Z"
+                fill={type === "gold" ? "#FFFFFF" : type === "silver" ? "#FFFFFF" : "#FFF8DC"}
+                opacity="0.9"
+            />
+            {/* Stars below the medal */}
+            {[...Array(stars)].map((_, i) => {
+                const starWidth = 6;
+                const spacing = 7;
+                const totalWidth = stars * starWidth + (stars - 1) * (spacing - starWidth);
+                const startX = 14 - totalWidth / 2 + i * spacing;
                 return (
-                    <div
-                        key={`${medal.type}-${index}`}
-                        className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-semibold ${colors.bg} ${colors.text} ${colors.border}`}
-                        title={`${medal.type.charAt(0).toUpperCase() + medal.type.slice(1)} - ${medal.stars} star${medal.stars > 1 ? "s" : ""}`}
-                    >
-                        <span className="text-sm">{emoji}</span>
-                        <span className="text-yellow-600">{stars}</span>
-                    </div>
+                    <path
+                        key={i}
+                        d={`M${startX + 3} ${31}L${startX + 3.7} ${32.8}L${startX + 5.6} ${32.9}L${startX + 4.2} ${34.2}L${startX + 4.5} ${36}L${startX + 3} ${34.9}L${startX + 1.5} ${36}L${startX + 1.8} ${34.2}L${startX + 0.4} ${32.9}L${startX + 2.3} ${32.8}L${startX + 3} ${31}Z`}
+                        fill={starColor}
+                    />
                 );
             })}
+        </svg>
+    );
+}
+
+// Get non-dominated (Pareto-optimal) medals
+// A medal is dominated if another medal has >= tier AND >= stars
+// Example: gold★ dominates bronze★, but gold★ and silver★★ are both shown
+function getNonDominatedMedals(medals: MedalInfo[]): MedalInfo[] {
+    if (medals.length === 0) return [];
+
+    // Remove exact duplicates first
+    const unique = medals.filter((m, i, arr) =>
+        arr.findIndex(x => x.type === m.type && x.stars === m.stars) === i
+    );
+
+    // Filter out dominated medals
+    return unique.filter(medal => {
+        const dominated = unique.some(other => {
+            if (other === medal) return false;
+            const medalRank = MEDAL_RANK[medal.type];
+            const otherRank = MEDAL_RANK[other.type];
+            // Other dominates medal if it's >= in both tier and stars, and strictly > in at least one
+            const tierGe = otherRank >= medalRank;
+            const starsGe = other.stars >= medal.stars;
+            const strictlyBetter = otherRank > medalRank || other.stars > medal.stars;
+            return tierGe && starsGe && strictlyBetter;
+        });
+        return !dominated;
+    });
+}
+
+export function MedalBadge({ medals, className = "" }: MedalBadgeProps) {
+    const displayMedals = getNonDominatedMedals(medals);
+    if (displayMedals.length === 0) return null;
+
+    // Sort by tier (gold first) then by stars (descending)
+    const sorted = [...displayMedals].sort((a, b) => {
+        const tierDiff = MEDAL_RANK[b.type] - MEDAL_RANK[a.type];
+        if (tierDiff !== 0) return tierDiff;
+        return b.stars - a.stars;
+    });
+
+    return (
+        <div className={`inline-flex items-center gap-1 ${className}`}>
+            {sorted.map((medal, index) => (
+                <div
+                    key={`${medal.type}-${medal.stars}-${index}`}
+                    title={`${medal.type.charAt(0).toUpperCase() + medal.type.slice(1)} - ${medal.stars} star${medal.stars > 1 ? "s" : ""}`}
+                >
+                    <MedalIcon type={medal.type} stars={medal.stars} />
+                </div>
+            ))}
         </div>
     );
 }
