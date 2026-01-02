@@ -32,6 +32,7 @@ function calculateMedal(score: number): MedalType {
 }
 
 // Calculate star level based on attempt history and time-gating
+// Uses time since LAST ATTEMPT (any attempt, regardless of result) as the reference
 function calculateStars(
     attempts: QuizAttempt[],
     medalType: "bronze" | "silver" | "gold"
@@ -45,57 +46,76 @@ function calculateStars(
 
     if (relevantAttempts.length === 0) return 1;
 
-    // Sort by date (oldest first)
-    relevantAttempts.sort(
+    // Sort all attempts by date (oldest first)
+    const allAttemptsSorted = [...attempts].sort(
         (a, b) => a.attemptedAt.getTime() - b.attemptedAt.getTime()
     );
+    const relevantSorted = [...relevantAttempts].sort(
+        (a, b) => a.attemptedAt.getTime() - b.attemptedAt.getTime()
+    );
+
+    // Get first medal-earning attempt and last attempt of any kind
+    const firstMedalAttempt = relevantSorted[0];
+    const lastAttempt = allAttemptsSorted[allAttemptsSorted.length - 1];
+    const now = new Date();
 
     let currentStars: 1 | 2 | 3 = 1;
 
     // Check for 2-star upgrade (48 hours = 48 * 60 * 60 * 1000 ms)
+    // Time from last attempt (any attempt) to now must be >= 48 hours
     const TWO_STAR_COOLDOWN = 48 * 60 * 60 * 1000;
-    if (relevantAttempts.length >= 2) {
-        const firstAttempt = relevantAttempts[0];
-        const secondAttempt = relevantAttempts[1];
-        const timeDiff =
-            secondAttempt.attemptedAt.getTime() - firstAttempt.attemptedAt.getTime();
-        if (timeDiff >= TWO_STAR_COOLDOWN) {
-            currentStars = 2;
-        }
+    const timeSinceLastAttempt = now.getTime() - lastAttempt.attemptedAt.getTime();
+
+    if (timeSinceLastAttempt >= TWO_STAR_COOLDOWN) {
+        currentStars = 2;
     }
 
     // Check for 3-star upgrade (5 days = 5 * 24 * 60 * 60 * 1000 ms)
     const THREE_STAR_COOLDOWN = 5 * 24 * 60 * 60 * 1000;
-    if (currentStars === 2 && relevantAttempts.length >= 3) {
-        // Find the first 2-star qualifying attempt
-        let twoStarAttempt = null;
-        for (let i = 1; i < relevantAttempts.length; i++) {
-            const timeDiff =
-                relevantAttempts[i].attemptedAt.getTime() -
-                relevantAttempts[i - 1].attemptedAt.getTime();
-            if (timeDiff >= TWO_STAR_COOLDOWN) {
-                twoStarAttempt = relevantAttempts[i];
-                break;
-            }
-        }
-
-        if (twoStarAttempt) {
-            // Check if there's a third attempt after the 2-star attempt
-            const thirdAttempt = relevantAttempts.find(
-                (a) => a.attemptedAt.getTime() > twoStarAttempt!.attemptedAt.getTime()
-            );
-            if (thirdAttempt) {
-                const timeDiff =
-                    thirdAttempt.attemptedAt.getTime() -
-                    twoStarAttempt.attemptedAt.getTime();
-                if (timeDiff >= THREE_STAR_COOLDOWN) {
-                    currentStars = 3;
-                }
-            }
-        }
+    if (currentStars === 2 && timeSinceLastAttempt >= THREE_STAR_COOLDOWN) {
+        currentStars = 3;
     }
 
     return currentStars;
+}
+
+// Calculate gold upgrade info (time remaining until next star upgrade)
+// Only applies to gold medals that aren't at 3 stars yet
+type GoldUpgradeInfo = {
+    currentStars: 1 | 2 | 3;
+    lastAttemptAt: Date;
+    nextUpgradeAt: Date | null;
+    msRemaining: number | null;
+};
+
+function calculateGoldUpgradeInfo(
+    attempts: QuizAttempt[],
+    goldStars: 1 | 2 | 3
+): GoldUpgradeInfo | null {
+    if (attempts.length === 0) return null;
+    if (goldStars === 3) return null; // Already at max stars
+
+    // Get the last attempt of any kind
+    const sortedAttempts = [...attempts].sort(
+        (a, b) => a.attemptedAt.getTime() - b.attemptedAt.getTime()
+    );
+    const lastAttempt = sortedAttempts[sortedAttempts.length - 1];
+    const now = new Date();
+
+    // Calculate cooldown based on current stars
+    const TWO_STAR_COOLDOWN = 48 * 60 * 60 * 1000; // 48 hours
+    const THREE_STAR_COOLDOWN = 5 * 24 * 60 * 60 * 1000; // 5 days
+
+    const targetCooldown = goldStars === 1 ? TWO_STAR_COOLDOWN : THREE_STAR_COOLDOWN;
+    const nextUpgradeAt = new Date(lastAttempt.attemptedAt.getTime() + targetCooldown);
+    const msRemaining = nextUpgradeAt.getTime() - now.getTime();
+
+    return {
+        currentStars: goldStars,
+        lastAttemptAt: lastAttempt.attemptedAt,
+        nextUpgradeAt: msRemaining > 0 ? nextUpgradeAt : null,
+        msRemaining: msRemaining > 0 ? msRemaining : null,
+    };
 }
 
 // Determine which medals to display based on the rules
@@ -260,7 +280,7 @@ export async function GET(request: Request) {
         // Calculate medals for each section
         const result: Record<
             number,
-            { medals: MedalInfo[]; lastAttempt?: Date }
+            { medals: MedalInfo[]; lastAttempt?: Date; goldUpgradeInfo?: { msRemaining: number } | null }
         > = {};
 
         for (const [sectionIndex, sectionAttempts] of bySectionIndex.entries()) {
@@ -280,9 +300,20 @@ export async function GET(request: Request) {
             const medalsToDisplay = getMedalsToDisplay(medalMap);
             const lastAttempt = sectionAttempts[sectionAttempts.length - 1]?.attemptedAt;
 
+            // Calculate gold upgrade info if applicable
+            let goldUpgradeInfo: { msRemaining: number } | null = null;
+            const goldMedal = medalMap.get("gold");
+            if (goldMedal && goldMedal.stars < 3) {
+                const upgradeInfo = calculateGoldUpgradeInfo(sectionAttempts, goldMedal.stars);
+                if (upgradeInfo?.msRemaining && upgradeInfo.msRemaining > 0) {
+                    goldUpgradeInfo = { msRemaining: upgradeInfo.msRemaining };
+                }
+            }
+
             result[sectionIndex] = {
                 medals: medalsToDisplay,
                 lastAttempt,
+                goldUpgradeInfo,
             };
         }
 

@@ -167,7 +167,8 @@ export function SavedCustomQuizzesPanel({
 
   // Medal state - keyed by quizId, then sectionIndex
   type MedalInfo = { type: "bronze" | "silver" | "gold"; stars: 1 | 2 | 3 };
-  const [medals, setMedals] = useState<Record<string, Record<number, { medals: MedalInfo[] }>>>({});
+  type SectionMedalData = { medals: MedalInfo[]; goldUpgradeInfo?: { msRemaining: number } | null };
+  const [medals, setMedals] = useState<Record<string, Record<number, SectionMedalData>>>({});;
 
   const copyTextToClipboard = async (text: string) => {
     const fallbackCopy = (value: string) => {
@@ -238,7 +239,7 @@ export function SavedCustomQuizzesPanel({
       runIfActive(() => setList(data));
 
       // Fetch medals for all quizzes
-      const medalData: Record<string, Record<number, { medals: MedalInfo[] }>> = {};
+      const medalData: Record<string, Record<number, SectionMedalData>> = {};
       for (const quiz of data) {
         try {
           const res = await fetch(`/api/quiz-attempts/medals?quizId=${encodeURIComponent(quiz.id)}`);
@@ -260,7 +261,7 @@ export function SavedCustomQuizzesPanel({
 
   // Reload only medals without reloading full quiz list
   const reloadMedals = async () => {
-    const medalData: Record<string, Record<number, { medals: MedalInfo[] }>> = {};
+    const medalData: Record<string, Record<number, SectionMedalData>> = {};
     for (const quiz of list) {
       try {
         const res = await fetch(`/api/quiz-attempts/medals?quizId=${encodeURIComponent(quiz.id)}`);
@@ -950,10 +951,12 @@ export function SavedCustomQuizzesPanel({
                       const sections = getSections(q);
                       if (sections.length === 1) {
                         // No sections, single Start button
-                        const sectionMedals = medals[q.id]?.[0]?.medals || [];
+                        const sectionMedalData = medals[q.id]?.[0];
+                        const sectionMedals = sectionMedalData?.medals || [];
+                        const goldUpgradeInfo = sectionMedalData?.goldUpgradeInfo;
                         return (
                           <div className="flex items-center gap-2">
-                            <MedalBadge medals={sectionMedals} />
+                            <MedalBadge medals={sectionMedals} goldUpgradeInfo={goldUpgradeInfo} />
                             <button
                               type="button"
                               className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
@@ -965,30 +968,16 @@ export function SavedCustomQuizzesPanel({
                           </div>
                         );
                       } else {
-                        // Has sections, show all section buttons (no medals on individual sections)
+                        // Has sections, just show Start All button
                         return (
-                          <>
-                            <button
-                              type="button"
-                              className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
-                              onClick={() => handleStartSection(q)}
-                              disabled={loading}
-                            >
-                              Start All
-                            </button>
-                            {sections.map((section) => (
-                              <button
-                                key={section.index}
-                                type="button"
-                                className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-1.5 text-xs font-medium text-amber-700 shadow-sm transition-colors hover:bg-amber-100 disabled:opacity-50"
-                                onClick={() => handleStartSection(q, section.index)}
-                                disabled={loading}
-                                title={`Cards ${section.start + 1}-${section.end} (${section.end - section.start} questions)`}
-                              >
-                                {section.name}
-                              </button>
-                            ))}
-                          </>
+                          <button
+                            type="button"
+                            className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"
+                            onClick={() => handleStartSection(q)}
+                            disabled={loading}
+                          >
+                            Start All
+                          </button>
                         );
                       }
                     })()}
@@ -1062,7 +1051,9 @@ export function SavedCustomQuizzesPanel({
                           </div>
                           <div className="space-y-2">
                             {sections.map((section) => {
-                              const sectionMedals = medals[q.id]?.[section.index]?.medals || [];
+                              const sectionMedalData = medals[q.id]?.[section.index];
+                              const sectionMedals = sectionMedalData?.medals || [];
+                              const goldUpgradeInfo = sectionMedalData?.goldUpgradeInfo;
                               return (
                                 <div
                                   key={section.index}
@@ -1076,7 +1067,7 @@ export function SavedCustomQuizzesPanel({
                                       Cards {section.start + 1}-{section.end} · {section.end - section.start} questions
                                     </div>
                                   </div>
-                                  <MedalBadge medals={sectionMedals} />
+                                  <MedalBadge medals={sectionMedals} goldUpgradeInfo={goldUpgradeInfo} />
                                   <button
                                     type="button"
                                     className="flex-shrink-0 rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow-sm transition-colors hover:bg-amber-600 disabled:opacity-50"

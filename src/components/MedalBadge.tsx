@@ -8,6 +8,8 @@ type MedalInfo = {
 type MedalBadgeProps = {
     medals: MedalInfo[];
     className?: string;
+    /** Countdown info for gold medal upgrade (milliseconds remaining) */
+    goldUpgradeInfo?: { msRemaining: number } | null;
 };
 
 // Medal color configurations
@@ -110,7 +112,18 @@ function getNonDominatedMedals(medals: MedalInfo[]): MedalInfo[] {
     });
 }
 
-export function MedalBadge({ medals, className = "" }: MedalBadgeProps) {
+// Format milliseconds to human-readable countdown
+function formatCountdown(ms: number): string {
+    const hours = Math.floor(ms / (60 * 60 * 1000));
+    const minutes = Math.floor((ms % (60 * 60 * 1000)) / (60 * 1000));
+
+    if (hours >= 1) {
+        return `${hours} hr${hours === 1 ? '' : 's'}`;
+    }
+    return `${minutes} min${minutes === 1 ? '' : 's'}`;
+}
+
+export function MedalBadge({ medals, className = "", goldUpgradeInfo }: MedalBadgeProps) {
     const displayMedals = getNonDominatedMedals(medals);
     if (displayMedals.length === 0) return null;
 
@@ -120,6 +133,10 @@ export function MedalBadge({ medals, className = "" }: MedalBadgeProps) {
         if (tierDiff !== 0) return tierDiff;
         return b.stars - a.stars;
     });
+
+    // Check if there's a gold medal with countdown
+    const hasGoldWithCountdown = goldUpgradeInfo?.msRemaining && goldUpgradeInfo.msRemaining > 0 &&
+        sorted.some(m => m.type === "gold" && m.stars < 3);
 
     return (
         <div className={`inline-flex items-center gap-1 ${className}`}>
@@ -131,6 +148,11 @@ export function MedalBadge({ medals, className = "" }: MedalBadgeProps) {
                     <MedalIcon type={medal.type} stars={medal.stars} />
                 </div>
             ))}
+            {hasGoldWithCountdown && (
+                <span className="text-xs font-medium text-amber-600 whitespace-nowrap">
+                    {formatCountdown(goldUpgradeInfo!.msRemaining!)}
+                </span>
+            )}
         </div>
     );
 }
