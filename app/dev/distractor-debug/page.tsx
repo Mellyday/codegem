@@ -42,19 +42,13 @@ function BatchCard({
 }) {
     const [activeTab, setActiveTab] = useState<"requests" | "responses" | "prompt">("responses");
 
-    // Calculate total tokens for the batch
-    const totalUsage = batch.responses.reduce(
-        (acc, res) => {
-            if (res.usage) {
-                acc.promptTokens += res.usage.promptTokens || 0;
-                acc.completionTokens += res.usage.completionTokens || 0;
-                acc.cacheHit += res.usage.promptCacheHitTokens || 0;
-                acc.cacheMiss += res.usage.promptCacheMissTokens || 0;
-            }
-            return acc;
-        },
-        { promptTokens: 0, completionTokens: 0, cacheHit: 0, cacheMiss: 0 }
-    );
+    // Token usage is reported at the batch level (one LLM request per batch)
+    const totalUsage = {
+        promptTokens: batch.usage?.promptTokens ?? 0,
+        completionTokens: batch.usage?.completionTokens ?? 0,
+        cacheHit: batch.usage?.promptCacheHitTokens ?? 0,
+        cacheMiss: batch.usage?.promptCacheMissTokens ?? 0,
+    };
 
     return (
         <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
@@ -168,16 +162,6 @@ function BatchCard({
                                                     Card #{res.cardIndex}
                                                 </span>
                                                 <div className="flex items-center gap-2">
-                                                    {res.usage && (
-                                                        <span className="text-[9px] text-slate-400">
-                                                            {res.usage.promptTokens}→{res.usage.completionTokens} tokens
-                                                            {res.usage.promptCacheHitTokens ? (
-                                                                <span className="text-emerald-500 ml-1">
-                                                                    ({res.usage.promptCacheHitTokens} cached)
-                                                                </span>
-                                                            ) : null}
-                                                        </span>
-                                                    )}
                                                     {res.error && (
                                                         <span className="text-[10px] font-medium text-rose-500">Error</span>
                                                     )}
@@ -196,37 +180,6 @@ function BatchCard({
                                                         </span>
                                                     ))}
                                                 </div>
-                                            )}
-                                            {/* Token Details */}
-                                            {res.usage && (
-                                                <div className="mt-2 grid grid-cols-5 gap-1 text-[9px] rounded bg-slate-100 p-1.5">
-                                                    <div><span className="text-slate-400">In:</span> <span className="font-medium">{res.usage.promptTokens}</span></div>
-                                                    <div><span className="text-slate-400">Out:</span> <span className="font-medium">{res.usage.completionTokens}</span></div>
-                                                    <div><span className="text-slate-400">Total:</span> <span className="font-medium">{res.usage.totalTokens}</span></div>
-                                                    <div><span className="text-emerald-500">Hit:</span> <span className="font-medium">{res.usage.promptCacheHitTokens ?? "—"}</span></div>
-                                                    <div><span className="text-amber-500">Miss:</span> <span className="font-medium">{res.usage.promptCacheMissTokens ?? "—"}</span></div>
-                                                </div>
-                                            )}
-                                            {/* Individual Prompt */}
-                                            {res.promptPayload && (
-                                                <details className="mt-2">
-                                                    <summary className="cursor-pointer text-[10px] text-blue-500 hover:text-blue-700">
-                                                        View Full Prompt
-                                                    </summary>
-                                                    <pre className="mt-1 max-h-40 overflow-auto rounded bg-blue-50 p-1 text-[9px] text-slate-600">
-                                                        {JSON.stringify(res.promptPayload, null, 2)}
-                                                    </pre>
-                                                </details>
-                                            )}
-                                            {res.rawResponse && (
-                                                <details className="mt-2">
-                                                    <summary className="cursor-pointer text-[10px] text-slate-400 hover:text-slate-600">
-                                                        Raw Response
-                                                    </summary>
-                                                    <pre className="mt-1 max-h-32 overflow-auto rounded bg-slate-100 p-1 text-[9px] text-slate-600">
-                                                        {JSON.stringify(res.rawResponse, null, 2)}
-                                                    </pre>
-                                                </details>
                                             )}
                                         </div>
                                     ))
@@ -256,6 +209,16 @@ function BatchCard({
                                     </>
                                 ) : (
                                     <div className="text-center text-xs italic text-slate-400">No prompt captured</div>
+                                )}
+                                {batch.rawResponse && (
+                                    <details>
+                                        <summary className="cursor-pointer text-[10px] text-slate-500 hover:text-slate-700">
+                                            Raw Response
+                                        </summary>
+                                        <pre className="mt-1 max-h-64 overflow-auto rounded bg-slate-100 p-2 text-[10px] text-slate-600">
+                                            {JSON.stringify(batch.rawResponse, null, 2)}
+                                        </pre>
+                                    </details>
                                 )}
                             </div>
                         )}

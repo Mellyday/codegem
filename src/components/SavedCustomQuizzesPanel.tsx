@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MedalBadge } from "./MedalBadge";
 
 export type SourceRef = {
@@ -143,11 +143,18 @@ export function SavedCustomQuizzesPanel({
   onStartSaved: (quiz: SavedCustomQuizV11, quizId: string, sectionIndex: number) => void;
   onQuizComplete?: () => void;
 }) {
+  const isMountedRef = useRef(true);
+
   const [list, setList] = useState<SavedCustomQuizV11[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | undefined>(undefined);
   const [generatingId, setGeneratingId] = useState<string | undefined>(undefined);
   const [status, setStatus] = useState<string | undefined>(undefined);
+  const [activeRunId, setActiveRunId] = useState<string | undefined>(undefined);
+  const [activeRunQuizId, setActiveRunQuizId] = useState<string | undefined>(undefined);
+  const [failurePreview, setFailurePreview] = useState<
+    Array<{ order: number; error: string }>
+  >([]);
   const [progress, setProgress] = useState<{
     total: number;
     completed: number;
@@ -285,6 +292,12 @@ export function SavedCustomQuizzesPanel({
   }, [list, onQuizComplete]);
 
   useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
     let cancelled = false;
     (async () => {
       await load({ shouldUpdate: () => !cancelled });
@@ -295,378 +308,255 @@ export function SavedCustomQuizzesPanel({
     // reload when fileKey changes
   }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
-  const handleGenerateDistractors = async (quizId: string) => {
-    // Only enable debug mode in development
-    const isDev = process.env.NODE_ENV === "development";
+  useEffect(() => {
+    if (activeRunId || list.length === 0) return;
+    try {
+      for (const quiz of list) {
+        const stored = sessionStorage.getItem(getRunStorageKey(quiz.id));
+        if (stored) {
+          setActiveRunId(stored);
+          setActiveRunQuizId(quiz.id);
+          setGeneratingId(quiz.id);
+          setStatus("Resuming distractor generation…");
+          break;
+        }
+      }
+    } catch { }
+  }, [activeRunId, list]);
 
-    // Import debug store functions only in dev to avoid bundling in production
-    let debugStore: {
-      createRun: typeof import("@/src/lib/distractorDebugStore").createRun;
-      addBatchToRun: typeof import("@/src/lib/distractorDebugStore").addBatchToRun;
-      updateBatch: typeof import("@/src/lib/distractorDebugStore").updateBatch;
-      completeRun: typeof import("@/src/lib/distractorDebugStore").completeRun;
-    } | null = null;
+  useEffect(() => {
+    setGeneratingId(undefined);
+    setProgress(null);
+    setStatus(undefined);
+    setError(undefined);
+    setActiveRunId(undefined);
+    setActiveRunQuizId(undefined);
+    setFailurePreview([]);
+  }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
-    if (isDev) {
-      debugStore = await import("@/src/lib/distractorDebugStore");
+  const getRunStorageKey = (quizId: string) => `distractor-run:${quizId}`;
+
+  const persistRunId = (quizId: string, runId: string) => {
+    try {
+      sessionStorage.setItem(getRunStorageKey(quizId), runId);
+    } catch { }
+  };
+
+  const clearRunId = (quizId: string) => {
+    try {
+      sessionStorage.removeItem(getRunStorageKey(quizId));
+    } catch { }
+  };
+
+  const cancelActiveGeneration = async () => {
+    if (!activeRunId) return;
+    try {
+      await fetch(`/api/distractor-runs/${encodeURIComponent(activeRunId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "cancel" }),
+      });
+    } catch { }
+    setStatus("Cancelled distractor generation.");
+    setError(undefined);
+  };
+
+  type RunFailure = { order: number; error: string };
+
+  type RunStatus = {
+    runId: string;
+    quizId: string;
+    status: "queued" | "running" | "completed" | "failed" | "cancelled";
+    total: number;
+    completed: number;
+    failed: number;
+    updatedCards?: number[];
+    failures?: RunFailure[];
+    skipped?: number;
+    errorMessage?: string;
+  };
+
+  const applyRunUpdate = (run: RunStatus) => {
+    const failures = Array.isArray(run.failures) ? run.failures : [];
+    const updatedCount = Array.isArray(run.updatedCards)
+      ? run.updatedCards.length
+      : 0;
+    const failureCount = failures.length || run.failed || 0;
+    const total = Number.isFinite(run.total) ? run.total : 0;
+    const completed = Number.isFinite(run.completed) ? run.completed : 0;
+    const failed = Number.isFinite(run.failed) ? run.failed : failureCount;
+
+    setFailurePreview(failures.slice(0, 3));
+    setProgress({ total, completed, failed });
+    setActiveRunQuizId(run.quizId);
+
+    if (run.status === "queued" || run.status === "running") {
+      setGeneratingId(run.quizId);
+      setError(undefined);
+      setStatus(
+        failureCount > 0
+          ? `Generating distractors… ${failureCount} failed so far.`
+          : "Generating distractors…"
+      );
+      return;
     }
 
-    // Fix #10: Add AbortController for unmount/cancel handling
-    const abortController = new AbortController();
-    let cancelled = false;
+    setGeneratingId(undefined);
 
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let runId: string | undefined;
-    let batchSize = 20; // default
-    let totalCards = 0;
-    let serverProvider = "deepseek";
-    let serverModel = "deepseek-chat";
+    if (run.status === "completed") {
+      if (total === 0) {
+        setStatus("No cards needed distractors.");
+      } else if (failureCount > 0) {
+        setStatus(
+          `Generated ${updatedCount} card${updatedCount === 1 ? "" : "s"}. ${
+            failureCount
+          } failed.`
+        );
+      } else {
+        setStatus(
+          `Generated ${updatedCount} card${updatedCount === 1 ? "" : "s"}.`
+        );
+      }
+      setError(undefined);
+      return;
+    }
 
-    const handleLine = (line: string) => {
-      if (!line || cancelled) return;
-      // Fix #9: Wrap JSON.parse in try/catch to handle malformed lines
-      let evt;
-      try {
-        evt = JSON.parse(line);
-      } catch (e) {
-        console.warn("[SavedCustomQuizzesPanel] Invalid JSON line:", line.slice(0, 100));
-        return;
-      }
-      if (evt.type === "start") {
-        totalCards = evt.total ?? 0;
-        batchSize = evt.batchSize ?? 20;
-        // Fix #10: Use provider/model from server event
-        serverProvider = evt.provider ?? "deepseek";
-        serverModel = evt.model ?? "deepseek-chat";
-        if (!cancelled) {
-          setProgress({
-            total: evt.total ?? 0,
-            completed: 0,
-            failed: 0,
-          });
-        }
-        // Create debug run only in dev
-        if (isDev && debugStore) {
-          const run = debugStore.createRun({
-            quizId,
-            totalCards,
-            batchSize,
-            provider: serverProvider,
-            model: serverModel,
-          });
-          runId = run.runId;
-        }
-      } else if (evt.type === "progress") {
-        if (!cancelled) {
-          setProgress({
-            total: evt.total ?? 0,
-            completed: evt.completed ?? 0,
-            failed: evt.failed ?? 0,
-          });
-        }
-      } else if (evt.type === "batch-detail" && runId && isDev && debugStore) {
-        // Save batch detail to debug log (dev only)
-        if (evt.phase === "start") {
-          debugStore.addBatchToRun(runId, {
-            batchId: evt.batchId,
-            batchIndex: evt.batchIndex,
-            batchTotal: evt.batchTotal,
-            startedAt: evt.startedAt,
-            requests: (evt.requests || []).map((r: any) => ({
-              cardIndex: r.index,
-              question: r.question || "",
-              correctAnswers: r.correctAnswers || [],
-              snippet: r.snippet || "",
-              preview: r.preview,
-            })),
-            prompt: evt.prompt,
-            fullPromptPayload: evt.fullPromptPayload,
-          });
-        } else if (evt.phase === "complete") {
-          debugStore.updateBatch(runId, evt.batchId, {
-            status: (evt.responses || []).some((r: any) => r.error)
-              ? "error"
-              : "success",
-            responses: (evt.responses || []).map((r: any) => ({
-              cardIndex: r.index,
-              distractors: r.distractors || [],
-              error: r.error,
-              rawResponse: r.raw,
-              promptPayload: r.promptPayload,
-              usage: r.usage,
-            })),
-            completedAt: evt.completedAt,
-            fullPromptPayload: evt.fullPromptPayload,
-          });
-        }
-      } else if (evt.type === "complete") {
-        const updated = Array.isArray(evt.updatedCards)
-          ? evt.updatedCards.length
-          : 0;
-        if (!cancelled) {
-          setStatus(
-            `Generated distractors for ${updated} card${updated === 1 ? "" : "s"}.`
-          );
-        }
-        if (runId && isDev && debugStore) {
-          debugStore.completeRun(runId, "completed");
-        }
-      } else if (evt.type === "error") {
-        if (runId && isDev && debugStore) {
-          debugStore.completeRun(runId, "failed");
-        }
-        throw new Error(evt.error || "Failed to generate distractors.");
-      }
-    };
-    try {
-      setGeneratingId(quizId);
+    if (run.status === "failed") {
+      const message =
+        run.errorMessage ||
+        (failureCount > 0
+          ? `Failed to generate distractors for ${failureCount} card${
+              failureCount === 1 ? "" : "s"
+            }.`
+          : "Failed to generate distractors.");
+      setError(message);
       setStatus(undefined);
-      setProgress(null);
-      // isDev is already defined at the top of handleGenerateDistractors
-      const res = await fetch(
-        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1${isDev ? "&debug=1" : ""}`,
-        {
-          method: "POST",
-          cache: "no-store",
-          signal: abortController.signal,
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/x-ndjson",
-          },
-        }
-      );
-      if (!res.ok || !res.body) {
-        const txt = await res.text();
-        throw new Error(`HTTP ${res.status}: ${txt || "failed"}`);
-      }
-      const reader = res.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 1);
-          if (!line) continue;
-          handleLine(line);
-        }
-      }
-      const final = decoder.decode();
-      buffer += final;
-      let idx: number;
-      while ((idx = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line) continue;
-        handleLine(line);
-      }
-      if (buffer.trim()) {
-        handleLine(buffer.trim());
-      }
-    } catch (e: any) {
-      // Only set error status if not cancelled/aborted
-      if (!cancelled && e?.name !== "AbortError") {
-        setStatus(e?.message || "Failed to generate distractors.");
-      }
-      if (runId && isDev && debugStore) {
-        debugStore.completeRun(runId, "failed");
-      }
-    } finally {
-      cancelled = true; // Mark as cancelled to prevent any pending handleLine calls
-      if (!abortController.signal.aborted) {
-        setGeneratingId(undefined);
-        setProgress(null);
-        await load();
-      }
+      return;
+    }
+
+    if (run.status === "cancelled") {
+      setStatus("Cancelled distractor generation.");
+      setError(undefined);
     }
   };
 
-  const handleRegenerateMissing = async (quizId: string) => {
-    // Reuse the same logic as handleGenerateDistractors but with missingOnly flag
-    const isDev = process.env.NODE_ENV === "development";
-
-    let debugStore: {
-      createRun: typeof import("@/src/lib/distractorDebugStore").createRun;
-      addBatchToRun: typeof import("@/src/lib/distractorDebugStore").addBatchToRun;
-      updateBatch: typeof import("@/src/lib/distractorDebugStore").updateBatch;
-      completeRun: typeof import("@/src/lib/distractorDebugStore").completeRun;
-    } | null = null;
-
-    if (isDev) {
-      debugStore = await import("@/src/lib/distractorDebugStore");
-    }
-
-    const abortController = new AbortController();
+  useEffect(() => {
+    if (!activeRunId) return;
     let cancelled = false;
+    const runId = activeRunId;
 
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let runId: string | undefined;
-    let batchSize = 20;
-    let totalCards = 0;
-    let serverProvider = "deepseek";
-    let serverModel = "deepseek-chat";
-
-    const handleLine = (line: string) => {
-      if (!line || cancelled) return;
-      let evt;
+    const poll = async () => {
       try {
-        evt = JSON.parse(line);
-      } catch (e) {
-        console.warn("[SavedCustomQuizzesPanel] Invalid JSON line:", line.slice(0, 100));
-        return;
-      }
-      if (evt.type === "start") {
-        totalCards = evt.total ?? 0;
-        batchSize = evt.batchSize ?? 20;
-        serverProvider = evt.provider ?? "deepseek";
-        serverModel = evt.model ?? "deepseek-chat";
-        const skipped = evt.skipped ?? 0;
-        if (!cancelled) {
-          setProgress({
-            total: evt.total ?? 0,
-            completed: 0,
-            failed: 0,
-          });
-          if (skipped > 0) {
-            setStatus(`Skipped ${skipped} card${skipped === 1 ? '' : 's'} with distractors. Regenerating ${totalCards} missing...`);
+        const res = await fetch(
+          `/api/distractor-runs/${encodeURIComponent(runId)}`,
+          { cache: "no-store" }
+        );
+        if (res.status === 404) {
+          if (activeRunQuizId) {
+            clearRunId(activeRunQuizId);
+          }
+          setActiveRunId(undefined);
+          setActiveRunQuizId(undefined);
+          setGeneratingId(undefined);
+          setProgress(null);
+          setFailurePreview([]);
+          setStatus("Distractor run not found.");
+          return;
+        }
+        if (!res.ok) {
+          const txt = await res.text();
+          throw new Error(`HTTP ${res.status}: ${txt || "failed"}`);
+        }
+        const data = (await res.json()) as RunStatus;
+        if (cancelled || !isMountedRef.current || runId !== activeRunId) return;
+
+        applyRunUpdate({ ...data, runId });
+
+        if (["completed", "failed", "cancelled"].includes(data.status)) {
+          clearRunId(data.quizId);
+          setActiveRunId(undefined);
+          setActiveRunQuizId(undefined);
+          setGeneratingId(undefined);
+          setProgress(null);
+          if (isMountedRef.current) {
+            await load();
           }
         }
-        if (isDev && debugStore) {
-          const run = debugStore.createRun({
-            quizId,
-            totalCards,
-            batchSize,
-            provider: serverProvider,
-            model: serverModel,
-          });
-          runId = run.runId;
+      } catch (err) {
+        if (!cancelled && isMountedRef.current) {
+          const message =
+            err instanceof Error ? err.message : "Failed to fetch run status.";
+          setError(message);
         }
-      } else if (evt.type === "progress") {
-        if (!cancelled) {
-          setProgress({
-            total: evt.total ?? 0,
-            completed: evt.completed ?? 0,
-            failed: evt.failed ?? 0,
-          });
-        }
-      } else if (evt.type === "batch-detail" && runId && isDev && debugStore) {
-        if (evt.phase === "start") {
-          debugStore.addBatchToRun(runId, {
-            batchId: evt.batchId,
-            batchIndex: evt.batchIndex,
-            batchTotal: evt.batchTotal,
-            startedAt: evt.startedAt,
-            requests: (evt.requests || []).map((r: any) => ({
-              cardIndex: r.index,
-              question: r.question || "",
-              correctAnswers: r.correctAnswers || [],
-              snippet: r.snippet || "",
-              preview: r.preview,
-            })),
-            prompt: evt.prompt,
-            fullPromptPayload: evt.fullPromptPayload,
-          });
-        } else if (evt.phase === "complete") {
-          debugStore.updateBatch(runId, evt.batchId, {
-            status: (evt.responses || []).some((r: any) => r.error)
-              ? "error"
-              : "success",
-            responses: (evt.responses || []).map((r: any) => ({
-              cardIndex: r.index,
-              distractors: r.distractors || [],
-              error: r.error,
-              rawResponse: r.raw,
-              promptPayload: r.promptPayload,
-              usage: r.usage,
-            })),
-            completedAt: evt.completedAt,
-            fullPromptPayload: evt.fullPromptPayload,
-          });
-        }
-      } else if (evt.type === "complete") {
-        const updated = Array.isArray(evt.updatedCards)
-          ? evt.updatedCards.length
-          : 0;
-        const skipped = evt.skipped ?? 0;
-        if (!cancelled) {
-          setStatus(
-            `Generated distractors for ${updated} missing card${updated === 1 ? "" : "s"}. ${skipped > 0 ? `Skipped ${skipped} complete.` : ''}`
-          );
-        }
-        if (runId && isDev && debugStore) {
-          debugStore.completeRun(runId, "completed");
-        }
-      } else if (evt.type === "error") {
-        if (runId && isDev && debugStore) {
-          debugStore.completeRun(runId, "failed");
-        }
-        throw new Error(evt.error || "Failed to generate distractors.");
       }
     };
 
+    poll();
+    const intervalId = setInterval(poll, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [activeRunId, activeRunQuizId]);
+
+  const startRun = async (quizId: string, missingOnly: boolean) => {
+    if (activeRunId && activeRunQuizId && activeRunQuizId !== quizId) {
+      setStatus("Another quiz is already generating distractors. Cancel it to start a new run.");
+      return;
+    }
+
+    setStatus(undefined);
+    setError(undefined);
+    setFailurePreview([]);
+    setProgress(null);
+
     try {
-      setGeneratingId(quizId);
-      setStatus(undefined);
-      setProgress(null);
       const res = await fetch(
-        `/api/quizzes/${encodeURIComponent(quizId)}/distractors?progress=1&missingOnly=1${isDev ? "&debug=1" : ""}`,
+        `/api/quizzes/${encodeURIComponent(quizId)}/distractors/runs`,
         {
           method: "POST",
-          cache: "no-store",
-          signal: abortController.signal,
-          headers: {
-            "Content-Type": "application/json",
-            Accept: "application/x-ndjson",
-          },
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ missingOnly }),
         }
       );
-      if (!res.ok || !res.body) {
+      if (!res.ok) {
         const txt = await res.text();
         throw new Error(`HTTP ${res.status}: ${txt || "failed"}`);
       }
-      const reader = res.body.getReader();
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let idx: number;
-        while ((idx = buffer.indexOf("\n")) >= 0) {
-          const line = buffer.slice(0, idx).trim();
-          buffer = buffer.slice(idx + 1);
-          if (!line) continue;
-          handleLine(line);
-        }
+      const data = (await res.json()) as RunStatus;
+      const runId = String(data.runId || "");
+      if (!runId) {
+        throw new Error("Missing run id from server.");
       }
-      const final = decoder.decode();
-      buffer += final;
-      let idx: number;
-      while ((idx = buffer.indexOf("\n")) >= 0) {
-        const line = buffer.slice(0, idx).trim();
-        buffer = buffer.slice(idx + 1);
-        if (!line) continue;
-        handleLine(line);
-      }
-      if (buffer.trim()) {
-        handleLine(buffer.trim());
-      }
-    } catch (e: any) {
-      if (!cancelled && e?.name !== "AbortError") {
-        setStatus(e?.message || "Failed to generate distractors.");
-      }
-      if (runId && isDev && debugStore) {
-        debugStore.completeRun(runId, "failed");
-      }
-    } finally {
-      cancelled = true;
-      if (!abortController.signal.aborted) {
+
+      setActiveRunId(runId);
+      setActiveRunQuizId(quizId);
+      setGeneratingId(quizId);
+      persistRunId(quizId, runId);
+      applyRunUpdate({ ...data, runId, quizId });
+
+      if (["completed", "failed", "cancelled"].includes(data.status)) {
+        clearRunId(quizId);
+        setActiveRunId(undefined);
+        setActiveRunQuizId(undefined);
         setGeneratingId(undefined);
         setProgress(null);
-        await load();
+        if (isMountedRef.current) {
+          await load();
+        }
       }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to start run.";
+      setError(message);
     }
+  };
+
+  const handleGenerateDistractors = async (quizId: string) => {
+    await startRun(quizId, false);
+  };
+
+  const handleRegenerateMissing = async (quizId: string) => {
+    await startRun(quizId, true);
   };
 
   // Section helper functions
@@ -819,37 +709,24 @@ export function SavedCustomQuizzesPanel({
         </div>
       )}
 
-      {/* Progress Indicator */}
-      {progress && progress.total > 0 && (
-        <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-          <div className="flex items-center justify-between text-xs font-medium text-slate-600">
-            <span>Generating distractors</span>
-            <span className="font-mono">
-              {progress.completed}/{progress.total}
-              {progress.failed ? ` · ${progress.failed} failed` : ""}
-            </span>
-          </div>
-          <div className="mt-2.5 h-2 overflow-hidden rounded-full bg-slate-100">
-            <div
-              className="h-full bg-amber-500 transition-all duration-300"
-              style={{
-                width: `${progress.total > 0
-                  ? Math.min(
-                    100,
-                    Math.round((progress.completed / progress.total) * 100)
-                  )
-                  : 0
-                  }%`,
-              }}
-            />
-          </div>
-        </div>
-      )}
-
       {/* Error Message */}
       {error && (
         <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-2.5 text-sm text-rose-700">
           {error}
+        </div>
+      )}
+      {failurePreview.length > 0 && (
+        <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-4 py-2.5 text-xs text-rose-700">
+          <div className="font-semibold uppercase tracking-wide text-[10px] text-rose-500">
+            Recent Failures
+          </div>
+          <ul className="mt-1 space-y-1">
+            {failurePreview.map((failure, index) => (
+              <li key={`${failure.order}-${index}`}>
+                Card {failure.order}: {failure.error}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
@@ -997,19 +874,39 @@ export function SavedCustomQuizzesPanel({
                         type="button"
                         className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-700 shadow-sm transition-colors hover:bg-blue-100 disabled:opacity-50"
                         onClick={() => handleRegenerateMissing(q.id)}
-                        disabled={loading || generatingId === q.id}
+                        disabled={
+                          loading ||
+                          generatingId === q.id ||
+                          Boolean(
+                            activeRunId &&
+                              activeRunQuizId &&
+                              activeRunQuizId !== q.id
+                          )
+                        }
                         title={`Regenerate ${distractorStats.missing} missing card${distractorStats.missing === 1 ? '' : 's'}`}
                       >
-                        {generatingId === q.id ? "Generating…" : `Regenerate Missing (${distractorStats.missing})`}
+                        {generatingId === q.id && progress
+                          ? `Generating ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} failed` : ''}…`
+                          : `Regenerate Missing (${distractorStats.missing})`}
                       </button>
                     )}
                     <button
                       type="button"
                       className="rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
                       onClick={() => handleGenerateDistractors(q.id)}
-                      disabled={loading || generatingId === q.id}
+                      disabled={
+                        loading ||
+                        generatingId === q.id ||
+                        Boolean(
+                          activeRunId &&
+                            activeRunQuizId &&
+                            activeRunQuizId !== q.id
+                        )
+                      }
                     >
-                      {generatingId === q.id ? "Generating…" : "Regenerate All"}
+                      {generatingId === q.id && progress
+                        ? `Generating ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} failed` : ''}…`
+                        : "Regenerate All"}
                     </button>
                     <button
                       type="button"
@@ -1039,6 +936,47 @@ export function SavedCustomQuizzesPanel({
                       Delete
                     </button>
                   </div>
+
+                  {/* Inline Progress Bar (visible during generation) */}
+                  {generatingId === q.id && progress && progress.total > 0 && (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                      <div className="flex items-center justify-between text-xs font-medium text-amber-800">
+                        <span className="flex items-center gap-2">
+                          <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+                          </svg>
+                          Generating distractors…
+                        </span>
+                        <span className="flex items-center gap-2">
+                          <span className="font-mono">
+                            {progress.completed}/{progress.total}
+                            {progress.failed > 0 && (
+                              <span className="text-rose-600"> · {progress.failed} failed</span>
+                            )}
+                          </span>
+                          <button
+                            type="button"
+                            className="rounded-md border border-amber-300 bg-white/60 px-2 py-0.5 text-[10px] font-medium text-amber-900 shadow-sm transition-colors hover:bg-white"
+                            onClick={cancelActiveGeneration}
+                            disabled={!activeRunId}
+                          >
+                            Cancel
+                          </button>
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-amber-100">
+                        <div
+                          className="h-full bg-amber-500 transition-all duration-300"
+                          style={{
+                            width: `${progress.total > 0
+                              ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
+                              : 0}%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+                  )}
 
                   {/* Sections List */}
                   {(() => {

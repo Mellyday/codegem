@@ -14,6 +14,96 @@ export const LLM_DISTRACTOR_BATCH_SIZE =
 export const DEFAULT_MCQ_DISTRACTOR_COUNT = 6;
 export const DEFAULT_MULTI_DISTRACTOR_COUNT = 10;
 
+const DEFAULT_LLM_REQUEST_TIMEOUT_MS = 60_000;
+const parsedTimeoutMs = Number.parseInt(
+  process.env.LLM_REQUEST_TIMEOUT_MS || String(DEFAULT_LLM_REQUEST_TIMEOUT_MS),
+  10
+);
+const LLM_REQUEST_TIMEOUT_MS =
+  Number.isFinite(parsedTimeoutMs) && parsedTimeoutMs > 0
+    ? parsedTimeoutMs
+    : DEFAULT_LLM_REQUEST_TIMEOUT_MS;
+
+function createAbortSignalWithTimeout(
+  signal: AbortSignal | undefined,
+  timeoutMs: number
+): {
+  signal: AbortSignal | undefined;
+  cleanup: () => void;
+  didTimeout: () => boolean;
+} {
+  if (!timeoutMs || timeoutMs <= 0) {
+    return { signal, cleanup: () => { }, didTimeout: () => false };
+  }
+
+  const controller = new AbortController();
+  let timedOut = false;
+
+  const timeoutId = setTimeout(() => {
+    timedOut = true;
+    try {
+      controller.abort();
+    } catch { }
+  }, timeoutMs);
+
+  const onAbort = () => {
+    try {
+      controller.abort();
+    } catch { }
+  };
+  if (signal) {
+    signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  return {
+    signal: controller.signal,
+    cleanup: () => {
+      clearTimeout(timeoutId);
+      if (signal) {
+        signal.removeEventListener("abort", onAbort);
+      }
+    },
+    didTimeout: () => timedOut,
+  };
+}
+
+async function fetchDeepSeekJson(
+  payload: PromptPayload,
+  apiKey: string,
+  signal?: AbortSignal
+): Promise<any> {
+  const { signal: timeoutSignal, cleanup, didTimeout } =
+    createAbortSignalWithTimeout(signal, LLM_REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(
+      process.env.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(payload),
+        signal: timeoutSignal,
+      }
+    );
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`DeepSeek error ${res.status}: ${text}`);
+    }
+    return await res.json();
+  } catch (err) {
+    if (didTimeout()) {
+      throw new Error(
+        `DeepSeek request timed out after ${LLM_REQUEST_TIMEOUT_MS}ms`
+      );
+    }
+    throw err;
+  } finally {
+    cleanup();
+  }
+}
+
 export type DistractorProvider = "deepseek" | "mock";
 
 export type DistractorRequest = {
@@ -310,23 +400,7 @@ async function callDeepSeekBatch(
     stream: false,
   };
 
-  const res = await fetch(
-    process.env.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-      signal,
-    }
-  );
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`DeepSeek error ${res.status}: ${text}`);
-  }
-  const data = await res.json();
+  const data = await fetchDeepSeekJson(payload, apiKey, signal);
   const content = data?.choices?.[0]?.message?.content ?? "";
 
   const batchResults = parseBatchResponse(content);
@@ -348,13 +422,22 @@ async function callDeepSeekBatch(
     const isMulti = req.questionType === "multi";
     const targetCount = isMulti ? multiTarget : mcqTarget;
     const candidates = batchResults[i] || [];
-    const distractors = sanitizeCandidates(candidates, req.correctAnswers, targetCount);
+    const distractors = sanitizeCandidates(
+      candidates,
+      req.correctAnswers,
+      targetCount
+    );
 
     return { distractors };
   });
 
   // Include raw content in the result for debugging
-  return { results, raw: { ...data, _rawContent: content }, promptPayload: payload, usage };
+  return {
+    results,
+    raw: { ...data, _rawContent: content },
+    promptPayload: payload,
+    usage,
+  };
 }
 
 
@@ -383,23 +466,7 @@ async function callDeepSeek(
     stream: false,
   };
 
-  const res = await fetch(
-    process.env.DEEPSEEK_API_URL || "https://api.deepseek.com/chat/completions",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify(payload),
-      signal: req.signal,
-    }
-  );
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`DeepSeek error ${res.status}: ${text}`);
-  }
-  const data = await res.json();
+  const data = await fetchDeepSeekJson(payload, apiKey, req.signal);
   const content = data?.choices?.[0]?.message?.content ?? "";
   const candidates = parseArray(String(content || ""));
   const distractors = sanitizeCandidates(
@@ -486,16 +553,14 @@ export type BatchLogEvent = {
   /** Full prompt payload sent to the LLM API */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   fullPromptPayload?: { model: string; messages: any[]; stream: boolean };
+  /** Raw provider response for the whole batch (debug only) */
+  rawResponse?: unknown;
+  /** Token usage for the whole batch request */
+  usage?: TokenUsage;
   responses?: Array<{
     index: number;
     distractors: string[];
     error?: string;
-    raw?: unknown;
-    /** Full prompt for this specific request */
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    promptPayload?: { model: string; messages: any[]; stream: boolean };
-    /** Token usage for this request */
-    usage?: TokenUsage;
   }>;
   startedAt: string;
   completedAt?: string;
@@ -632,10 +697,6 @@ export async function generateDistractorsInBatches(
         index: number;
         distractors: string[];
         error?: string;
-        raw?: unknown;
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        promptPayload?: { model: string; messages: any[]; stream: boolean };
-        usage?: TokenUsage;
       }> = [];
 
       batchResult.results.forEach((res, idx) => {
@@ -656,9 +717,6 @@ export async function generateDistractorsInBatches(
         batchResponses.push({
           index: absoluteIndex,
           distractors: res.distractors,
-          raw: batchResult.raw,
-          promptPayload: batchResult.promptPayload,
-          usage: batchResult.usage,
           error: res.error,
         });
 
@@ -704,8 +762,9 @@ export async function generateDistractorsInBatches(
         batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
-        prompt: batchPrompt,
         fullPromptPayload: batchResult.promptPayload,
+        rawResponse: batchResult.raw,
+        usage: batchResult.usage,
         responses: batchResponses,
         startedAt: batchStartTime,
         completedAt: new Date().toISOString(),
@@ -755,7 +814,6 @@ export async function generateDistractorsInBatches(
         batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
-        prompt: batchPrompt,
         responses: items.map((item) => ({
           index: item.originalIndex,
           distractors: [],
@@ -851,5 +909,3 @@ export async function generateDistractorsInBatches(
 
   return results;
 }
-
-

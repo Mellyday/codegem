@@ -29,11 +29,6 @@ export type DistractorCardResponse = {
     cardIndex: number;
     distractors: string[];
     error?: string;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    rawResponse?: Record<string, any>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    promptPayload?: { model: string; messages: any[]; stream: boolean };
-    usage?: TokenUsage;
 };
 
 export type BatchLogEntry = {
@@ -49,6 +44,9 @@ export type BatchLogEntry = {
     prompt?: string;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     fullPromptPayload?: { model: string; messages: any[]; stream: boolean };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rawResponse?: any;
+    usage?: TokenUsage;
     status: "pending" | "success" | "error";
     errorMessage?: string;
 };
@@ -176,6 +174,9 @@ export function updateBatch(
         errorMessage?: string;
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         fullPromptPayload?: { model: string; messages: any[]; stream: boolean };
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rawResponse?: any;
+        usage?: TokenUsage;
     }
 ): void {
     const runs = loadFromStorage();
@@ -193,7 +194,9 @@ export function updateBatch(
     if (update.responses) batch.responses = update.responses;
     if (update.completedAt) batch.completedAt = update.completedAt;
     if (update.errorMessage) batch.errorMessage = update.errorMessage;
-    if (update.fullPromptPayload) batch.fullPromptPayload = update.fullPromptPayload;
+    if (update.fullPromptPayload !== undefined) batch.fullPromptPayload = update.fullPromptPayload;
+    if (update.rawResponse !== undefined) batch.rawResponse = update.rawResponse;
+    if (update.usage !== undefined) batch.usage = update.usage;
 
     saveToStorage(runs);
 }
