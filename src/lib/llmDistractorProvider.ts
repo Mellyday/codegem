@@ -118,6 +118,10 @@ export type DistractorRequest = {
   signal?: AbortSignal;
   // Optional: provide full source context to keep prompts stable and cache-friendly
   fullCode?: string;
+  // Previously saved distractors (used to avoid repeats and pool across retries)
+  existingDistractors?: string[];
+  // Stable key for deterministic trimming across runs
+  stableKey?: string;
 };
 
 export type TokenUsage = {
@@ -174,11 +178,10 @@ const parseArray = (content: string): string[] => {
     .filter(Boolean);
 };
 
-const sanitizeCandidates = (
+const normalizeCandidates = (
   candidates: string[],
-  correctAnswers: string[],
-  targetCount: number
-) => {
+  correctAnswers: string[]
+): string[] => {
   const correctSet = new Set(correctAnswers.map((c) => c.toLowerCase()));
   const seen = new Set<string>();
   const cleaned: string[] = [];
@@ -190,9 +193,64 @@ const sanitizeCandidates = (
     if (correctSet.has(lower)) continue;
     seen.add(lower);
     cleaned.push(s);
-    if (cleaned.length >= targetCount) break;
   }
   return cleaned;
+};
+
+const sanitizeCandidates = (
+  candidates: string[],
+  correctAnswers: string[],
+  targetCount: number
+) => {
+  const cleaned = normalizeCandidates(candidates, correctAnswers);
+  return cleaned.slice(0, targetCount);
+};
+
+const hashString = (input: string): number => {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = (hash * 16777619) >>> 0;
+  }
+  return hash;
+};
+
+const stablePick = (
+  items: string[],
+  targetCount: number,
+  stableKey?: string
+): string[] => {
+  if (!stableKey) return items.slice(0, targetCount);
+  const scored = items.map((item) => ({
+    item,
+    score: hashString(`${stableKey}:${item}`),
+  }));
+  scored.sort((a, b) => (a.score - b.score) || a.item.localeCompare(b.item));
+  return scored.slice(0, targetCount).map((entry) => entry.item);
+};
+
+const mergeDistractorPools = (
+  existing: string[] | undefined,
+  incoming: string[] | undefined,
+  correctAnswers: string[],
+  targetCount: number,
+  stableKey?: string
+): string[] => {
+  const merged = [
+    ...normalizeCandidates(existing ?? [], correctAnswers),
+    ...normalizeCandidates(incoming ?? [], correctAnswers),
+  ];
+  const seen = new Set<string>();
+  const deduped: string[] = [];
+  for (const item of merged) {
+    const lower = item.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    deduped.push(item);
+  }
+  if (targetCount <= 0) return [];
+  if (deduped.length <= targetCount) return deduped;
+  return stablePick(deduped, targetCount, stableKey);
 };
 
 type PromptMessage = { role: "system" | "user"; content: string };
@@ -230,17 +288,23 @@ const buildCardPrompt = (req: DistractorRequest, target: number) => {
     correctAnswers: req.correctAnswers,
     snippet: req.snippet,
     preview: req.preview,
+    existingDistractors:
+      req.existingDistractors && req.existingDistractors.length > 0
+        ? req.existingDistractors
+        : undefined,
   };
   // Keep JSON stable and append-only for cache friendliness
   const stableJson = JSON.stringify(
     payload,
-    ["question", "correctAnswers", "snippet", "preview"],
+    ["question", "correctAnswers", "snippet", "preview", "existingDistractors"],
     2
   );
   return [
     `Question type: ${questionType}.`,
     `Need ${target} incorrect options that fit alongside the correct answer(s) but are wrong.`,
-    "Use the quiz data below. Do not repeat the correct answers. Do not include explanations.",
+    "Use the quiz data below. Do not repeat the correct answers.",
+    "If existing distractors are provided, generate NEW ones that are not already listed.",
+    "Do not include explanations.",
     "Quiz data:",
     stableJson,
     `Respond with a JSON array of ${target} strings only.`,
@@ -267,6 +331,7 @@ const buildBatchPrompt = (
       correctAnswers: req.correctAnswers,
       snippet: req.snippet || "",
       preview: req.preview || "",
+      existingDistractors: req.existingDistractors || [],
     };
   });
 
@@ -277,6 +342,8 @@ const buildBatchPrompt = (
     "- multi-select questions need 10 distractors (used in 'select N out of 10' format)",
     "- single-answer MCQ questions need 6 distractors",
     "- Do NOT repeat the correct answers",
+    "- If existingDistractors are provided, do NOT repeat them",
+    "- Generate new distractors when possible; duplicates will be discarded",
     "- Make distractors plausible but clearly wrong",
     "",
     "Questions:",
@@ -469,10 +536,12 @@ async function callDeepSeek(
   const data = await fetchDeepSeekJson(payload, apiKey, req.signal);
   const content = data?.choices?.[0]?.message?.content ?? "";
   const candidates = parseArray(String(content || ""));
-  const distractors = sanitizeCandidates(
-    candidates,
+  const distractors = mergeDistractorPools(
+    req.existingDistractors,
+    sanitizeCandidates(candidates, req.correctAnswers, target),
     req.correctAnswers,
-    target
+    target,
+    req.stableKey
   );
 
   // Extract usage data from response
@@ -570,7 +639,7 @@ export async function generateDistractorsInBatches(
   requests: DistractorRequest[],
   opts?: {
     batchSize?: number;
-    onProgress?: (progress: BatchProgress) => void;
+    onProgress?: (progress: BatchProgress) => void | Promise<void>;
     sharedCodeContext?: string;
     /** Debug callback for detailed batch-level logging */
     onBatchLog?: (event: BatchLogEvent) => void;
@@ -593,6 +662,14 @@ export async function generateDistractorsInBatches(
   const multiTarget = opts?.multiTargetCount ?? DEFAULT_MULTI_DISTRACTOR_COUNT;
   const batchSignal = opts?.signal;
   const total = requests.length;
+  const reportProgress = async (progress: BatchProgress) => {
+    if (!opts?.onProgress) return;
+    try {
+      await opts.onProgress(progress);
+    } catch (err) {
+      console.warn("[Distractor] Progress callback failed:", err);
+    }
+  };
 
   // Fix #1: Track finalized cards (success or exhausted retries) to avoid completed > total
   const finalizedCards = new Set<number>();
@@ -615,22 +692,23 @@ export async function generateDistractorsInBatches(
     request: DistractorRequest
   ): boolean => {
     if (!result) return false;
-    if (result.error) return false;
 
     const isMulti = request.questionType === "multi";
     const minRequired = isMulti ? multiTarget : mcqTarget;
 
-    if (!result.distractors || result.distractors.length < minRequired) {
+    const merged = mergeDistractorPools(
+      request.existingDistractors,
+      result.distractors,
+      request.correctAnswers,
+      minRequired,
+      request.stableKey
+    );
+
+    if (!merged.length || merged.length < minRequired) {
       return false;
     }
 
-    // Check for duplicates with correct answers
-    const correctSet = new Set(request.correctAnswers.map(a => a.toLowerCase()));
-    const uniqueDistractors = result.distractors.filter(
-      d => !correctSet.has(d.toLowerCase())
-    );
-
-    return uniqueDistractors.length >= minRequired;
+    return true;
   };
 
   /**
@@ -706,18 +784,32 @@ export async function generateDistractorsInBatches(
         const currentAttempts = item.attempts;
 
         // Slim result: raw/promptPayload/usage only in onBatchLog, not per-card
+        const isMulti = request.questionType === "multi";
+        const targetCount = isMulti ? multiTarget : mcqTarget;
+        const mergedDistractors = mergeDistractorPools(
+          request.existingDistractors,
+          res.distractors,
+          request.correctAnswers,
+          targetCount,
+          request.stableKey
+        );
+        const hasEnough = mergedDistractors.length >= targetCount;
+        const nextRequest =
+          mergedDistractors.length > 0
+            ? { ...request, existingDistractors: mergedDistractors }
+            : request;
         const result: BatchResult = {
           index: absoluteIndex,
-          distractors: res.distractors,
-          error: res.error,
+          distractors: mergedDistractors,
+          error: hasEnough ? undefined : res.error,
         };
 
         batchResults.push(result);
 
         batchResponses.push({
           index: absoluteIndex,
-          distractors: res.distractors,
-          error: res.error,
+          distractors: mergedDistractors,
+          error: hasEnough ? undefined : res.error,
         });
 
         // Check if result needs retry
@@ -726,7 +818,7 @@ export async function generateDistractorsInBatches(
           if (currentAttempts < maxAttempts) {
             failedItems.push({
               originalIndex: absoluteIndex,
-              request,
+              request: nextRequest,
               attempts: currentAttempts + 1,
             });
           } else {
@@ -747,7 +839,7 @@ export async function generateDistractorsInBatches(
       });
 
       // Fix #1 & #4: Report progress based on finalized cards, use stable batch total
-      opts?.onProgress?.({
+      await reportProgress({
         total,
         completed: finalizedCards.size,
         failed: failedCount,
@@ -772,21 +864,54 @@ export async function generateDistractorsInBatches(
     } catch (err: unknown) {
       // Entire batch failed - queue all for retry
       const errorMessage = err instanceof Error ? err.message : String(err);
+      const batchResponses: Array<{
+        index: number;
+        distractors: string[];
+        error?: string;
+      }> = [];
 
       items.forEach((item) => {
         const absoluteIndex = item.originalIndex;
         const currentAttempts = item.attempts;
+        const isMulti = item.request.questionType === "multi";
+        const targetCount = isMulti ? multiTarget : mcqTarget;
+        const mergedDistractors = mergeDistractorPools(
+          item.request.existingDistractors,
+          [],
+          item.request.correctAnswers,
+          targetCount,
+          item.request.stableKey
+        );
+        const hasEnough = mergedDistractors.length >= targetCount;
+        const finalError = hasEnough ? undefined : errorMessage;
+        const nextRequest =
+          mergedDistractors.length > 0
+            ? { ...item.request, existingDistractors: mergedDistractors }
+            : item.request;
 
         batchResults.push({
           index: absoluteIndex,
-          distractors: [],
-          error: errorMessage,
+          distractors: mergedDistractors,
+          error: finalError,
         });
+
+        batchResponses.push({
+          index: absoluteIndex,
+          distractors: mergedDistractors,
+          error: finalError,
+        });
+
+        if (hasEnough) {
+          if (!finalizedCards.has(absoluteIndex)) {
+            finalizedCards.add(absoluteIndex);
+          }
+          return;
+        }
 
         if (currentAttempts < maxAttempts) {
           failedItems.push({
             originalIndex: absoluteIndex,
-            request: item.request,
+            request: nextRequest,
             attempts: currentAttempts + 1,
           });
         } else {
@@ -799,7 +924,7 @@ export async function generateDistractorsInBatches(
       });
 
       // Fix #1 & #4: Report progress based on finalized cards
-      opts?.onProgress?.({
+      await reportProgress({
         total,
         completed: finalizedCards.size,
         failed: failedCount,
@@ -814,11 +939,7 @@ export async function generateDistractorsInBatches(
         batchTotal: initialBatchTotal,
         phase: "complete",
         requests: batchRequests,
-        responses: items.map((item) => ({
-          index: item.originalIndex,
-          distractors: [],
-          error: errorMessage,
-        })),
+        responses: batchResponses,
         startedAt: batchStartTime,
         completedAt: new Date().toISOString(),
       });
@@ -882,12 +1003,7 @@ export async function generateDistractorsInBatches(
 
       // Update results - always write latest attempt to preserve error state
       batchResults.forEach(result => {
-        const item = slice.find(item => item.originalIndex === result.index);
-        const prev = results[result.index];
-        // Write if: no previous result, previous had error, current is valid, or current has error
-        if (!prev || prev.error || (item && validateResult(result, item.request)) || result.error) {
-          results[result.index] = result;
-        }
+        results[result.index] = result;
       });
 
       // Add still-failed items to retry queue

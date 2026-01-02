@@ -143,7 +143,31 @@ export function SavedCustomQuizzesPanel({
   onStartSaved: (quiz: SavedCustomQuizV11, quizId: string, sectionIndex: number) => void;
   onQuizComplete?: () => void;
 }) {
+  const coerceNumber = (value: unknown): number | undefined => {
+    if (typeof value === "number") return Number.isFinite(value) ? value : undefined;
+    if (typeof value === "string") {
+      const parsed = Number(value);
+      return Number.isFinite(parsed) ? parsed : undefined;
+    }
+    if (value && typeof value === "object") {
+      const maybeLong = value as { $numberLong?: string };
+      if (typeof maybeLong.$numberLong === "string") {
+        const parsed = Number(maybeLong.$numberLong);
+        return Number.isFinite(parsed) ? parsed : undefined;
+      }
+    }
+    return undefined;
+  };
+
+  const STATUS_CLEAR_DELAY_MS = 6000;
+
   const isMountedRef = useRef(true);
+  const pollFailuresRef = useRef(0);
+  const recentRunTimeoutRef = useRef<number | null>(null);
+  const statusTimeoutRef = useRef<number | null>(null);
+  const pollAbortRef = useRef<AbortController | null>(null);
+  const pollTimeoutRef = useRef<number | null>(null);
+  const pollInFlightRef = useRef(false);
 
   const [list, setList] = useState<SavedCustomQuizV11[]>([]);
   const [loading, setLoading] = useState(false);
@@ -155,6 +179,11 @@ export function SavedCustomQuizzesPanel({
   const [failurePreview, setFailurePreview] = useState<
     Array<{ order: number; error: string }>
   >([]);
+  const [recentRun, setRecentRun] = useState<{
+    quizId: string;
+    status: "completed" | "failed" | "cancelled";
+    progress: { total: number; completed: number; failed: number };
+  } | null>(null);
   const [progress, setProgress] = useState<{
     total: number;
     completed: number;
@@ -294,6 +323,18 @@ export function SavedCustomQuizzesPanel({
   useEffect(() => {
     return () => {
       isMountedRef.current = false;
+      if (recentRunTimeoutRef.current) {
+        window.clearTimeout(recentRunTimeoutRef.current);
+      }
+      if (statusTimeoutRef.current) {
+        window.clearTimeout(statusTimeoutRef.current);
+      }
+      if (pollTimeoutRef.current) {
+        window.clearTimeout(pollTimeoutRef.current);
+      }
+      if (pollAbortRef.current) {
+        pollAbortRef.current.abort();
+      }
     };
   }, []);
 
@@ -314,10 +355,15 @@ export function SavedCustomQuizzesPanel({
       for (const quiz of list) {
         const stored = sessionStorage.getItem(getRunStorageKey(quiz.id));
         if (stored) {
+          setRecentRun(null);
+          if (recentRunTimeoutRef.current) {
+            window.clearTimeout(recentRunTimeoutRef.current);
+          }
           setActiveRunId(stored);
           setActiveRunQuizId(quiz.id);
           setGeneratingId(quiz.id);
           setStatus("Resuming distractor generation…");
+          pollFailuresRef.current = 0;
           break;
         }
       }
@@ -332,6 +378,21 @@ export function SavedCustomQuizzesPanel({
     setActiveRunId(undefined);
     setActiveRunQuizId(undefined);
     setFailurePreview([]);
+    setRecentRun(null);
+    if (recentRunTimeoutRef.current) {
+      window.clearTimeout(recentRunTimeoutRef.current);
+    }
+    if (statusTimeoutRef.current) {
+      window.clearTimeout(statusTimeoutRef.current);
+    }
+    if (pollTimeoutRef.current) {
+      window.clearTimeout(pollTimeoutRef.current);
+    }
+    if (pollAbortRef.current) {
+      pollAbortRef.current.abort();
+    }
+    pollInFlightRef.current = false;
+    pollFailuresRef.current = 0;
   }, [fileKey?.kind, fileKey?.id, fileKey?.path]);
 
   const getRunStorageKey = (quizId: string) => `distractor-run:${quizId}`;
@@ -348,8 +409,36 @@ export function SavedCustomQuizzesPanel({
     } catch { }
   };
 
+  const scheduleRecentRun = (
+    payload: {
+      quizId: string;
+      status: "completed" | "failed" | "cancelled";
+      progress: { total: number; completed: number; failed: number };
+    }
+  ) => {
+    if (recentRunTimeoutRef.current) {
+      window.clearTimeout(recentRunTimeoutRef.current);
+    }
+    setRecentRun(payload);
+    recentRunTimeoutRef.current = window.setTimeout(() => {
+      setRecentRun(null);
+    }, STATUS_CLEAR_DELAY_MS);
+  };
+
+  const scheduleStatusClear = () => {
+    if (statusTimeoutRef.current) {
+      window.clearTimeout(statusTimeoutRef.current);
+    }
+    statusTimeoutRef.current = window.setTimeout(() => {
+      setStatus(undefined);
+    }, STATUS_CLEAR_DELAY_MS);
+  };
+
   const cancelActiveGeneration = async () => {
     if (!activeRunId) return;
+    // Capture current values before state updates to avoid stale closure
+    const currentQuizId = activeRunQuizId;
+    const currentProgress = progress;
     try {
       await fetch(`/api/distractor-runs/${encodeURIComponent(activeRunId)}`, {
         method: "POST",
@@ -357,8 +446,24 @@ export function SavedCustomQuizzesPanel({
         body: JSON.stringify({ action: "cancel" }),
       });
     } catch { }
+    if (currentQuizId) {
+      clearRunId(currentQuizId);
+    }
+    setActiveRunId(undefined);
+    setActiveRunQuizId(undefined);
+    setGeneratingId(undefined);
+    setProgress(null);
+    setFailurePreview([]);
     setStatus("Cancelled distractor generation.");
     setError(undefined);
+    scheduleStatusClear();
+    if (currentQuizId) {
+      scheduleRecentRun({
+        quizId: currentQuizId,
+        status: "cancelled",
+        progress: currentProgress || { total: 0, completed: 0, failed: 0 },
+      });
+    }
   };
 
   type RunFailure = { order: number; error: string };
@@ -374,6 +479,9 @@ export function SavedCustomQuizzesPanel({
     failures?: RunFailure[];
     skipped?: number;
     errorMessage?: string;
+    startedAt?: string;
+    updatedAt?: string;
+    completedAt?: string;
   };
 
   const applyRunUpdate = (run: RunStatus) => {
@@ -381,13 +489,30 @@ export function SavedCustomQuizzesPanel({
     const updatedCount = Array.isArray(run.updatedCards)
       ? run.updatedCards.length
       : 0;
-    const failureCount = failures.length || run.failed || 0;
-    const total = Number.isFinite(run.total) ? run.total : 0;
-    const completed = Number.isFinite(run.completed) ? run.completed : 0;
-    const failed = Number.isFinite(run.failed) ? run.failed : failureCount;
+    const failedValue = coerceNumber(run.failed);
+    const failureCount = failures.length > 0 ? failures.length : failedValue ?? 0;
+    const nextTotal = coerceNumber(run.total);
+    const nextCompleted = coerceNumber(run.completed);
+    const nextFailed = coerceNumber(run.failed);
+
+    const prevTotal = progress?.total ?? 0;
+    const prevCompleted = progress?.completed ?? 0;
+    const prevFailed = progress?.failed ?? 0;
+    const mergedCompleted = Math.max(prevCompleted, nextCompleted ?? prevCompleted);
+    const mergedFailed = Math.max(prevFailed, nextFailed ?? prevFailed);
+    const mergedTotal = Math.max(
+      prevTotal,
+      nextTotal ?? prevTotal,
+      mergedCompleted,
+      mergedFailed
+    );
 
     setFailurePreview(failures.slice(0, 3));
-    setProgress({ total, completed, failed });
+    setProgress({
+      total: mergedTotal,
+      completed: mergedCompleted,
+      failed: mergedFailed,
+    });
     setActiveRunQuizId(run.quizId);
 
     if (run.status === "queued" || run.status === "running") {
@@ -395,7 +520,7 @@ export function SavedCustomQuizzesPanel({
       setError(undefined);
       setStatus(
         failureCount > 0
-          ? `Generating distractors… ${failureCount} failed so far.`
+          ? `Generating distractors… ${failureCount} incomplete so far.`
           : "Generating distractors…"
       );
       return;
@@ -404,13 +529,12 @@ export function SavedCustomQuizzesPanel({
     setGeneratingId(undefined);
 
     if (run.status === "completed") {
-      if (total === 0) {
+      if (mergedTotal === 0) {
         setStatus("No cards needed distractors.");
       } else if (failureCount > 0) {
         setStatus(
-          `Generated ${updatedCount} card${updatedCount === 1 ? "" : "s"}. ${
-            failureCount
-          } failed.`
+          `Updated ${updatedCount} card${updatedCount === 1 ? "" : "s"}. ${failureCount
+          } still incomplete.`
         );
       } else {
         setStatus(
@@ -418,6 +542,16 @@ export function SavedCustomQuizzesPanel({
         );
       }
       setError(undefined);
+      scheduleStatusClear();
+      scheduleRecentRun({
+        quizId: run.quizId,
+        status: failureCount > 0 ? "failed" : "completed",
+        progress: {
+          total: mergedTotal,
+          completed: mergedCompleted,
+          failed: mergedFailed,
+        },
+      });
       return;
     }
 
@@ -425,18 +559,44 @@ export function SavedCustomQuizzesPanel({
       const message =
         run.errorMessage ||
         (failureCount > 0
-          ? `Failed to generate distractors for ${failureCount} card${
-              failureCount === 1 ? "" : "s"
-            }.`
+          ? `Failed to generate distractors for ${failureCount} card${failureCount === 1 ? "" : "s"
+          }.`
           : "Failed to generate distractors.");
+      if (updatedCount > 0) {
+        setStatus(
+          `Updated ${updatedCount} card${updatedCount === 1 ? "" : "s"}. ${failureCount || mergedTotal
+          } still incomplete.`
+        );
+        scheduleStatusClear();
+      } else {
+        setStatus(undefined);
+      }
       setError(message);
-      setStatus(undefined);
+      scheduleRecentRun({
+        quizId: run.quizId,
+        status: "failed",
+        progress: {
+          total: mergedTotal,
+          completed: mergedCompleted,
+          failed: mergedFailed,
+        },
+      });
       return;
     }
 
     if (run.status === "cancelled") {
       setStatus("Cancelled distractor generation.");
       setError(undefined);
+      scheduleStatusClear();
+      scheduleRecentRun({
+        quizId: run.quizId,
+        status: "cancelled",
+        progress: {
+          total: mergedTotal,
+          completed: mergedCompleted,
+          failed: mergedFailed,
+        },
+      });
     }
   };
 
@@ -446,10 +606,19 @@ export function SavedCustomQuizzesPanel({
     const runId = activeRunId;
 
     const poll = async () => {
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
+      const controller = new AbortController();
+      pollAbortRef.current = controller;
+      const timeoutId = window.setTimeout(() => {
+        try {
+          controller.abort();
+        } catch { }
+      }, 10000);
       try {
         const res = await fetch(
           `/api/distractor-runs/${encodeURIComponent(runId)}`,
-          { cache: "no-store" }
+          { cache: "no-store", signal: controller.signal }
         );
         if (res.status === 404) {
           if (activeRunQuizId) {
@@ -470,6 +639,7 @@ export function SavedCustomQuizzesPanel({
         const data = (await res.json()) as RunStatus;
         if (cancelled || !isMountedRef.current || runId !== activeRunId) return;
 
+        pollFailuresRef.current = 0;
         applyRunUpdate({ ...data, runId });
 
         if (["completed", "failed", "cancelled"].includes(data.status)) {
@@ -481,21 +651,55 @@ export function SavedCustomQuizzesPanel({
           if (isMountedRef.current) {
             await load();
           }
+          return;
         }
       } catch (err) {
         if (!cancelled && isMountedRef.current) {
           const message =
             err instanceof Error ? err.message : "Failed to fetch run status.";
           setError(message);
+          pollFailuresRef.current += 1;
+          if (pollFailuresRef.current >= 3) {
+            if (activeRunQuizId) {
+              clearRunId(activeRunQuizId);
+            }
+            setActiveRunId(undefined);
+            setActiveRunQuizId(undefined);
+            setGeneratingId(undefined);
+            setProgress(null);
+            setFailurePreview([]);
+            setStatus("Run status unavailable. You can retry generation.");
+            scheduleStatusClear();
+            return;
+          }
         }
+      } finally {
+        window.clearTimeout(timeoutId);
+        if (pollAbortRef.current === controller) {
+          pollAbortRef.current = null;
+        }
+        pollInFlightRef.current = false;
       }
     };
 
     poll();
-    const intervalId = setInterval(poll, 2000);
+    pollTimeoutRef.current = window.setTimeout(function tick() {
+      if (cancelled) return;
+      poll().finally(() => {
+        if (!cancelled && runId === activeRunId) {
+          pollTimeoutRef.current = window.setTimeout(tick, 2000);
+        }
+      });
+    }, 2000);
     return () => {
       cancelled = true;
-      clearInterval(intervalId);
+      if (pollTimeoutRef.current) {
+        window.clearTimeout(pollTimeoutRef.current);
+      }
+      if (pollAbortRef.current) {
+        pollAbortRef.current.abort();
+      }
+      pollInFlightRef.current = false;
     };
   }, [activeRunId, activeRunQuizId]);
 
@@ -509,6 +713,13 @@ export function SavedCustomQuizzesPanel({
     setError(undefined);
     setFailurePreview([]);
     setProgress(null);
+    setRecentRun(null);
+    if (recentRunTimeoutRef.current) {
+      window.clearTimeout(recentRunTimeoutRef.current);
+    }
+    if (statusTimeoutRef.current) {
+      window.clearTimeout(statusTimeoutRef.current);
+    }
 
     try {
       const res = await fetch(
@@ -533,6 +744,7 @@ export function SavedCustomQuizzesPanel({
       setActiveRunQuizId(quizId);
       setGeneratingId(quizId);
       persistRunId(quizId, runId);
+      pollFailuresRef.current = 0;
       applyRunUpdate({ ...data, runId, quizId });
 
       if (["completed", "failed", "cancelled"].includes(data.status)) {
@@ -718,7 +930,7 @@ export function SavedCustomQuizzesPanel({
       {failurePreview.length > 0 && (
         <div className="rounded-lg border border-rose-100 bg-rose-50/60 px-4 py-2.5 text-xs text-rose-700">
           <div className="font-semibold uppercase tracking-wide text-[10px] text-rose-500">
-            Recent Failures
+            Recent Incomplete Cards
           </div>
           <ul className="mt-1 space-y-1">
             {failurePreview.map((failure, index) => (
@@ -744,7 +956,12 @@ export function SavedCustomQuizzesPanel({
             // Count cards with/without sufficient distractors
             const distractorStats = q.cards.reduce(
               (acc, c) => {
-                const required = c.questionType === "multi" ? 10 : 6;
+                const required =
+                  typeof c.distractorPoolSize === "number" && c.distractorPoolSize > 0
+                    ? c.distractorPoolSize
+                    : c.questionType === "multi"
+                      ? 10
+                      : 6;
                 const hasEnough =
                   Array.isArray(c.llmDistractors) &&
                   c.llmDistractors.length >= required;
@@ -879,14 +1096,16 @@ export function SavedCustomQuizzesPanel({
                           generatingId === q.id ||
                           Boolean(
                             activeRunId &&
-                              activeRunQuizId &&
-                              activeRunQuizId !== q.id
+                            activeRunQuizId &&
+                            activeRunQuizId !== q.id
                           )
                         }
                         title={`Regenerate ${distractorStats.missing} missing card${distractorStats.missing === 1 ? '' : 's'}`}
                       >
-                        {generatingId === q.id && progress
-                          ? `Generating ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} failed` : ''}…`
+                        {generatingId === q.id
+                          ? progress && progress.total > 0
+                            ? `Generating ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} incomplete` : ''}…`
+                            : "Generating…"
                           : `Regenerate Missing (${distractorStats.missing})`}
                       </button>
                     )}
@@ -899,13 +1118,15 @@ export function SavedCustomQuizzesPanel({
                         generatingId === q.id ||
                         Boolean(
                           activeRunId &&
-                            activeRunQuizId &&
-                            activeRunQuizId !== q.id
+                          activeRunQuizId &&
+                          activeRunQuizId !== q.id
                         )
                       }
                     >
-                      {generatingId === q.id && progress
-                        ? `Generating ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} failed` : ''}…`
+                      {generatingId === q.id
+                        ? progress && progress.total > 0
+                          ? `Generating ${progress.completed}/${progress.total}${progress.failed ? ` · ${progress.failed} incomplete` : ''}…`
+                          : "Generating…"
                         : "Regenerate All"}
                     </button>
                     <button
@@ -938,7 +1159,7 @@ export function SavedCustomQuizzesPanel({
                   </div>
 
                   {/* Inline Progress Bar (visible during generation) */}
-                  {generatingId === q.id && progress && progress.total > 0 && (
+                  {generatingId === q.id && (
                     <div className="rounded-lg border border-amber-200 bg-amber-50 p-3">
                       <div className="flex items-center justify-between text-xs font-medium text-amber-800">
                         <span className="flex items-center gap-2">
@@ -949,12 +1170,16 @@ export function SavedCustomQuizzesPanel({
                           Generating distractors…
                         </span>
                         <span className="flex items-center gap-2">
-                          <span className="font-mono">
-                            {progress.completed}/{progress.total}
-                            {progress.failed > 0 && (
-                              <span className="text-rose-600"> · {progress.failed} failed</span>
-                            )}
-                          </span>
+                          {progress && progress.total > 0 ? (
+                            <span className="font-mono">
+                              {progress.completed}/{progress.total}
+                              {progress.failed > 0 && (
+                                <span className="text-rose-600"> · {progress.failed} incomplete</span>
+                              )}
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-amber-700">Fetching progress…</span>
+                          )}
                           <button
                             type="button"
                             className="rounded-md border border-amber-300 bg-white/60 px-2 py-0.5 text-[10px] font-medium text-amber-900 shadow-sm transition-colors hover:bg-white"
@@ -967,12 +1192,55 @@ export function SavedCustomQuizzesPanel({
                       </div>
                       <div className="mt-2 h-2 overflow-hidden rounded-full bg-amber-100">
                         <div
-                          className="h-full bg-amber-500 transition-all duration-300"
+                          className={`h-full ${progress && progress.total > 0 ? "bg-amber-500 transition-all duration-300" : "bg-amber-300 animate-pulse"}`}
                           style={{
-                            width: `${progress.total > 0
+                            width: `${progress && progress.total > 0
                               ? Math.min(100, Math.round((progress.completed / progress.total) * 100))
-                              : 0}%`,
+                              : 100}%`,
                           }}
+                        />
+                      </div>
+                    </div>
+                  )}
+
+                  {recentRun && recentRun.quizId === q.id && generatingId !== q.id && (
+                    <div
+                      className={`rounded-lg border p-3 ${recentRun.status === "completed"
+                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                          : recentRun.status === "cancelled"
+                            ? "border-slate-200 bg-slate-50 text-slate-700"
+                            : "border-rose-200 bg-rose-50 text-rose-700"
+                        }`}
+                    >
+                      <div className="flex items-center justify-between text-xs font-medium">
+                        <span>
+                          {recentRun.status === "completed"
+                            ? "Distractor generation completed"
+                            : recentRun.status === "cancelled"
+                              ? "Distractor generation cancelled"
+                              : "Distractor generation ended with incomplete cards"}
+                        </span>
+                        <span className="flex items-center gap-2">
+                          <span className="font-mono">
+                            {recentRun.progress.completed}/{recentRun.progress.total}
+                            {recentRun.progress.failed > 0 && (
+                              <span className="text-rose-600">
+                                {" "}
+                                · {recentRun.progress.failed} incomplete
+                              </span>
+                            )}
+                          </span>
+                        </span>
+                      </div>
+                      <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/70">
+                        <div
+                          className={`h-full ${recentRun.status === "completed"
+                              ? "bg-emerald-500"
+                              : recentRun.status === "cancelled"
+                                ? "bg-slate-400"
+                                : "bg-rose-500"
+                            }`}
+                          style={{ width: "100%" }}
                         />
                       </div>
                     </div>

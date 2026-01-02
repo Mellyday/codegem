@@ -62,19 +62,24 @@ type RunDoc = {
   completedAt?: Date;
 };
 
+const toNumber = (value: unknown, fallback = 0) => {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
+};
+
 const serializeRun = (run: RunDoc) => ({
   runId: String(run._id),
   quizId: String(run.quizId),
   status: run.status,
-  total: run.total,
-  completed: run.completed,
-  failed: run.failed,
+  total: toNumber(run.total),
+  completed: toNumber(run.completed),
+  failed: toNumber(run.failed),
   updatedCards: run.updatedCards,
   failures: run.failures,
-  skipped: run.skipped,
+  skipped: toNumber(run.skipped),
   provider: run.provider,
   model: run.model,
-  batchSize: run.batchSize,
+  batchSize: toNumber(run.batchSize),
   errorMessage: run.errorMessage,
 });
 
@@ -137,6 +142,8 @@ export async function POST(
     preview?: string;
     question?: string;
     snippet?: string;
+    existingDistractors?: string[];
+    stableKey: string;
   }> = [];
 
   let skippedCount = 0;
@@ -180,6 +187,10 @@ export async function POST(
       preview: card.sourceRef?.preview,
       question: card.question,
       snippet: String(card.text ?? ""),
+      existingDistractors: Array.isArray(card.llmDistractors)
+        ? card.llmDistractors
+        : undefined,
+      stableKey: `${String(quizId)}:${card.order ?? i}`,
     });
   }
 
@@ -240,6 +251,8 @@ export async function POST(
             model,
             fullCode,
             signal: controller.signal,
+            existingDistractors: item.existingDistractors,
+            stableKey: item.stableKey,
           })),
           {
             batchSize: LLM_DISTRACTOR_BATCH_SIZE,
@@ -262,18 +275,35 @@ export async function POST(
         );
 
         results.forEach((res, idx) => {
-          const { order, index } = generationQueue[idx];
+          const { order, index, targetCount } = generationQueue[idx];
+          const nextPool = Array.isArray(res.distractors) ? res.distractors : [];
+          const existingPool = Array.isArray(quiz.cards[index].llmDistractors)
+            ? quiz.cards[index].llmDistractors
+            : [];
+          if (nextPool.length > 0) {
+            const samePool =
+              existingPool.length === nextPool.length &&
+              existingPool.every((value, i) => value === nextPool[i]);
+            if (!samePool) {
+              quiz.cards[index].llmDistractors = nextPool;
+              updatedCards.push(order);
+              changed = true;
+            }
+          }
           if (res.error) {
             failures.push({ order, error: res.error });
             return;
           }
-          if (res.distractors?.length) {
-            quiz.cards[index].llmDistractors = res.distractors;
-            updatedCards.push(order);
-            changed = true;
+          if (nextPool.length === 0) {
+            failures.push({ order, error: "No distractors returned" });
             return;
           }
-          failures.push({ order, error: "No distractors returned" });
+          if (nextPool.length < targetCount) {
+            failures.push({
+              order,
+              error: `Only ${nextPool.length}/${targetCount} distractors after retries`,
+            });
+          }
         });
 
         if (controller.signal.aborted) {

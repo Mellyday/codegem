@@ -20,25 +20,40 @@ type RunDoc = {
   model: string;
   batchSize: number;
   errorMessage?: string;
+  createdAt?: Date;
+  startedAt?: Date;
   updatedAt?: Date;
   completedAt?: Date;
+};
+
+const STALE_RUN_MS = 15 * 60 * 1000;
+
+const toNumber = (value: unknown, fallback = 0) => {
+  const num = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(num) ? num : fallback;
 };
 
 const serializeRun = (run: RunDoc) => ({
   runId: String(run._id),
   quizId: String(run.quizId),
   status: run.status,
-  total: run.total,
-  completed: run.completed,
-  failed: run.failed,
+  total: toNumber(run.total),
+  completed: toNumber(run.completed),
+  failed: toNumber(run.failed),
   updatedCards: run.updatedCards || [],
   failures: run.failures || [],
-  skipped: run.skipped || 0,
+  skipped: toNumber(run.skipped),
   provider: run.provider,
   model: run.model,
-  batchSize: run.batchSize,
+  batchSize: toNumber(run.batchSize),
   errorMessage: run.errorMessage,
+  startedAt: run.startedAt,
+  updatedAt: run.updatedAt,
+  completedAt: run.completedAt,
 });
+
+const getRunLastUpdate = (run: RunDoc) =>
+  run.updatedAt || run.startedAt || run.createdAt;
 
 export async function GET(
   request: Request,
@@ -64,9 +79,33 @@ export async function GET(
 
   const db = await getDb();
   const runs = db.collection<RunDoc>("distractorRuns");
-  const run = await runs.findOne({ _id: runId, userId });
+  let run = await runs.findOne({ _id: runId, userId });
   if (!run) {
     return NextResponse.json({ error: "Run not found" }, { status: 404 });
+  }
+
+  const lastUpdate = getRunLastUpdate(run);
+  const isActive = run.status === "queued" || run.status === "running";
+  if (isActive && lastUpdate) {
+    const ageMs = Date.now() - lastUpdate.getTime();
+    if (ageMs > STALE_RUN_MS) {
+      cancelRunController(String(runId));
+      await runs.updateOne(
+        { _id: runId, userId },
+        {
+          $set: {
+            status: "failed",
+            errorMessage: "Distractor run timed out. Please retry.",
+            updatedAt: new Date(),
+            completedAt: new Date(),
+          },
+        }
+      );
+      run = await runs.findOne({ _id: runId, userId });
+      if (!run) {
+        return NextResponse.json({ error: "Run not found" }, { status: 404 });
+      }
+    }
   }
 
   return NextResponse.json(serializeRun(run));
