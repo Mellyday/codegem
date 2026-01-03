@@ -39,7 +39,7 @@ type Question = {
   // Options to display
   options: string[];
   // Multi-select support
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   // For multi-select questions, the set of correct labels
   answerLabels?: string[];
   // For multi-select questions, how many to select
@@ -242,7 +242,7 @@ type SavedCustomQuizCardV11 = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   // multi-select (optional)
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -291,19 +291,27 @@ const generateQuestionsFromCustom = (
   const qs: Question[] = [];
 
   for (const c of cards) {
-    const isMulti = c.questionType === "multi" && Array.isArray(c.multiCorrect);
+    const hasMultiCorrect = Array.isArray(c.multiCorrect);
+    const isOrderedMulti = c.questionType === "orderedMulti" && hasMultiCorrect;
+    const isMulti =
+      (c.questionType === "multi" || isOrderedMulti || (!c.questionType && hasMultiCorrect)) &&
+      hasMultiCorrect;
     if (isMulti) {
-      const stem = c.question || "Select all that apply.";
-      const correct = Array.isArray(c.multiCorrect) ? c.multiCorrect : [];
+      const stem =
+        c.question || (isOrderedMulti ? "Select the answers in order." : "Select all that apply.");
+      const correct = hasMultiCorrect ? c.multiCorrect : [];
       const llmPool = Array.isArray(c.llmDistractors) ? c.llmDistractors : undefined;
       const optionPool = Array.isArray(c.optionPool) ? c.optionPool : undefined;
       const options = buildMultiChoiceOptions(correct, llmPool, optionPool);
+      const numToSelect =
+        typeof c.multiSelectHint === "number" ? c.multiSelectHint : correct.length;
       qs.push({
         stem,
         answerLabel: "", // unused for multi
         options,
-        questionType: "multi",
+        questionType: isOrderedMulti ? "orderedMulti" : "multi",
         answerLabels: correct || [],
+        numToSelect,
         kind: c.type,
         generatorRule: c.generatorRule,
         difficulty: c.difficulty,
@@ -413,6 +421,7 @@ export const QuizViewer = ({
   const [current, setCurrent] = useState(0);
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [selectedMulti, setSelectedMulti] = useState<Set<string>>(new Set());
+  const [selectedOrdered, setSelectedOrdered] = useState<string[]>([]);
   const [score, setScore] = useState(0);
   // Persist answers per question index so navigation retains choices
   const [answers, setAnswers] = useState<Array<string | string[] | undefined>>(
@@ -551,6 +560,7 @@ export const QuizViewer = ({
       setCurrent(0);
       setSelected(undefined);
       setSelectedMulti(new Set());
+      setSelectedOrdered([]);
       setScore(0);
       setAnswers(new Array(qs.length).fill(undefined));
       setAnsweredFlags(new Array(qs.length).fill(false));
@@ -703,38 +713,69 @@ export const QuizViewer = ({
       );
     }
 
+    const isOrderedMulti =
+      currentQ.questionType === "orderedMulti" &&
+      Array.isArray(currentQ.answerLabels);
     const isMulti =
-      currentQ.questionType === "multi" && Array.isArray(currentQ.answerLabels);
-    const correctSet = new Set<string>(
-      isMulti ? (currentQ.answerLabels as string[]) : []
-    );
+      (currentQ.questionType === "multi" || isOrderedMulti) &&
+      Array.isArray(currentQ.answerLabels);
+    const correctLabels = isMulti ? (currentQ.answerLabels as string[]) : [];
+    const correctSet = new Set<string>(correctLabels);
+    const selectionTarget =
+      typeof currentQ.numToSelect === "number"
+        ? currentQ.numToSelect
+        : correctLabels.length;
     const isAnswered = answeredFlags[current] || false;
-    const correct = isMulti
-      ? isAnswered &&
-      ((): boolean => {
-        if (!isMulti) return false;
-        if (selectedMulti.size !== (currentQ.answerLabels?.length ?? 0))
-          return false;
+    const unorderedCorrect =
+      isAnswered &&
+      selectedMulti.size === correctLabels.length &&
+      (() => {
         for (const v of selectedMulti) if (!correctSet.has(v)) return false;
         return true;
-      })()
+      })();
+    const orderedCorrect =
+      isAnswered &&
+      selectedOrdered.length === correctLabels.length &&
+      selectedOrdered.every((v, idx) => v === correctLabels[idx]);
+    const correct = isMulti
+      ? isOrderedMulti
+        ? orderedCorrect
+        : unorderedCorrect
       : isAnswered && selected === currentQ.answerLabel;
 
     const handleSelect = (opt: string) => {
       if (isAnswered) return;
       if (isMulti) {
-        setSelectedMulti((prev) => {
-          const next = new Set(prev);
-          if (next.has(opt)) next.delete(opt);
-          else next.add(opt);
-          // keep persisted answers in sync with the toggled set
-          setAnswers((prevAns) => {
-            const n = prevAns.slice();
-            n[current] = Array.from(next);
-            return n;
+        if (isOrderedMulti) {
+          setSelectedOrdered((prev) => {
+            const idx = prev.indexOf(opt);
+            let next = prev.slice();
+            if (idx >= 0) {
+              next.splice(idx, 1);
+            } else if (!selectionTarget || next.length < selectionTarget) {
+              next = [...next, opt];
+            }
+            setAnswers((prevAns) => {
+              const n = prevAns.slice();
+              n[current] = next;
+              return n;
+            });
+            return next;
           });
-          return next;
-        });
+        } else {
+          setSelectedMulti((prev) => {
+            const next = new Set(prev);
+            if (next.has(opt)) next.delete(opt);
+            else next.add(opt);
+            // keep persisted answers in sync with the toggled set
+            setAnswers((prevAns) => {
+              const n = prevAns.slice();
+              n[current] = Array.from(next);
+              return n;
+            });
+            return next;
+          });
+        }
       } else {
         setSelected(opt);
         setAnswers((prev) => {
@@ -759,12 +800,14 @@ export const QuizViewer = ({
         n[current] = true;
         return n;
       });
-      const isRight = (() => {
-        if (selectedMulti.size !== (currentQ.answerLabels?.length ?? 0))
-          return false;
-        for (const v of selectedMulti) if (!correctSet.has(v)) return false;
-        return true;
-      })();
+      const isRight = isOrderedMulti
+        ? selectedOrdered.length === correctLabels.length &&
+          selectedOrdered.every((v, idx) => v === correctLabels[idx])
+        : selectedMulti.size === correctLabels.length &&
+          (() => {
+            for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+            return true;
+          })();
       if (isRight) setScore((s) => s + 1);
       onRevealChange?.(revealAfterForQuestion(currentQ));
     };
@@ -810,9 +853,11 @@ export const QuizViewer = ({
         if (Array.isArray(ans)) {
           setSelected(undefined);
           setSelectedMulti(new Set(ans));
+          setSelectedOrdered(ans);
         } else {
           setSelected(ans as string | undefined);
           setSelectedMulti(new Set());
+          setSelectedOrdered([]);
         }
         // Update reveal window for the next question if available (AST or custom)
         const nextQ = questions[nextIdx];
@@ -1035,7 +1080,9 @@ export const QuizViewer = ({
           <p className="text-sm text-slate-800">{currentQ.stem}</p>
           <p className="text-xs text-slate-500">
             {isMulti
-              ? `Select all that apply.`
+              ? isOrderedMulti
+                ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
+                : "Select all that apply."
               : "Choose the next part of the code."}
           </p>
 
@@ -1045,8 +1092,11 @@ export const QuizViewer = ({
                 ? correctSet.has(opt)
                 : opt === currentQ.answerLabel;
               const isSelected = isMulti
-                ? selectedMulti.has(opt)
+                ? isOrderedMulti
+                  ? selectedOrdered.includes(opt)
+                  : selectedMulti.has(opt)
                 : selected === opt;
+              const orderIndex = isOrderedMulti ? selectedOrdered.indexOf(opt) : -1;
               const base =
                 "w-full rounded-md border px-3 py-2 text-left text-sm shadow-sm";
               const idle =
@@ -1086,6 +1136,11 @@ export const QuizViewer = ({
                         }
                       }}
                     >
+                      {isOrderedMulti && orderIndex >= 0 && (
+                        <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-200 text-[11px] font-semibold text-amber-900">
+                          {orderIndex + 1}
+                        </span>
+                      )}
                       <span
                         className={`font-mono whitespace-pre-wrap break-all sm:break-words ${isLong && !isExpanded ? "line-clamp-2" : ""
                           }`}

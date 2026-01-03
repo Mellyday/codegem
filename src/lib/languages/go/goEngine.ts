@@ -38,7 +38,7 @@ export type QuizQuestion = {
   sourceRefs: SourceRef[];
   generatorRule: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   optionPool?: string[];
   multiSelectHint?: number;
@@ -279,7 +279,7 @@ const buildMultiSelectOptionPool = (
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) idPool.push(m[0]);
     while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
-  } catch {}
+  } catch { }
   let pool = Array.from(new Set<string>([...correct, ...idPool, ...strPool]));
   if (pool.length < 10) {
     const needed = 10 - pool.length;
@@ -314,7 +314,7 @@ const buildImportOptionPool = (
       if (!candidate || aliases.has(candidate)) continue;
       pool.add(candidate);
     }
-  } catch {}
+  } catch { }
 
   const distractors = Array.from(pool);
   if (distractors.length < 10 - correct.length) {
@@ -1675,6 +1675,49 @@ const ruleReturnStatement: Rule = ({ node, code, sourceRef }) => {
   ];
 };
 
+/**
+ * Decompose a chain of selector/call expressions into individual segments.
+ * For example: `a.foo().bar(x).baz` => ["a", "foo", "()", "bar", "(x)", "baz"]
+ * Returns an array of { text, type, node } where type is 'base' | 'field' | 'call' | 'args'
+ */
+const decomposeChain = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): Array<{ text: string; segmentType: "base" | "field" | "call" | "args"; node: TreeSitterAstNode }> => {
+  const segments: Array<{ text: string; segmentType: "base" | "field" | "call" | "args"; node: TreeSitterAstNode }> = [];
+
+  const walk = (n: TreeSitterAstNode) => {
+    if (n.type === "call_expression") {
+      // First process the function/operand part
+      const funcNode = childByField(n, "function") || (n.namedChildren || [])[0];
+      if (funcNode) walk(funcNode);
+      // Then add the arguments as a segment
+      const argsNode = childByField(n, "arguments");
+      if (argsNode) {
+        const argsText = textForRange(argsNode.startIndex, argsNode.endIndex, code) || "()";
+        segments.push({ text: argsText, segmentType: "args", node: argsNode });
+      }
+    } else if (n.type === "selector_expression") {
+      // Process the operand first (left side)
+      const operand = childByField(n, "operand") || (n.namedChildren || [])[0];
+      if (operand) walk(operand);
+      // Then add the field (right side after the dot)
+      const field = childByField(n, "field") || (n.namedChildren || [])[1];
+      if (field) {
+        const fieldText = textForRange(field.startIndex, field.endIndex, code) || field.type;
+        segments.push({ text: fieldText, segmentType: "field", node: field });
+      }
+    } else {
+      // Base case: identifier, literal, or other atomic expression
+      const text = textForRange(n.startIndex, n.endIndex, code) || n.type;
+      segments.push({ text, segmentType: "base", node: n });
+    }
+  };
+
+  walk(node);
+  return segments;
+};
+
 const buildCallQuestions = (
   callNode: TreeSitterAstNode,
   code: string | undefined,
@@ -1682,38 +1725,132 @@ const buildCallQuestions = (
   profile: DecompositionLevel,
   stem: string
 ): Q11[] => {
-  const callee = childByField(callNode, "function") || (callNode.namedChildren || [])[0];
-  const argsNode = childByField(callNode, "arguments");
-  const args = argsNode ? argsNode.namedChildren || [] : [];
   const qs: Q11[] = [];
-  if (callee) {
-    const calleeText = textForRange(callee.startIndex, callee.endIndex, code) || callee.type;
+
+  // SHALLOW MODE: Answer is the FULL call expression text as an MCQ
+  if (profile === "shallow") {
+    const fullCallText = textForRange(callNode.startIndex, callNode.endIndex, code) || callNode.type;
     qs.push({
-      kind: "call.callee",
+      kind: "call.full",
       stem,
-      answerLabel: calleeText,
-      options: buildDistractors(calleeText),
+      answerLabel: fullCallText,
+      options: shuffle([fullCallText, ...buildDistractors(fullCallText)]),
       sourceRefs: [sourceRef],
-      generatorRule: "call.callee",
+      generatorRule: "call.full",
     });
+    return qs;
   }
-  if (profile === "deep" && args.length > 0) {
-    const maxArgs = Math.min(2, args.length);
-    for (let i = 0; i < maxArgs; i++) {
-      const arg = args[i];
-      const text = textForRange(arg.startIndex, arg.endIndex, code) || arg.type;
+
+  // DEEP MODE: Decompose into chain segments, ask about each step
+  const segments = decomposeChain(callNode, code);
+
+  // If we have a simple call (e.g., foo(a, b)), just ask callee + args
+  // If we have a chain (e.g., a.foo().bar(x) or a.b.c()), ask step-by-step
+  const fieldCount = segments.reduce(
+    (count, seg) => count + (seg.segmentType === "field" ? 1 : 0),
+    0
+  );
+  const argsCount = segments.reduce(
+    (count, seg) => count + (seg.segmentType === "args" ? 1 : 0),
+    0
+  );
+  const hasChain = fieldCount > 1 || argsCount > 1;
+
+  if (hasChain) {
+    // Ask about each segment in order
+    let stepNum = 1;
+    for (const seg of segments) {
+      if (seg.segmentType === "base") {
+        qs.push({
+          kind: "call.chain.base",
+          stem: `Step ${stepNum}: What is the base/starting expression?`,
+          answerLabel: seg.text,
+          options: shuffle([seg.text, ...buildDistractors(seg.text)]),
+          sourceRefs: [sourceRef],
+          generatorRule: "call.chain.base",
+        });
+        stepNum++;
+      } else if (seg.segmentType === "field") {
+        qs.push({
+          kind: "call.chain.field",
+          stem: `Step ${stepNum}: What field/method is accessed next?`,
+          answerLabel: seg.text,
+          options: shuffle([seg.text, ...buildDistractors(seg.text)]),
+          sourceRefs: [sourceRef],
+          generatorRule: "call.chain.field",
+        });
+        stepNum++;
+      } else if (seg.segmentType === "args") {
+        // Extract individual arguments from the args node
+        const argsChildren = seg.node.namedChildren || [];
+        if (argsChildren.length > 0) {
+          const argTexts = argsChildren.map(a => textForRange(a.startIndex, a.endIndex, code) || a.type);
+          const optionPool = buildMultiSelectOptionPool(
+            argTexts,
+            code,
+            callNode.startIndex,
+            callNode.endIndex
+          );
+          qs.push({
+            kind: "call.chain.args",
+            stem: `Step ${stepNum}: Select the arguments in order`,
+            answerLabel: "",
+            options: optionPool,
+            optionPool,
+            questionType: "orderedMulti",
+            multiCorrect: argTexts,
+            multiSelectHint: argTexts.length,
+            sourceRefs: [sourceRef],
+            generatorRule: "call.chain.args",
+          });
+          stepNum++;
+        }
+      }
+    }
+  } else {
+    // Simple call: callee + ordered args
+    const callee = childByField(callNode, "function") || (callNode.namedChildren || [])[0];
+    if (callee) {
+      const calleeText = textForRange(callee.startIndex, callee.endIndex, code) || callee.type;
       qs.push({
-        kind: "call.arg",
-        stem: `What is argument #${i + 1}?`,
-        answerLabel: text,
-        options: buildDistractors(text),
+        kind: "call.callee",
+        stem,
+        answerLabel: calleeText,
+        options: shuffle([calleeText, ...buildDistractors(calleeText)]),
         sourceRefs: [sourceRef],
-        generatorRule: "call.arg",
+        generatorRule: "call.callee",
+      });
+    }
+
+    // Arguments as orderedMulti
+    const argsNode = childByField(callNode, "arguments");
+    const args = argsNode ? argsNode.namedChildren || [] : [];
+    if (args.length > 0) {
+      const argTexts = args.map(a => textForRange(a.startIndex, a.endIndex, code) || a.type);
+      const optionPool = buildMultiSelectOptionPool(
+        argTexts,
+        code,
+        callNode.startIndex,
+        callNode.endIndex
+      );
+      qs.push({
+        kind: "call.args",
+        stem: "Select the arguments in order",
+        answerLabel: "",
+        options: optionPool,
+        optionPool,
+        questionType: "orderedMulti",
+        multiCorrect: argTexts,
+        multiSelectHint: argTexts.length,
+        sourceRefs: [sourceRef],
+        generatorRule: "call.args",
       });
     }
   }
+
   return qs;
 };
+
 
 const ruleGoDeferStatement: Rule = ({ node, code, sourceRef, profile }) => {
   const expr = (node.namedChildren || [])[0];
@@ -2426,7 +2563,7 @@ type CustomQuizCard = {
   semanticRole?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -2482,9 +2619,12 @@ export function buildCustomQuizPayload(params: {
     order: number,
     action: "next" | "dig"
   ): CustomQuizCard => {
+    const isOrderedMulti = q.questionType === "orderedMulti";
     const isMulti =
+      isOrderedMulti ||
       q.questionType === "multi" ||
       (Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0);
+    const resolvedQuestionType = isOrderedMulti ? "orderedMulti" : "multi";
     const span = step.displaySpan ?? {
       start: step.node.startIndex,
       end: step.node.endIndex,
@@ -2495,11 +2635,11 @@ export function buildCustomQuizPayload(params: {
     const cardRef =
       baseRef && revealSpan
         ? {
-            ...baseRef,
-            start: revealSpan.start,
-            end: revealSpan.end,
-            preview: textForRange(revealSpan.start, revealSpan.end, code)?.slice(0, 120),
-          }
+          ...baseRef,
+          start: revealSpan.start,
+          end: revealSpan.end,
+          preview: textForRange(revealSpan.start, revealSpan.end, code)?.slice(0, 120),
+        }
         : baseRef;
     return {
       order,
@@ -2510,7 +2650,7 @@ export function buildCustomQuizPayload(params: {
       semanticRole: step.lesson?.semanticRole,
       generatorRule: q.generatorRule,
       difficulty: q.difficulty,
-      questionType: isMulti ? "multi" : undefined,
+      questionType: isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
       optionPool: q.optionPool,

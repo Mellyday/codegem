@@ -22,7 +22,7 @@ type QuizCard = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   sourceRef?: SourceRef;
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -105,15 +105,17 @@ export async function POST(
 
   for (let i = 0; i < (quiz.cards || []).length; i++) {
     const card = quiz.cards[i] as QuizCard;
+    const isMulti =
+      card.questionType === "multi" || card.questionType === "orderedMulti";
     const correctAnswers =
-      card.questionType === "multi"
+      isMulti
         ? (Array.isArray(card.multiCorrect)
           ? card.multiCorrect.map((c) => String(c ?? "")).filter(Boolean)
           : [])
         : [String(card.text ?? "")].filter(Boolean);
     const targetCount = card.distractorPoolSize
       ? card.distractorPoolSize
-      : (card.questionType === "multi" ? 10 : 6);
+      : (isMulti ? 10 : 6);
 
     if (!correctAnswers.length) {
       failures.push({

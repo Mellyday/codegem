@@ -25,7 +25,7 @@ type QuizCard = {
   difficulty?: "easy" | "medium" | "hard";
   sourceRef?: SourceRef;
   // multi-select (optional)
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];

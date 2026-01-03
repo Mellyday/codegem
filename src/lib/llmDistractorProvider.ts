@@ -112,7 +112,7 @@ export type DistractorRequest = {
   snippet?: string;
   preview?: string;
   targetCount: number;
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   provider?: DistractorProvider;
   model?: string;
   signal?: AbortSignal;
@@ -278,11 +278,13 @@ const buildBaseMessages = (
   return messages;
 };
 
+const isMultiQuestion = (questionType?: DistractorRequest["questionType"]) =>
+  questionType === "multi" || questionType === "orderedMulti";
+
 const buildCardPrompt = (req: DistractorRequest, target: number) => {
-  const questionType =
-    req.questionType === "multi"
-      ? "multi-select (select several answers)"
-      : "single-answer multiple choice";
+  const questionType = isMultiQuestion(req.questionType)
+    ? "multi-select (select several answers)"
+    : "single-answer multiple choice";
   const payload = {
     question: req.question,
     correctAnswers: req.correctAnswers,
@@ -321,7 +323,7 @@ const buildBatchPrompt = (
   multiTarget: number = DEFAULT_MULTI_DISTRACTOR_COUNT
 ): string => {
   const cards = requests.map((req, i) => {
-    const isMulti = req.questionType === "multi";
+    const isMulti = isMultiQuestion(req.questionType);
     const targetCount = isMulti ? multiTarget : mcqTarget;
     return {
       index: i,
@@ -486,7 +488,7 @@ async function callDeepSeekBatch(
 
   // Map results back to requests, sanitizing each
   const results = requests.map((req, i) => {
-    const isMulti = req.questionType === "multi";
+  const isMulti = isMultiQuestion(req.questionType);
     const targetCount = isMulti ? multiTarget : mcqTarget;
     const candidates = batchResults[i] || [];
     const distractors = sanitizeCandidates(
@@ -693,7 +695,7 @@ export async function generateDistractorsInBatches(
   ): boolean => {
     if (!result) return false;
 
-    const isMulti = request.questionType === "multi";
+    const isMulti = isMultiQuestion(request.questionType);
     const minRequired = isMulti ? multiTarget : mcqTarget;
 
     const merged = mergeDistractorPools(
@@ -784,7 +786,7 @@ export async function generateDistractorsInBatches(
         const currentAttempts = item.attempts;
 
         // Slim result: raw/promptPayload/usage only in onBatchLog, not per-card
-        const isMulti = request.questionType === "multi";
+        const isMulti = isMultiQuestion(request.questionType);
         const targetCount = isMulti ? multiTarget : mcqTarget;
         const mergedDistractors = mergeDistractorPools(
           request.existingDistractors,
@@ -873,7 +875,7 @@ export async function generateDistractorsInBatches(
       items.forEach((item) => {
         const absoluteIndex = item.originalIndex;
         const currentAttempts = item.attempts;
-        const isMulti = item.request.questionType === "multi";
+        const isMulti = isMultiQuestion(item.request.questionType);
         const targetCount = isMulti ? multiTarget : mcqTarget;
         const mergedDistractors = mergeDistractorPools(
           item.request.existingDistractors,

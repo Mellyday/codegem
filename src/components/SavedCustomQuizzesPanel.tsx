@@ -23,7 +23,7 @@ export type SavedCustomQuizCardV11 = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   // multi-select (optional)
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -194,6 +194,30 @@ export function SavedCustomQuizzesPanel({
     failed: number;
   } | null>(null);
 
+  const isActiveRunStatus = (status?: RunStatus["status"]) =>
+    status === "queued" || status === "running";
+
+  const fetchRunStatus = async (runId: string): Promise<RunStatus | null> => {
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => {
+      try {
+        controller.abort();
+      } catch { }
+    }, 10000);
+    try {
+      const res = await fetch(
+        `/api/distractor-runs/${encodeURIComponent(runId)}`,
+        { cache: "no-store", signal: controller.signal }
+      );
+      if (!res.ok) return null;
+      return (await res.json()) as RunStatus;
+    } catch {
+      return null;
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  };
+
   // Section editor state
   const [editingSections, setEditingSections] = useState<SavedCustomQuizV11 | null>(null);
   const [sectionMarkers, setSectionMarkers] = useState<number[]>([]);
@@ -246,7 +270,8 @@ export function SavedCustomQuizzesPanel({
       profile: quiz.profile,
       root: quiz.root,
       cards: quiz.cards.map((c) => {
-        const isMulti = c.questionType === "multi";
+        const isMulti =
+          c.questionType === "multi" || c.questionType === "orderedMulti";
         const question =
           c.question || (isMulti ? "Select all that apply." : "What comes next?");
         const answer = isMulti
@@ -355,10 +380,22 @@ export function SavedCustomQuizzesPanel({
 
   useEffect(() => {
     if (activeRunId || list.length === 0) return;
-    try {
-      for (const quiz of list) {
-        const stored = sessionStorage.getItem(getRunStorageKey(quiz.id));
-        if (stored) {
+    let cancelled = false;
+    (async () => {
+      try {
+        for (const quiz of list) {
+          const stored = sessionStorage.getItem(getRunStorageKey(quiz.id));
+          if (!stored) continue;
+          const data = await fetchRunStatus(stored);
+          if (cancelled) return;
+          if (!data) {
+            clearRunId(quiz.id);
+            continue;
+          }
+          if (!isActiveRunStatus(data.status)) {
+            clearRunId(quiz.id);
+            continue;
+          }
           setRecentRun(null);
           if (recentRunTimeoutRef.current) {
             window.clearTimeout(recentRunTimeoutRef.current);
@@ -368,10 +405,14 @@ export function SavedCustomQuizzesPanel({
           setGeneratingId(quiz.id);
           setStatus("Resuming distractor generation…");
           pollFailuresRef.current = 0;
+          applyRunUpdate({ ...data, runId: stored });
           break;
         }
-      }
-    } catch { }
+      } catch { }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [activeRunId, list]);
 
   useEffect(() => {
@@ -488,6 +529,30 @@ export function SavedCustomQuizzesPanel({
     completedAt?: string;
   };
 
+  const mergeProgress = (
+    prev: { total: number; completed: number; failed: number } | null | undefined,
+    nextTotal?: number,
+    nextCompleted?: number,
+    nextFailed?: number
+  ) => {
+    const prevTotal = prev?.total ?? 0;
+    const prevCompleted = prev?.completed ?? 0;
+    const prevFailed = prev?.failed ?? 0;
+    const mergedCompleted = Math.max(prevCompleted, nextCompleted ?? prevCompleted);
+    const mergedFailed = Math.max(prevFailed, nextFailed ?? prevFailed);
+    const mergedTotal = Math.max(
+      prevTotal,
+      nextTotal ?? prevTotal,
+      mergedCompleted,
+      mergedFailed
+    );
+    return {
+      total: mergedTotal,
+      completed: mergedCompleted,
+      failed: mergedFailed,
+    };
+  };
+
   const applyRunUpdate = (run: RunStatus) => {
     const failures = Array.isArray(run.failures) ? run.failures : [];
     const updatedCount = Array.isArray(run.updatedCards)
@@ -498,25 +563,12 @@ export function SavedCustomQuizzesPanel({
     const nextTotal = coerceNumber(run.total);
     const nextCompleted = coerceNumber(run.completed);
     const nextFailed = coerceNumber(run.failed);
-
-    const prevTotal = progress?.total ?? 0;
-    const prevCompleted = progress?.completed ?? 0;
-    const prevFailed = progress?.failed ?? 0;
-    const mergedCompleted = Math.max(prevCompleted, nextCompleted ?? prevCompleted);
-    const mergedFailed = Math.max(prevFailed, nextFailed ?? prevFailed);
-    const mergedTotal = Math.max(
-      prevTotal,
-      nextTotal ?? prevTotal,
-      mergedCompleted,
-      mergedFailed
-    );
+    const mergedSnapshot = mergeProgress(progress, nextTotal, nextCompleted, nextFailed);
 
     setFailurePreview(failures.slice(0, 3));
-    setProgress({
-      total: mergedTotal,
-      completed: mergedCompleted,
-      failed: mergedFailed,
-    });
+    setProgress((prev) =>
+      mergeProgress(prev, nextTotal, nextCompleted, nextFailed)
+    );
     setActiveRunQuizId(run.quizId);
 
     if (run.status === "queued" || run.status === "running") {
@@ -533,7 +585,7 @@ export function SavedCustomQuizzesPanel({
     setGeneratingId(undefined);
 
     if (run.status === "completed") {
-      if (mergedTotal === 0) {
+      if (mergedSnapshot.total === 0) {
         setStatus("No cards needed distractors.");
       } else if (failureCount > 0) {
         setStatus(
@@ -551,9 +603,9 @@ export function SavedCustomQuizzesPanel({
         quizId: run.quizId,
         status: failureCount > 0 ? "failed" : "completed",
         progress: {
-          total: mergedTotal,
-          completed: mergedCompleted,
-          failed: mergedFailed,
+          total: mergedSnapshot.total,
+          completed: mergedSnapshot.completed,
+          failed: mergedSnapshot.failed,
         },
       });
       return;
@@ -568,7 +620,7 @@ export function SavedCustomQuizzesPanel({
           : "Failed to generate distractors.");
       if (updatedCount > 0) {
         setStatus(
-          `Updated ${updatedCount} card${updatedCount === 1 ? "" : "s"}. ${failureCount || mergedTotal
+          `Updated ${updatedCount} card${updatedCount === 1 ? "" : "s"}. ${failureCount || mergedSnapshot.total
           } still incomplete.`
         );
         scheduleStatusClear();
@@ -580,9 +632,9 @@ export function SavedCustomQuizzesPanel({
         quizId: run.quizId,
         status: "failed",
         progress: {
-          total: mergedTotal,
-          completed: mergedCompleted,
-          failed: mergedFailed,
+          total: mergedSnapshot.total,
+          completed: mergedSnapshot.completed,
+          failed: mergedSnapshot.failed,
         },
       });
       return;
@@ -596,11 +648,34 @@ export function SavedCustomQuizzesPanel({
         quizId: run.quizId,
         status: "cancelled",
         progress: {
-          total: mergedTotal,
-          completed: mergedCompleted,
-          failed: mergedFailed,
+          total: mergedSnapshot.total,
+          completed: mergedSnapshot.completed,
+          failed: mergedSnapshot.failed,
         },
       });
+    }
+  };
+
+  const refreshActiveRun = async () => {
+    if (!activeRunId) return;
+    const runId = activeRunId;
+    const data = await fetchRunStatus(runId);
+    if (!data || !isMountedRef.current) return;
+    if (activeRunId !== runId) return;
+
+    pollFailuresRef.current = 0;
+    applyRunUpdate({ ...data, runId });
+
+    if (["completed", "failed", "cancelled"].includes(data.status)) {
+      clearRunId(data.quizId);
+      setActiveRunId(undefined);
+      setActiveRunQuizId(undefined);
+      setGeneratingId(undefined);
+      setProgress(null);
+      setFailurePreview([]);
+      if (isMountedRef.current) {
+        await load();
+      }
     }
   };
 
@@ -707,10 +782,45 @@ export function SavedCustomQuizzesPanel({
     };
   }, [activeRunId, activeRunQuizId]);
 
+  useEffect(() => {
+    if (!activeRunId) return;
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        void refreshActiveRun();
+      }
+    };
+    window.addEventListener("focus", handleVisibility);
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => {
+      window.removeEventListener("focus", handleVisibility);
+      document.removeEventListener("visibilitychange", handleVisibility);
+    };
+  }, [activeRunId]);
+
   const startRun = async (quizId: string, missingOnly: boolean) => {
     if (activeRunId && activeRunQuizId && activeRunQuizId !== quizId) {
-      setStatus("Another quiz is already generating distractors. Cancel it to start a new run.");
-      return;
+      const runIdToCheck = activeRunId;
+      const quizIdToCheck = activeRunQuizId;
+      const data = await fetchRunStatus(runIdToCheck);
+      const runStillActive = data && isActiveRunStatus(data.status);
+
+      if (activeRunId !== runIdToCheck || activeRunQuizId !== quizIdToCheck) {
+        return;
+      }
+
+      if (runStillActive) {
+        setStatus(
+          "Another quiz is already generating distractors. Cancel it to start a new run."
+        );
+        return;
+      }
+
+      clearRunId(quizIdToCheck);
+      setActiveRunId(undefined);
+      setActiveRunQuizId(undefined);
+      setGeneratingId(undefined);
+      setProgress(null);
+      setFailurePreview([]);
     }
 
     setStatus(undefined);
@@ -929,7 +1039,10 @@ export function SavedCustomQuizzesPanel({
         <button
           type="button"
           className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-medium text-slate-600 shadow-sm transition-colors hover:bg-slate-50 disabled:opacity-50"
-          onClick={() => load()}
+          onClick={async () => {
+            await refreshActiveRun();
+            await load();
+          }}
           disabled={loading}
         >
           <svg className="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -981,10 +1094,12 @@ export function SavedCustomQuizzesPanel({
             // Count cards with/without sufficient distractors
             const distractorStats = q.cards.reduce(
               (acc, c) => {
+                const isMulti =
+                  c.questionType === "multi" || c.questionType === "orderedMulti";
                 const required =
                   typeof c.distractorPoolSize === "number" && c.distractorPoolSize > 0
                     ? c.distractorPoolSize
-                    : c.questionType === "multi"
+                    : isMulti
                       ? 10
                       : 6;
                 const hasEnough =
@@ -1455,7 +1570,8 @@ export function SavedCustomQuizzesPanel({
                                 <div className="text-xs font-medium text-slate-500">
                                   Card {index + 1} · {card.type}
                                 </div>
-                                {card.questionType === "multi" && (
+                                {(card.questionType === "multi" ||
+                                  card.questionType === "orderedMulti") && (
                                   <span className="flex-shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
                                     Multi
                                   </span>
@@ -1464,7 +1580,10 @@ export function SavedCustomQuizzesPanel({
                               <div className="mt-1 font-mono text-sm text-slate-900 break-all line-clamp-2">
                                 {card.text || "No answer"}
                               </div>
-                              {card.questionType === "multi" && card.multiCorrect && card.multiCorrect.length > 1 && (
+                              {(card.questionType === "multi" ||
+                                card.questionType === "orderedMulti") &&
+                                card.multiCorrect &&
+                                card.multiCorrect.length > 1 && (
                                 <div className="mt-1 text-xs text-slate-500">
                                   + {card.multiCorrect.length - 1} more answer{card.multiCorrect.length > 2 ? 's' : ''}
                                 </div>

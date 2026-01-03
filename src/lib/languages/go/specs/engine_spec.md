@@ -476,7 +476,7 @@ Always:
 - `What function is invoked?` (callee of the call expression)
 
 Deep:
-- argument #1 / #2 questions (limit to N=2)
+- If the invoked expression is a `call_expression`, use the call-expression rules below
 
 ### 7.12 Returns and branches
 `return_statement`:
@@ -489,8 +489,10 @@ Deep:
 
 ### 7.13 Call expressions (deep-only bubble)
 When a statement is a lone call (often used for side effects):
-- `What function is called?`
-- Deep: argument #1 (limit)
+- Shallow: `What function is called?` → full call text (includes args)
+- Deep:
+  - Simple calls: callee question + ordered multi-select for arguments
+  - Chained calls/properties: step-by-step base/field/method, with ordered args per call
 
 ---
 
@@ -537,4 +539,3 @@ Deep adds:
 6) Reuse the overlap guard logic from Python.
 7) Add parsing support (server + optional WASM client).
 8) Add a dev-only “node type dump” utility to validate alias mappings.
-
