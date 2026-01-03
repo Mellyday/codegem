@@ -4,7 +4,7 @@ import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
 import { ExplorerActions } from "@/src/components/ExplorerActions";
-import { FileQuizActions } from "@/src/components/FileQuizActions";
+import { FileListing } from "@/src/components/FileListing";
 
 type Params = { id: string; path?: string[] };
 
@@ -36,44 +36,13 @@ export default async function RepoBrowsePage({
       <section className="mx-auto max-w-4xl px-6 py-8">
         <Breadcrumb kind="repo" id={id} prefix={listing.prefix} />
         <ExplorerActions kind="repo" id={id} prefix={listing.prefix} />
-        <ul className="mt-4 divide-y divide-rose-100 rounded-lg border border-rose-200 bg-white">
-          {listing.dirs.map((d) => (
-            <li key={`dir:${d}`} className="flex items-center justify-between px-4 py-3">
-              <Link
-                href={`/repo/${encodeURIComponent(id)}/${[listing.prefix, d]
-                  .filter(Boolean)
-                  .join("/")
-                  .split("/")
-                  .map(encodeURIComponent)
-                  .join("/")}`}
-                className="font-medium text-rose-700 hover:underline"
-              >
-                {d}/
-              </Link>
-              <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">Folder</span>
-            </li>
-          ))}
-          {listing.files.map((f) => (
-            <li key={`file:${f.path}`} className="flex items-center justify-between px-4 py-3">
-              <Link
-                href={`/repo/${encodeURIComponent(id)}/${f.path
-                  .split("/")
-                  .map(encodeURIComponent)
-                  .join("/")}`}
-                className="text-slate-800 hover:underline"
-              >
-                {f.name}
-              </Link>
-              <div className="flex items-center gap-2">
-                <FileQuizActions kind="repo" id={id} path={f.path} />
-                <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
-              </div>
-            </li>
-          ))}
-          {listing.dirs.length === 0 && listing.files.length === 0 && (
-            <li className="px-4 py-6 text-sm italic text-rose-400">Empty</li>
-          )}
-        </ul>
+        <FileListing
+          kind="repo"
+          id={id}
+          prefix={listing.prefix}
+          dirs={listing.dirs}
+          files={listing.files}
+        />
       </section>
     </main>
   );
