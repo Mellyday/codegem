@@ -41,7 +41,7 @@ export type QuizQuestion = {
   sourceRefs: SourceRef[];
   generatorRule: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   optionPool?: string[];
   multiSelectHint?: number;
@@ -2516,7 +2516,7 @@ type CustomQuizCard = {
   semanticRole?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi";
+  questionType?: "single" | "multi" | "orderedMulti";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
