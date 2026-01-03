@@ -368,6 +368,54 @@ const extractCallChain = (
   return links.reverse();
 };
 
+type CallChainSegment = {
+  segmentType: "base" | "field" | "args";
+  text: string;
+  node: TreeSitterAstNode;
+};
+
+const decomposeCallChain = (
+  node: TreeSitterAstNode,
+  code?: string
+): CallChainSegment[] => {
+  const segments: CallChainSegment[] = [];
+  const walk = (n: TreeSitterAstNode | undefined) => {
+    if (!n) return;
+    if (n.type === "call") {
+      const funcNode = childByField(n, "function") || (n.namedChildren || [])[0];
+      if (funcNode) walk(funcNode);
+      const argsNode =
+        childByField(n, "arguments") ||
+        firstChildOfType(n, "argument_list");
+      if (argsNode) {
+        const argsText =
+          textForRange(argsNode.startIndex, argsNode.endIndex, code) || "()";
+        segments.push({ text: argsText, segmentType: "args", node: argsNode });
+      }
+      return;
+    }
+    if (n.type === "attribute") {
+      const obj = childByField(n, "object") || (n.namedChildren || [])[0];
+      if (obj) walk(obj);
+      const nameNode =
+        childByField(n, "attribute") ||
+        (n.namedChildren || [])[n.namedChildren.length - 1];
+      if (nameNode) {
+        const fieldText =
+          textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+          nameNode.type;
+        segments.push({ text: fieldText, segmentType: "field", node: nameNode });
+      }
+      return;
+    }
+    const text = textForRange(n.startIndex, n.endIndex, code) || n.type;
+    segments.push({ text, segmentType: "base", node: n });
+  };
+
+  walk(node);
+  return segments;
+};
+
 function buildDistractors(correct: string, _ctx?: { code?: string }): string[] {
   if (!correct || !correct.trim()) {
     return shuffle(GENERIC_DISTRACTORS).slice(0, 3);
@@ -1173,83 +1221,128 @@ const rules: Record<string, Rule[]> = {
   ],
   call: [
     ({ root, node, code, sourceRef, profile }) => {
-      const fnNode = getSectionFirstItem(node, "func");
-      const args = getSectionItems(node, "args");
-      const keywords = getSectionItems(node, "keywords");
-      const fnText = fnNode
-        ? textForRange(fnNode.startIndex, fnNode.endIndex, code) || fnNode.type
-        : "call";
-      const qs: Q11[] = [
-        {
-          kind: "call-func",
+      const qs: Q11[] = [];
+      const fullCallText =
+        textForRange(node.startIndex, node.endIndex, code) || node.type;
+      const argsNode =
+        childByField(node, "arguments") ||
+        firstChildOfType(node, "argument_list");
+      const argNodes = argsNode ? argsNode.namedChildren || [] : [];
+      const argTexts = argNodes.map(
+        (a) => textForRange(a.startIndex, a.endIndex, code) || a.type
+      );
+
+      if (profile === "shallow") {
+        qs.push({
+          kind: "call.full",
           stem: "Which function or method is being called here?",
-          answerLabel: fnText,
-          options: buildDistractors(fnText, { code }),
+          answerLabel: fullCallText,
+          options: shuffle([fullCallText, ...buildDistractors(fullCallText, { code })]),
           sourceRefs: [sourceRef],
-          generatorRule: "call.func",
-        },
-      ];
-      if (profile !== "shallow") {
-        // Positional arguments
-        args.forEach((a, idx) => {
-          const argText =
-            textForRange(a.startIndex, a.endIndex, code) || a.type;
-          qs.push({
-            kind: "call-arg-positional",
-            stem: `What is positional argument #${idx + 1}?`,
-            answerLabel: argText,
-            options: buildDistractors(argText, { code }),
-            sourceRefs: [
-              sourceRef,
-              {
-                nodeType: a.type,
-                start: a.startIndex,
-                end: a.endIndex,
-                path: computeAstPath(root, a),
-              },
-            ],
-            generatorRule: "call.pos-arg",
-          });
+          generatorRule: "call.full",
         });
-        // Keyword arguments
-        for (const kw of keywords) {
-          // Use proper field access for robustness
-          const keyNode =
-            getSectionFirstItem(kw, "name") ||
-            (kw.namedChildren || []).find((c) => c.type === "identifier");
-          const nameText =
-            keyNode &&
-            textForRange(keyNode.startIndex, keyNode.endIndex, code);
-          if (nameText) {
+      } else {
+        const segments = decomposeCallChain(node, code);
+        const fieldCount = segments.filter((s) => s.segmentType === "field").length;
+        const argsCount = segments.filter((s) => s.segmentType === "args").length;
+        const hasChain = fieldCount > 1 || argsCount > 1;
+
+        if (hasChain) {
+          let stepNum = 1;
+          for (const seg of segments) {
+            if (seg.segmentType === "base") {
+              qs.push({
+                kind: "call.chain.base",
+                stem: `Step ${stepNum}: What is the base/starting expression?`,
+                answerLabel: seg.text,
+                options: shuffle([seg.text, ...buildDistractors(seg.text, { code })]),
+                sourceRefs: [sourceRef],
+                generatorRule: "call.chain.base",
+              });
+              stepNum += 1;
+            } else if (seg.segmentType === "field") {
+              qs.push({
+                kind: "call.chain.field",
+                stem: `Step ${stepNum}: What field/method is accessed next?`,
+                answerLabel: seg.text,
+                options: shuffle([seg.text, ...buildDistractors(seg.text, { code })]),
+                sourceRefs: [sourceRef],
+                generatorRule: "call.chain.field",
+              });
+              stepNum += 1;
+            } else if (seg.segmentType === "args") {
+              const argsChildren = seg.node.namedChildren || [];
+              if (argsChildren.length > 0) {
+                const chainArgTexts = argsChildren.map(
+                  (a) => textForRange(a.startIndex, a.endIndex, code) || a.type
+                );
+                const optionPool = buildMultiSelectOptionPool(
+                  chainArgTexts,
+                  code,
+                  node.startIndex,
+                  node.endIndex
+                );
+                qs.push({
+                  kind: "call.chain.args",
+                  stem: `Step ${stepNum}: Select the arguments in order`,
+                  answerLabel: "",
+                  options: optionPool,
+                  optionPool,
+                  questionType: "orderedMulti",
+                  multiCorrect: chainArgTexts,
+                  multiSelectHint: chainArgTexts.length,
+                  sourceRefs: [sourceRef],
+                  generatorRule: "call.chain.args",
+                });
+                stepNum += 1;
+              }
+            }
+          }
+        } else {
+          const fnNode = getSectionFirstItem(node, "func");
+          const fnText = fnNode
+            ? textForRange(fnNode.startIndex, fnNode.endIndex, code) || fnNode.type
+            : "call";
+          qs.push({
+            kind: "call.callee",
+            stem: "Which function or method is being called here?",
+            answerLabel: fnText,
+            options: shuffle([fnText, ...buildDistractors(fnText, { code })]),
+            sourceRefs: [sourceRef],
+            generatorRule: "call.callee",
+          });
+          if (argTexts.length > 0) {
+            const optionPool = buildMultiSelectOptionPool(
+              argTexts,
+              code,
+              node.startIndex,
+              node.endIndex
+            );
             qs.push({
-              kind: "call-arg-keyword",
-              stem: `What is this keyword argument name?`,
-              answerLabel: nameText,
-              options: buildDistractors(nameText, { code }),
-              sourceRefs: [
-                sourceRef,
-                {
-                  nodeType: kw.type,
-                  start: kw.startIndex,
-                  end: kw.endIndex,
-                  path: computeAstPath(root, kw),
-                },
-              ],
-              generatorRule: "call.kwarg-name",
+              kind: "call.args",
+              stem: "Select the arguments in order",
+              answerLabel: "",
+              options: optionPool,
+              optionPool,
+              questionType: "orderedMulti",
+              multiCorrect: argTexts,
+              multiSelectHint: argTexts.length,
+              sourceRefs: [sourceRef],
+              generatorRule: "call.args",
             });
           }
         }
       }
 
-      // Bubble up lambda questions from args/keywords (in all modes, including shallow)
-      const allArgNodes = [...args, ...keywords];
-      for (const argNode of allArgNodes) {
+      // Bubble up lambda questions from args (in all modes, including shallow)
+      for (const argNode of argNodes) {
         const lambdas = findLambdaNodes(argNode);
         for (const lam of lambdas) {
           const lambdaQs = generateQuestionsV11(root, lam, profile, code);
           qs.push(...lambdaQs);
         }
       }
+
       return qs;
     },
   ],
@@ -3963,7 +4056,10 @@ export function buildCustomQuizPayload(params: {
   ): CustomQuizCard => {
     const isMulti =
       q.questionType === "multi" ||
+      q.questionType === "orderedMulti" ||
       (Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0);
+    const isOrderedMulti = q.questionType === "orderedMulti";
+    const resolvedQuestionType = isOrderedMulti ? "orderedMulti" : "multi";
     const span = step.displaySpan ?? {
       start: step.node.startIndex,
       end: step.node.endIndex,
@@ -3989,7 +4085,7 @@ export function buildCustomQuizPayload(params: {
       semanticRole: step.lesson?.semanticRole,
       generatorRule: q.generatorRule,
       difficulty: q.difficulty,
-      questionType: isMulti ? "multi" : undefined,
+      questionType: isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
       optionPool: q.optionPool,
