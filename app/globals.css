@@ -67,3 +67,32 @@ input[type="range"]::-moz-range-thumb {
   border: 2px solid white;
   box-shadow: 0 1px 2px rgba(0,0,0,0.1);
 }
+
+/* Custom scrollbar styling for themed components */
+.scrollbar-teal::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.scrollbar-teal::-webkit-scrollbar-track {
+  background: transparent;
+  border-radius: 4px;
+}
+
+.scrollbar-teal::-webkit-scrollbar-thumb {
+  background: linear-gradient(to bottom, #5eead4, #2dd4bf); /* teal-300 to teal-400 */
+  border-radius: 4px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+.scrollbar-teal::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(to bottom, #2dd4bf, #14b8a6); /* teal-400 to teal-500 */
+}
+
+/* Firefox scrollbar */
+.scrollbar-teal {
+  scrollbar-width: thin;
+  scrollbar-color: #5eead4 transparent;
+}
+

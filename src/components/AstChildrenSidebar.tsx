@@ -18,35 +18,47 @@ type AstChildrenSidebarProps = {
 // Get highlight color based on node type (exact, intentional matches)
 const getNodeHighlight = (type: string): string => {
   // Green for import statements
-  if (type.startsWith("import")) return "bg-green-50 border-green-200";
+  if (type.startsWith("import"))
+    return "bg-emerald-50/80 border-emerald-300/60";
   // Purple for classes
-  if (type === "class_definition") return "bg-purple-50 border-purple-200";
+  if (type === "class_definition")
+    return "bg-purple-50/80 border-purple-300/60";
   // Blue for functions
-  if (type === "function_definition") return "bg-blue-50 border-blue-200";
+  if (type === "function_definition" || type === "function_declaration")
+    return "bg-blue-50/80 border-blue-300/60";
+  // Comments
+  if (type === "comment") return "bg-slate-50/80 border-slate-300/60";
   // Default
-  return "bg-slate-50 border-slate-200";
+  return "bg-white/80 border-slate-200/60";
 };
 
 const getNodeBadgeColor = (type: string): string => {
   // Green for import statements
   if (type.startsWith("import"))
-    return "bg-green-100 text-green-700 border-green-200";
+    return "bg-emerald-100 text-emerald-700 border-emerald-300";
   // Purple for classes
   if (type === "class_definition")
-    return "bg-purple-100 text-purple-700 border-purple-200";
+    return "bg-purple-100 text-purple-700 border-purple-300";
   // Blue for functions
-  if (type === "function_definition")
-    return "bg-blue-100 text-blue-700 border-blue-200";
+  if (type === "function_definition" || type === "function_declaration")
+    return "bg-blue-100 text-blue-700 border-blue-300";
+  // Comments
+  if (type === "comment")
+    return "bg-slate-100 text-slate-600 border-slate-300";
+  // Package clause
+  if (type === "package_clause")
+    return "bg-amber-100 text-amber-700 border-amber-300";
   // Default
-  return "bg-slate-100 text-slate-700 border-slate-200";
+  return "bg-teal-50 text-teal-700 border-teal-200";
 };
 
 const NodeType = ({ type }: { type: string }) => (
   <span
-    className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium ${getNodeBadgeColor(
+    className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs font-medium shadow-sm ${getNodeBadgeColor(
       type
     )}`}
   >
+    <span className="text-[10px] opacity-60">&lt;/&gt;</span>
     {type}
   </span>
 );
@@ -91,12 +103,12 @@ const ItemRow = ({
   return (
     <li
       className={
-        "flex items-center gap-2 rounded px-2 py-1 pl-4 cursor-pointer " +
+        "flex items-center gap-2 rounded-lg px-2 py-1.5 pl-4 cursor-pointer transition-all duration-150 " +
         (isSelected
-          ? "ring-2 ring-amber-400 bg-amber-100/60"
+          ? "ring-2 ring-teal-400 bg-teal-100/70 shadow-sm"
           : isHovered
-            ? "bg-amber-50"
-            : "hover:bg-slate-50")
+            ? "bg-teal-50/80"
+            : "hover:bg-slate-50/80")
       }
       onClick={() => onSelectNode?.(item)}
       onMouseEnter={() => onHoverNode?.(item)}
@@ -104,7 +116,7 @@ const ItemRow = ({
     >
       <NodeType type={item.type} />
       {rightLabel && (
-        <span className="ml-auto text-[10px] font-medium text-slate-500 text-right">
+        <span className="ml-auto text-[10px] font-medium text-slate-500 uppercase tracking-wide">
           {rightLabel}
         </span>
       )}
@@ -129,15 +141,15 @@ export const AstChildrenSidebar = ({
   const topLevel = ast.namedChildren || [];
 
   return (
-    <aside className="space-y-3">
+    <aside className="space-y-2">
       {flattenRoot ? (
         // Start one level lower: render only the root's children
         topLevel.length === 0 ? (
-          <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 shadow-sm">
-            <p className="text-xs italic text-slate-400">No children</p>
+          <div className="rounded-xl border border-slate-200/60 bg-white/60 px-4 py-4 shadow-sm backdrop-blur-sm">
+            <p className="text-sm italic text-slate-400">No children</p>
           </div>
         ) : (
-          <ul className="space-y-3">
+          <ul className="space-y-2">
             {topLevel.map((node, i) => {
               const sections = buildCuratedSectionsShared(node)
                 // Hide empty sections entirely (e.g. empty decorator_list)
@@ -159,13 +171,13 @@ export const AstChildrenSidebar = ({
                 <li
                   key={nodeKey(node)}
                   className={
-                    `rounded-lg border shadow-sm ${getNodeHighlight(
+                    `rounded-xl border shadow-sm backdrop-blur-sm transition-all duration-150 ${getNodeHighlight(
                       node.type
                     )} ` +
                     (isSelected
-                      ? "ring-2 ring-amber-400 bg-amber-100/70"
+                      ? "ring-2 ring-teal-400 shadow-md"
                       : isHovered
-                        ? "bg-amber-50"
+                        ? "ring-1 ring-teal-300/50"
                         : "")
                   }
                 >
@@ -186,13 +198,13 @@ export const AstChildrenSidebar = ({
                     </button>
                     {/* Yield-from hint on header */}
                     {isYieldFrom(node, code) && (
-                      <span className="ml-auto text-[10px] font-medium text-slate-500">
+                      <span className="ml-auto text-[10px] font-medium text-slate-500 uppercase tracking-wide">
                         from
                       </span>
                     )}
                   </div>
                   {flatGroups.length > 0 && (
-                    <ul className="space-y-1 border-l border-slate-200 bg-white/50 px-3 py-2">
+                    <ul className="space-y-1 border-l-2 border-teal-200/50 bg-white/40 mx-3 mb-3 px-3 py-2 rounded-lg">
                       {flatGroups.map((group, gIdx) =>
                         group.items.map((item, idx) => {
                           const labelBase =
@@ -222,9 +234,6 @@ export const AstChildrenSidebar = ({
                       )}
                     </ul>
                   )}
-                  {flatGroups.length > 0 && (
-                    <div className="mx-3 mb-2 border-t border-slate-200" />
-                  )}
                 </li>
               );
             })}
@@ -232,21 +241,21 @@ export const AstChildrenSidebar = ({
         )
       ) : (
         // Render the root wrapper and its children
-        <div className="rounded-lg border border-slate-200 bg-slate-50 shadow-sm">
-          <div className="flex items-center gap-2 px-3 py-2.5">
-            <span className="text-xs font-semibold text-slate-700">
+        <div className="rounded-xl border border-slate-200/60 bg-white/60 shadow-sm backdrop-blur-sm">
+          <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200/40">
+            <span className="font-mono text-sm font-semibold text-slate-700">
               {ast.type}
             </span>
-            <span className="ml-auto text-[11px] font-medium text-slate-500">
-              [{topLevel.length}]
+            <span className="ml-auto rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700">
+              {topLevel.length} children
             </span>
           </div>
           {topLevel.length === 0 ? (
-            <div className="px-3 py-3">
-              <p className="text-xs italic text-slate-400">No children</p>
+            <div className="px-4 py-4">
+              <p className="text-sm italic text-slate-400">No children</p>
             </div>
           ) : (
-            <ul className="space-y-3 bg-white/50 px-3 py-3">
+            <ul className="space-y-2 p-3">
               {topLevel.map((node, i) => {
                 const sections = buildCuratedSectionsShared(node).filter(
                   (s) => s.items.length > 0
@@ -266,13 +275,13 @@ export const AstChildrenSidebar = ({
                   <li
                     key={nodeKey(node)}
                     className={
-                      `rounded-lg border shadow-sm ${getNodeHighlight(
+                      `rounded-xl border shadow-sm backdrop-blur-sm transition-all duration-150 ${getNodeHighlight(
                         node.type
                       )} ` +
                       (isSelected
-                        ? "ring-2 ring-amber-400 bg-amber-100/70"
+                        ? "ring-2 ring-teal-400 shadow-md"
                         : isHovered
-                          ? "bg-amber-50"
+                          ? "ring-1 ring-teal-300/50"
                           : "")
                     }
                   >
@@ -293,13 +302,13 @@ export const AstChildrenSidebar = ({
                       </button>
                       {/* Yield-from hint on header */}
                       {isYieldFrom(node, code) && (
-                        <span className="ml-auto text-[10px] font-medium text-slate-500">
+                        <span className="ml-auto text-[10px] font-medium text-slate-500 uppercase tracking-wide">
                           from
                         </span>
                       )}
                     </div>
                     {flatGroups.length > 0 && (
-                      <ul className="space-y-1 border-l border-slate-200 bg-white/50 px-3 py-2">
+                      <ul className="space-y-1 border-l-2 border-teal-200/50 bg-white/40 mx-3 mb-3 px-3 py-2 rounded-lg">
                         {flatGroups.map((group, gIdx) =>
                           group.items.map((item, idx) => {
                             const labelBase =
@@ -328,9 +337,6 @@ export const AstChildrenSidebar = ({
                           })
                         )}
                       </ul>
-                    )}
-                    {flatGroups.length > 0 && (
-                      <div className="mx-3 mb-2 border-t border-slate-200" />
                     )}
                   </li>
                 );

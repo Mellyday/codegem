@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileText, Zap, BookOpen, FolderOpen } from "lucide-react";
+import { FileText, FolderOpen } from "lucide-react";
 
 // Server now reads file and passes code; no client-side loader
 import { AstTree } from "./AstTree";
@@ -347,38 +347,54 @@ export const SandboxViewer = ({
   }, [hoveredTsNode, zoomRootTs]);
 
   return (
-    <div className="min-h-screen bg-[#E8EBF0] px-8 py-12">
-      <div className="mx-auto max-w-7xl">
-        {/* Header Card */}
-        <div className="mb-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
-          <div className="flex items-center gap-4">
-            <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-blue-50">
-              <FileText className="h-8 w-8 text-blue-500" />
+    <div className="min-h-screen bg-gradient-to-br from-pink-100 via-purple-50 to-teal-100">
+      <div className="mx-auto max-w-[1600px] px-6 py-6">
+        {/* Header */}
+        <div className="mb-4 flex items-center justify-between rounded-2xl border border-white/60 bg-white/70 px-5 py-3 shadow-sm backdrop-blur-md">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-gradient-to-br from-teal-400 to-cyan-500 shadow-sm">
+              <FileText className="h-5 w-5 text-white" />
             </div>
-            <div className="flex-1">
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
-                {fileName ? 'File Path' : 'Sandbox'}
-              </p>
-              <h1 className="mt-1 text-xl font-semibold text-slate-900">
+            <div>
+              <h1 className="text-base font-semibold text-slate-800">
                 {fileName || sandboxId}
               </h1>
               {fileName && (
-                <p className="mt-0.5 font-mono text-sm text-slate-600">
+                <p className="font-mono text-xs text-slate-500">
                   {sandboxId}
                 </p>
               )}
             </div>
           </div>
+          <div className="flex items-center gap-2">
+            {viewMode !== "ast" && (
+              <button
+                type="button"
+                onClick={() => setViewMode("ast")}
+                className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white/80 px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+              >
+                <FileText className="h-4 w-4" />
+                Back to File
+              </button>
+            )}
+            <Link
+              href={parentFolderUrl}
+              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white/80 px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm transition hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700"
+            >
+              <FolderOpen className="h-4 w-4" />
+              Back to Folder
+            </Link>
+          </div>
         </div>
 
         {state.status === "loading" && (
-          <div className="rounded-xl bg-white p-8 text-center shadow-sm">
+          <div className="rounded-2xl border border-white/60 bg-white/70 p-8 text-center shadow-sm backdrop-blur-md">
             <p className="text-slate-600">Loading sandbox contents…</p>
           </div>
         )}
 
         {state.status === "error" && (
-          <div className="rounded-xl bg-white p-6 shadow-sm">
+          <div className="rounded-2xl border border-white/60 bg-white/70 p-6 shadow-sm backdrop-blur-md">
             <div className="space-y-2">
               <h3 className="font-semibold text-rose-600">
                 Unable to load file
@@ -389,47 +405,51 @@ export const SandboxViewer = ({
         )}
 
         {state.status === "loaded" && (
-          <div className={viewMode === "quiz_setup" ? "" : "grid grid-cols-1 gap-6 lg:grid-cols-2"}>
+          <div
+            className={
+              viewMode === "quiz_setup"
+                ? ""
+                : "grid grid-cols-1 gap-5 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]"
+            }
+          >
             {/* Main Content - AST / Quiz / Lesson */}
-            <div className={viewMode === "quiz_setup" ? "rounded-xl bg-white p-6 shadow-sm flex flex-col" : "order-2 lg:order-1 rounded-xl bg-white p-6 shadow-sm flex flex-col"}>
+            <div
+              className={
+                "rounded-2xl border border-white/60 bg-white/70 shadow-sm backdrop-blur-md flex flex-col " +
+                (viewMode === "quiz_setup" ||
+                viewMode === "quiz_active" ||
+                viewMode === "quiz_complete"
+                  ? "p-6 "
+                  : "") +
+                (viewMode === "quiz_setup" ? "" : "order-2 lg:order-1")
+              }
+            >
               {viewMode === "ast" && (
                 <>
-                  <div className="mb-4 space-y-1">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <h2 className="text-lg font-semibold text-slate-800">
-                          AST
-                        </h2>
-                        {parseResult?.status === "success" && (
-                          <p className="text-xs uppercase tracking-wide text-slate-500">
-                            Parsed with {parseResult.language} via{" "}
-                            tree-sitter
-                          </p>
-                        )}
-                      </div>
-                      {parseResult?.status === "success" &&
-                        parseResult.parser === "tree-sitter" && (
-                          <div className="flex items-center gap-2">
-                            <button
-                              type="button"
-                              className="flex items-center gap-1.5 rounded-md bg-blue-500 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-blue-600"
-                              onClick={() => setViewMode("lesson")}
-                            >
-                              <BookOpen className="h-3.5 w-3.5" /> Teach Me
-                            </button>
-                            <button
-                              type="button"
-                              className="rounded-md bg-amber-500 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-amber-600"
-                              onClick={() => setViewMode("quiz_setup")}
-                            >
-                              Quiz Me
-                            </button>
-                          </div>
-                        )}
+                  {/* AST Header */}
+                  <div className="border-b border-slate-200/60 px-5 py-3">
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-base font-semibold text-slate-700">
+                        AST Tree
+                      </h2>
                     </div>
+                    {parseResult?.status === "success" && (
+                      <div className="mt-1 flex items-center gap-2">
+                        <span className="inline-flex items-center rounded-full bg-gradient-to-r from-teal-500 to-cyan-500 px-2.5 py-0.5 text-xs font-medium text-white shadow-sm">
+                          {parseResult.language}
+                        </span>
+                        <span className="text-xs text-slate-500">
+                          via tree-sitter
+                        </span>
+                      </div>
+                    )}
                   </div>
 
-                  <div className="max-h-[600px] overflow-auto">
+                  {/* AST Content */}
+                  <div
+                    className="flex-1 overflow-auto p-4 scrollbar-teal"
+                    style={{ maxHeight: "calc(100vh - 280px)" }}
+                  >
                     {(parseResult === undefined || isParsing) && (
                       <p className="text-sm text-slate-500">Parsing code…</p>
                     )}
@@ -454,13 +474,14 @@ export const SandboxViewer = ({
                     {parseResult?.status === "success" &&
                       (parseResult.parser === "tree-sitter" ? (
                         <div className="space-y-3">
-                          <div className="flex items-center justify-between">
-                            <div className="text-xs text-slate-600">
+                          {/* Zoom controls */}
+                          <div className="flex items-center justify-between text-xs">
+                            <div className="flex items-center gap-1.5 text-slate-600">
                               {zoomRootTs ? (
-                                <span>
-                                  Zoomed into:{" "}
+                                <>
+                                  <span>Zoomed into:</span>
                                   <span
-                                    className="font-mono"
+                                    className="rounded bg-teal-100 px-1.5 py-0.5 font-mono text-teal-700"
                                     onMouseEnter={() =>
                                       setHoveredTsNode(zoomRootTs)
                                     }
@@ -470,19 +491,19 @@ export const SandboxViewer = ({
                                   >
                                     {zoomRootTs.type}
                                   </span>
-                                </span>
+                                </>
                               ) : (
-                                <span>Top level</span>
+                                <span className="text-slate-500">Top level</span>
                               )}
                             </div>
-                            <div className="flex gap-2">
+                            <div className="flex gap-1.5">
                               <button
                                 type="button"
                                 className={
-                                  "rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm " +
+                                  "rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 shadow-sm transition " +
                                   (zoomStackTs.length === 0
-                                    ? "opacity-50 cursor-not-allowed"
-                                    : "hover:bg-slate-50")
+                                    ? "opacity-40 cursor-not-allowed"
+                                    : "hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700")
                                 }
                                 disabled={zoomStackTs.length === 0}
                                 onClick={() => {
@@ -506,10 +527,10 @@ export const SandboxViewer = ({
                               <button
                                 type="button"
                                 className={
-                                  "rounded-md border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 shadow-sm " +
+                                  "rounded-md border border-slate-200 bg-white px-2 py-1 text-xs text-slate-600 shadow-sm transition " +
                                   (!zoomRootTs
-                                    ? "opacity-50 cursor-not-allowed"
-                                    : "hover:bg-slate-50")
+                                    ? "opacity-40 cursor-not-allowed"
+                                    : "hover:border-teal-300 hover:bg-teal-50 hover:text-teal-700")
                                 }
                                 disabled={!zoomRootTs}
                                 onClick={() => {
@@ -555,6 +576,29 @@ export const SandboxViewer = ({
                         <AstTree root={parseResult.ast} defaultOpenDepth={2} />
                       ))}
                   </div>
+
+                  {/* Action Buttons */}
+                  {parseResult?.status === "success" &&
+                    parseResult.parser === "tree-sitter" && (
+                      <div className="border-t border-slate-200/60 p-4">
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-teal-400 to-cyan-500 px-4 py-2.5 text-sm font-medium text-white shadow-md transition hover:from-teal-500 hover:to-cyan-600 hover:shadow-lg"
+                            onClick={() => setViewMode("lesson")}
+                          >
+                            Teach Me
+                          </button>
+                          <button
+                            type="button"
+                            className="flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-amber-400 to-orange-500 px-4 py-2.5 text-sm font-medium text-white shadow-md transition hover:from-amber-500 hover:to-orange-600 hover:shadow-lg"
+                            onClick={() => setViewMode("quiz_setup")}
+                          >
+                            Quiz Me
+                          </button>
+                        </div>
+                      </div>
+                    )}
                 </>
               )}
 
@@ -572,9 +616,9 @@ export const SandboxViewer = ({
                     fileName={fileName}
                     mode={
                       viewMode.replace("quiz_", "") as
-                      | "setup"
-                      | "active"
-                      | "complete"
+                        | "setup"
+                        | "active"
+                        | "complete"
                     }
                     onCancel={() => setViewMode("ast")}
                     onStart={() => setViewMode("quiz_active")}
@@ -592,142 +636,95 @@ export const SandboxViewer = ({
 
               {viewMode === "lesson" &&
                 parseResult?.status === "success" && (
-                  <LessonViewer
-                    root={
-                      (activeTsRoot as TreeSitterAstNode) ??
-                      (parseResult.ast as TreeSitterAstNode)
-                    }
-                    code={state.code}
-                    fileKey={fileKey}
-                    fileName={fileName}
-                    onReturnToAst={() => setViewMode("ast")}
-                    onRevealEndIndexChange={setRevealEndIndex}
-                    onMaskRangesChange={setMaskRanges}
-                  />
+                  <div className="flex-1 overflow-auto p-4">
+                    <LessonViewer
+                      root={
+                        (activeTsRoot as TreeSitterAstNode) ??
+                        (parseResult.ast as TreeSitterAstNode)
+                      }
+                      code={state.code}
+                      fileKey={fileKey}
+                      fileName={fileName}
+                      onReturnToAst={() => setViewMode("ast")}
+                      onRevealEndIndexChange={setRevealEndIndex}
+                      onMaskRangesChange={setMaskRanges}
+                    />
+                  </div>
                 )}
             </div>
 
             {/* Right Column - Source Code (hidden in quiz_setup mode) */}
             {viewMode !== "quiz_setup" && (
-              <div className="order-1 lg:order-2 rounded-xl bg-white p-6 shadow-sm">
-                <h2 className="mb-4 text-lg font-semibold text-slate-800">
-                  SOURCE CODE
-                </h2>
-                <div
-                  ref={codeScrollRef}
-                  className="min-h-[45vh] overflow-auto rounded-lg bg-slate-50 p-4 lg:min-h-0 lg:max-h-[600px]"
-                >
-                  {/*
-                  Use a normal div with explicit whitespace + monospace so the
-                  inner line <div>s don't break <pre> semantics on some browsers.
-                  This fixes jagged line numbers and collapsed indentation,
-                  especially on mobile Safari.
-                */}
-                  <div className="text-xs leading-relaxed font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
-                    {(() => {
-                      let charIndex = 0; // slice-relative character index
-                      const activeRange = selectedCharRange ?? hoveredCharRange;
+              <div className="order-1 lg:order-2 rounded-2xl border border-white/60 bg-white/70 shadow-sm backdrop-blur-md flex flex-col">
+              {/* Source Code Header */}
+              <div className="flex items-center justify-between border-b border-slate-200/60 px-5 py-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-lg">&lt;/&gt;</span>
+                  <h2 className="text-base font-semibold text-slate-700">
+                    Source Code
+                  </h2>
+                </div>
+                <span className="text-xs text-slate-500">
+                  {codeSlice.lines.length} lines
+                </span>
+              </div>
 
-                      return codeSlice.lines.map((line: string, i: number) => {
-                        const lineStart = charIndex;
-                        const lineEnd = lineStart + line.length;
-                        charIndex += line.length + 1; // +1 for the newline character
+              {/* Source Code Content */}
+              <div
+                ref={codeScrollRef}
+                className="flex-1 overflow-auto p-4 scrollbar-teal"
+                style={{ maxHeight: "calc(100vh - 200px)" }}
+              >
+                {/*
+                Use a normal div with explicit whitespace + monospace so the
+                inner line <div>s don't break <pre> semantics on some browsers.
+                This fixes jagged line numbers and collapsed indentation,
+                especially on mobile Safari.
+              */}
+                <div className="text-xs leading-relaxed font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
+                  {(() => {
+                    let charIndex = 0; // slice-relative character index
+                    const activeRange = selectedCharRange ?? hoveredCharRange;
 
-                        const getHighlightClasses = (isFullLine: boolean) => {
-                          if (!activeRange) return "";
-                          const isSelected = !!selectedCharRange;
-                          if (isFullLine) {
-                            return isSelected ? "bg-amber-100/70" : "bg-amber-50";
-                          }
-                          return isSelected
-                            ? "bg-amber-200/80 rounded"
-                            : "bg-amber-100 rounded";
-                        };
+                    return codeSlice.lines.map((line: string, i: number) => {
+                      const lineStart = charIndex;
+                      const lineEnd = lineStart + line.length;
+                      charIndex += line.length + 1; // +1 for the newline character
 
-                        const handleLineClick = () => {
-                          if (
-                            parseResult?.status === "success" &&
-                            parseResult.parser === "tree-sitter"
-                          ) {
-                            const root =
-                              activeTsRoot ??
-                              (parseResult.ast as TreeSitterAstNode);
-                            const absoluteRow = i + codeSlice.baseRow;
-                            const found = findSmallestCoveringNode(
-                              root,
-                              absoluteRow
-                            );
-                            if (found) setSelectedTsNode(found);
-                          }
-                        };
-
-                        // Case 1: No active highlight on this line
-                        if (
-                          !activeRange ||
-                          lineEnd < activeRange.start ||
-                          lineStart > activeRange.end
-                        ) {
-                          return (
-                            <div
-                              key={i}
-                              className="flex items-start cursor-pointer"
-                              onClick={handleLineClick}
-                            >
-                              <span
-                                className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
-                                style={{ width: `${lineDigits}ch` }}
-                              >
-                                {i + 1}
-                              </span>
-                              <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                {line || " "}
-                              </code>
-                            </div>
-                          );
+                      const getHighlightClasses = (isFullLine: boolean) => {
+                        if (!activeRange) return "";
+                        const isSelected = !!selectedCharRange;
+                        if (isFullLine) {
+                          return isSelected ? "bg-amber-100/70" : "bg-amber-50";
                         }
+                        return isSelected
+                          ? "bg-amber-200/80 rounded"
+                          : "bg-amber-100 rounded";
+                      };
 
-                        // Case 2: The entire line is inside the highlight
+                      const handleLineClick = () => {
                         if (
-                          lineStart >= activeRange.start &&
-                          lineEnd <= activeRange.end
+                          parseResult?.status === "success" &&
+                          parseResult.parser === "tree-sitter"
                         ) {
-                          return (
-                            <div
-                              key={i}
-                              className={`flex items-start cursor-pointer ${getHighlightClasses(
-                                true
-                              )}`}
-                              onClick={handleLineClick}
-                            >
-                              <span
-                                className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
-                                style={{ width: `${lineDigits}ch` }}
-                              >
-                                {i + 1}
-                              </span>
-                              <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                {line || " "}
-                              </code>
-                            </div>
+                          const root =
+                            activeTsRoot ??
+                            (parseResult.ast as TreeSitterAstNode);
+                          const absoluteRow = i + codeSlice.baseRow;
+                          const found = findSmallestCoveringNode(
+                            root,
+                            absoluteRow
                           );
+                          if (found) setSelectedTsNode(found);
                         }
+                      };
 
-                        // Case 3: Partial highlight
-                        const startHighlight = Math.max(
-                          lineStart,
-                          activeRange.start
-                        );
-                        const endHighlight = Math.min(lineEnd, activeRange.end);
-                        const startIndexInLine = startHighlight - lineStart;
-                        const endIndexInLine = endHighlight - lineStart;
-
-                        const before = line.substring(0, startIndexInLine);
-                        const highlighted = line.substring(
-                          startIndexInLine,
-                          endIndexInLine
-                        );
-                        const after = line.substring(endIndexInLine);
-
+                      // Case 1: No active highlight on this line
+                      if (
+                        !activeRange ||
+                        lineEnd < activeRange.start ||
+                        lineStart > activeRange.end
+                      ) {
                         return (
                           <div
                             key={i}
@@ -735,62 +732,92 @@ export const SandboxViewer = ({
                             onClick={handleLineClick}
                           >
                             <span
-                              className="mr-2 sm:mr-3 md:mr-4 shrink-0 select-none text-right text-slate-400 font-mono tabular-nums text-[10px] sm:text-xs"
+                              className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
                               style={{ width: `${lineDigits}ch` }}
                             >
                               {i + 1}
                             </span>
-                            <code className="flex-1 text-slate-800 whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                              {before && <span>{before}</span>}
-                              {highlighted && (
-                                <span className={getHighlightClasses(false)}>
-                                  {highlighted}
-                                </span>
-                              )}
-                              {after && <span>{after}</span>}
-                              {!before && !highlighted && !after && " "}
+                            <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
+                              {line || " "}
                             </code>
                           </div>
                         );
-                      });
-                    })()}
-                  </div>
+                      }
+
+                      // Case 2: The entire line is inside the highlight
+                      if (
+                        lineStart >= activeRange.start &&
+                        lineEnd <= activeRange.end
+                      ) {
+                        return (
+                          <div
+                            key={i}
+                            className={`flex items-start cursor-pointer -mx-2 px-2 rounded ${getHighlightClasses(
+                              true
+                            )}`}
+                            onClick={handleLineClick}
+                          >
+                            <span
+                              className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
+                              style={{ width: `${lineDigits}ch` }}
+                            >
+                              {i + 1}
+                            </span>
+                            <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
+                              {line || " "}
+                            </code>
+                          </div>
+                        );
+                      }
+
+                      // Case 3: Partial highlight
+                      const startHighlight = Math.max(
+                        lineStart,
+                        activeRange.start
+                      );
+                      const endHighlight = Math.min(lineEnd, activeRange.end);
+                      const startIndexInLine = startHighlight - lineStart;
+                      const endIndexInLine = endHighlight - lineStart;
+
+                      const before = line.substring(0, startIndexInLine);
+                      const highlighted = line.substring(
+                        startIndexInLine,
+                        endIndexInLine
+                      );
+                      const after = line.substring(endIndexInLine);
+
+                      return (
+                        <div
+                          key={i}
+                          className="flex items-start cursor-pointer hover:bg-slate-100/80 -mx-2 px-2 rounded"
+                          onClick={handleLineClick}
+                        >
+                          <span
+                            className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
+                            style={{ width: `${lineDigits}ch` }}
+                          >
+                            {i + 1}
+                          </span>
+                          <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
+                            {before && <span>{before}</span>}
+                            {highlighted && (
+                              <span className={getHighlightClasses(false)}>
+                                {highlighted}
+                              </span>
+                            )}
+                            {after && <span>{after}</span>}
+                            {!before && !highlighted && !after && " "}
+                          </code>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
+              </div>
               </div>
             )}
           </div>
         )}
-
-        {/* Footer and Navigation */}
-        <div className="mt-8 flex items-end justify-between">
-          {/* Navigation Buttons */}
-          <div className="flex items-center gap-3">
-            {/* Back to File - shown when in lesson or quiz views */}
-            {viewMode !== "ast" && (
-              <button
-                onClick={() => setViewMode("ast")}
-                className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
-              >
-                <FileText className="h-4 w-4" />
-                Back to File
-              </button>
-            )}
-            {/* Back to Folder - goes to parent folder */}
-            <Link
-              href={parentFolderUrl}
-              className="flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 hover:shadow"
-            >
-              <FolderOpen className="h-4 w-4" />
-              Back to Folder
-            </Link>
-          </div>
-
-          {/* Made with Gemini Badge */}
-          <div className="flex items-center gap-2 text-xs text-slate-500">
-            <span>Made with Gemini</span>
-            <Zap className="h-4 w-4 fill-amber-400 text-amber-400" />
-          </div>
-        </div>
       </div>
     </div>
   );
