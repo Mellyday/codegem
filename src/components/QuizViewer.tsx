@@ -291,7 +291,8 @@ const generateQuestionsFromCustom = (
   const qs: Question[] = [];
 
   for (const c of cards) {
-    const hasMultiCorrect = Array.isArray(c.multiCorrect);
+    const multiCorrect = Array.isArray(c.multiCorrect) ? c.multiCorrect : undefined;
+    const hasMultiCorrect = !!multiCorrect;
     const isOrderedMulti = c.questionType === "orderedMulti" && hasMultiCorrect;
     const isMulti =
       (c.questionType === "multi" || isOrderedMulti || (!c.questionType && hasMultiCorrect)) &&
@@ -299,7 +300,7 @@ const generateQuestionsFromCustom = (
     if (isMulti) {
       const stem =
         c.question || (isOrderedMulti ? "Select the answers in order." : "Select all that apply.");
-      const correct = hasMultiCorrect ? c.multiCorrect : [];
+      const correct = multiCorrect ?? [];
       const llmPool = Array.isArray(c.llmDistractors) ? c.llmDistractors : undefined;
       const optionPool = Array.isArray(c.optionPool) ? c.optionPool : undefined;
       const options = buildMultiChoiceOptions(correct, llmPool, optionPool);
@@ -310,7 +311,7 @@ const generateQuestionsFromCustom = (
         answerLabel: "", // unused for multi
         options,
         questionType: isOrderedMulti ? "orderedMulti" : "multi",
-        answerLabels: correct || [],
+        answerLabels: correct,
         numToSelect,
         kind: c.type,
         generatorRule: c.generatorRule,
@@ -611,7 +612,7 @@ export const QuizViewer = ({
               }}
             >
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-purple-50 transition-colors group-hover:bg-purple-100">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-purple-50 transition-colors group-hover:bg-purple-100">
                   <svg className="h-5 w-5 text-purple-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
@@ -636,7 +637,7 @@ export const QuizViewer = ({
               }}
             >
               <div className="flex items-start gap-3">
-                <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-pink-50 transition-colors group-hover:bg-pink-100">
+                <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-pink-50 transition-colors group-hover:bg-pink-100">
                   <svg className="h-5 w-5 text-pink-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4" />
                   </svg>
@@ -1142,7 +1143,7 @@ export const QuizViewer = ({
                         </span>
                       )}
                       <span
-                        className={`font-mono whitespace-pre-wrap break-all sm:break-words ${isLong && !isExpanded ? "line-clamp-2" : ""
+                        className={`font-mono whitespace-pre-wrap break-all sm:wrap-break-word ${isLong && !isExpanded ? "line-clamp-2" : ""
                           }`}
                         style={{ overflowWrap: "anywhere" }}
                       >
