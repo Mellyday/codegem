@@ -4,6 +4,7 @@ import Link from "next/link";
 import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
 import { ExplorerActions } from "@/src/components/ExplorerActions";
+import { FileQuizActions } from "@/src/components/FileQuizActions";
 
 type Params = { id: string; path?: string[] };
 
@@ -63,7 +64,10 @@ export default async function RepoBrowsePage({
               >
                 {f.name}
               </Link>
-              <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
+              <div className="flex items-center gap-2">
+                <FileQuizActions kind="repo" id={id} path={f.path} />
+                <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
+              </div>
             </li>
           ))}
           {listing.dirs.length === 0 && listing.files.length === 0 && (

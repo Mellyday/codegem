@@ -157,6 +157,15 @@ export async function POST(request: Request) {
     }
 
     const now = new Date();
+
+    // Check if any quizzes already exist for this file
+    // If not, this new quiz will be the canonical one
+    const existingQuizCount = await quizzes.countDocuments({
+      userId: clerkUserId,
+      fileId,
+    });
+    const shouldBeCanonical = existingQuizCount === 0;
+
     const doc = {
       userId: clerkUserId,
       fileId,
@@ -177,6 +186,7 @@ export async function POST(request: Request) {
           : {}),
       },
       ...(body.profile ? { profile: body.profile } : {}),
+      ...(shouldBeCanonical ? { isCanonical: true } : {}),
       cards:
         body.cards?.map((c) => ({
           order: c.order,
@@ -285,6 +295,7 @@ export async function GET(request: Request) {
           profile: (q as any).profile,
           sectionMarkers: (q as any).sectionMarkers,
           sectionNames: (q as any).sectionNames,
+          isCanonical: (q as any).isCanonical,
         }));
       list.push(...(await cursor.toArray()));
     }

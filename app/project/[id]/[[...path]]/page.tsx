@@ -5,6 +5,7 @@ import { getFileAtPath, listPathChildren } from "@/src/server/browse";
 import { SandboxViewer } from "@/src/components/SandboxViewer";
 import { ExplorerActions } from "@/src/components/ExplorerActions";
 import { DeleteButton } from "@/src/components/DeleteButton";
+import { FileQuizActions } from "@/src/components/FileQuizActions";
 
 type Params = { id: string; path?: string[] };
 
@@ -68,7 +69,8 @@ export default async function ProjectBrowsePage({
               >
                 {f.name}
               </Link>
-              <div className="flex items-center">
+              <div className="flex items-center gap-2">
+                <FileQuizActions kind="project" id={id} path={f.path} />
                 <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
                 <DeleteButton kind="project" id={id} path={f.path} label="×" />
               </div>

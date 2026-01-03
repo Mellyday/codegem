@@ -51,6 +51,8 @@ export type SavedCustomQuizV11 = {
   sectionMarkers?: number[];
   // Optional custom names for each section
   sectionNames?: string[];
+  // Whether this is the canonical (default) quiz for the file
+  isCanonical?: boolean;
 };
 
 async function fetchSavedCustomQuizzes(fileKey?: {
@@ -127,6 +129,8 @@ async function fetchSavedCustomQuizzes(fileKey?: {
       // Parse section markers and names
       sectionMarkers: Array.isArray(q.sectionMarkers) ? q.sectionMarkers : undefined,
       sectionNames: Array.isArray(q.sectionNames) ? q.sectionNames : undefined,
+      // isCanonical flag
+      isCanonical: q.isCanonical === true,
     }));
     return out;
   } catch {
@@ -771,6 +775,27 @@ export function SavedCustomQuizzesPanel({
     await startRun(quizId, true);
   };
 
+  const handleSetCanonical = async (quizId: string) => {
+    try {
+      const res = await fetch(`/api/quizzes/${encodeURIComponent(quizId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ isCanonical: true }),
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.error || `HTTP ${res.status}`);
+      }
+
+      // Reload the quiz list to reflect the change
+      await load();
+    } catch (e: any) {
+      console.error("Set canonical error:", e);
+      setError(e?.message || "Failed to set canonical quiz");
+    }
+  };
+
   // Section helper functions
   const getSections = (quiz: SavedCustomQuizV11) => {
     const markers = quiz.sectionMarkers || [];
@@ -1000,6 +1025,26 @@ export function SavedCustomQuizzesPanel({
 
                   {/* Badges */}
                   <div className="mt-2.5 flex flex-wrap items-center gap-2">
+                    {/* Canonical badge */}
+                    {q.isCanonical ? (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-yellow-50 px-2.5 py-1 text-xs font-medium text-yellow-700">
+                        <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20">
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                        Default
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => handleSetCanonical(q.id)}
+                        className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-2.5 py-1 text-xs font-medium text-slate-500 transition-colors hover:bg-slate-50 hover:text-slate-700"
+                      >
+                        <svg className="h-3 w-3" fill="none" viewBox="0 0 20 20" stroke="currentColor" strokeWidth={1.5}>
+                          <path d="M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 00.95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 00-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 00-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 00-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a1 1 0 00.951-.69l1.07-3.292z" />
+                        </svg>
+                        Set as Default
+                      </button>
+                    )}
                     {q.profile && (
                       <span
                         className={`inline-flex items-center rounded-full px-2.5 py-1 text-xs font-medium ${q.profile === "shallow"
@@ -1206,10 +1251,10 @@ export function SavedCustomQuizzesPanel({
                   {recentRun && recentRun.quizId === q.id && generatingId !== q.id && (
                     <div
                       className={`rounded-lg border p-3 ${recentRun.status === "completed"
-                          ? "border-emerald-200 bg-emerald-50 text-emerald-800"
-                          : recentRun.status === "cancelled"
-                            ? "border-slate-200 bg-slate-50 text-slate-700"
-                            : "border-rose-200 bg-rose-50 text-rose-700"
+                        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+                        : recentRun.status === "cancelled"
+                          ? "border-slate-200 bg-slate-50 text-slate-700"
+                          : "border-rose-200 bg-rose-50 text-rose-700"
                         }`}
                     >
                       <div className="flex items-center justify-between text-xs font-medium">
@@ -1235,10 +1280,10 @@ export function SavedCustomQuizzesPanel({
                       <div className="mt-2 h-2 overflow-hidden rounded-full bg-white/70">
                         <div
                           className={`h-full ${recentRun.status === "completed"
-                              ? "bg-emerald-500"
-                              : recentRun.status === "cancelled"
-                                ? "bg-slate-400"
-                                : "bg-rose-500"
+                            ? "bg-emerald-500"
+                            : recentRun.status === "cancelled"
+                              ? "bg-slate-400"
+                              : "bg-rose-500"
                             }`}
                           style={{ width: "100%" }}
                         />

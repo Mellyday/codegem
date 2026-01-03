@@ -56,6 +56,32 @@ export async function PATCH(
             }
         }
 
+        // Handle setting isCanonical
+        if (typeof body.isCanonical === "boolean") {
+            updateDoc.isCanonical = body.isCanonical;
+
+            // If setting as canonical, we need to unset on other quizzes for the same file
+            if (body.isCanonical === true) {
+                // First, get this quiz's fileId to find sibling quizzes
+                const thisQuiz = await quizzes.findOne(
+                    { _id, userId: clerkUserId } as any,
+                    { projection: { fileId: 1 } }
+                );
+
+                if (thisQuiz && thisQuiz.fileId) {
+                    // Unset isCanonical on all other quizzes for this file
+                    await quizzes.updateMany(
+                        {
+                            userId: clerkUserId,
+                            fileId: thisQuiz.fileId,
+                            _id: { $ne: _id },
+                        } as any,
+                        { $set: { isCanonical: false } }
+                    );
+                }
+            }
+        }
+
         if (Object.keys(updateDoc).length === 0) {
             return NextResponse.json(
                 { error: "No valid updates provided" },
