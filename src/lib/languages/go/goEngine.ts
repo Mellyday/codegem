@@ -296,6 +296,50 @@ const buildMultiSelectOptionPool = (
   ]).slice(0, MAX);
 };
 
+const buildKeyGroupOptionPool = (
+  correct: string[],
+  allKeys: Set<string>,
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const idPool: string[] = [];
+  const strPool: string[] = [];
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) idPool.push(m[0]);
+    while ((m = reStr.exec(snippet))) if (m[0].trim()) strPool.push(m[0]);
+  } catch { }
+
+  const correctSet = new Set(correct);
+  const candidates = [...idPool, ...strPool].filter((c) => !allKeys.has(c));
+  let pool = Array.from(new Set<string>([...correct, ...candidates]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !pool.includes(d) && !allKeys.has(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  if (pool.length < 10) {
+    let idx = 1;
+    while (pool.length < 10) {
+      const candidate = `key${idx++}`;
+      if (!pool.includes(candidate) && !allKeys.has(candidate)) {
+        pool.push(candidate);
+      }
+    }
+  }
+  const extras = shuffle(pool.filter((p) => !correctSet.has(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, 10 - correct.length)),
+  ]).slice(0, 10);
+};
+
 const buildImportOptionPool = (
   correct: string[],
   aliases: Set<string>,
@@ -457,12 +501,30 @@ const collectTypeParamNames = (
   return out;
 };
 
-const findFuncLiteralNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+const findFuncLiteralNodes = (
+  node: TreeSitterAstNode,
+  stopAtCompositeLiteral = false
+): TreeSitterAstNode[] => {
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length) {
     const cur = stack.pop()!;
+    if (stopAtCompositeLiteral && cur.type === "composite_literal") continue;
     if (cur.type === "func_literal") out.push(cur);
+    (cur.namedChildren || []).forEach((c) => stack.push(c));
+  }
+  return out;
+};
+
+const findCompositeLiteralNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [node];
+  while (stack.length) {
+    const cur = stack.pop()!;
+    if (cur.type === "composite_literal") {
+      out.push(cur);
+      continue;
+    }
     (cur.namedChildren || []).forEach((c) => stack.push(c));
   }
   return out;
@@ -610,6 +672,40 @@ const headerRule: Rule = ({ node, code, sourceRef }) => {
       revealEndAfterChild: span.end,
     },
   ];
+};
+
+const compositeLiteralLabel = (
+  typeNode?: TreeSitterAstNode
+): { keyPlural: string; keySingular: string; literalNoun: string } => {
+  if (typeNode?.type === "struct_type") {
+    return { keyPlural: "fields", keySingular: "field", literalNoun: "struct" };
+  }
+  if (typeNode?.type === "map_type") {
+    return { keyPlural: "keys", keySingular: "key", literalNoun: "map" };
+  }
+  return { keyPlural: "keys", keySingular: "key", literalNoun: "literal" };
+};
+
+const collectQuestionsFromSteps = (steps: EngineStep[]): Q11[] => {
+  const out: Q11[] = [];
+  const collect = (step: EngineStep) => {
+    if (step.quiz?.questions?.length) out.push(...step.quiz.questions);
+    const children = step.lesson?.childSteps || [];
+    if (children.length) children.forEach(collect);
+  };
+  steps.forEach(collect);
+  return out;
+};
+
+const collectQuestionsForBlock = (
+  root: TreeSitterAstNode,
+  block: TreeSitterAstNode,
+  profile: DecompositionLevel,
+  code: string | undefined
+): Q11[] => {
+  if (!code) return [];
+  const steps = generateEngineSteps(root, block, code, { profile });
+  return collectQuestionsFromSteps(steps);
 };
 
 const rulePackageClause: Rule = ({ root, node, code, sourceRef }) => {
@@ -1175,6 +1271,111 @@ const ruleConstVarDecl: Rule = ({ root, node, code, sourceRef, profile }) => {
     }
   }
 
+  for (const spec of specs) {
+    const valueNode = getSectionFirstItem(spec, "values");
+    if (!valueNode) continue;
+    const composites = findCompositeLiteralNodes(valueNode);
+    for (const lit of composites) {
+      qs.push(...generateQuestionsV11(root, lit, profile, code));
+    }
+  }
+
+  return qs;
+};
+
+const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) => {
+  const elements = getSectionItems(node, "elements");
+  if (elements.length === 0) return;
+
+  const keyed: Array<{
+    keyNode: TreeSitterAstNode;
+    valueNode?: TreeSitterAstNode;
+    keyText: string;
+  }> = [];
+
+  for (const elem of elements) {
+    if (elem.type !== "keyed_element") continue;
+    const keyNode = getSectionFirstItem(elem, "key");
+    if (!keyNode) continue;
+    const valueNode = getSectionFirstItem(elem, "value");
+    const keyText = textForRange(keyNode.startIndex, keyNode.endIndex, code) || keyNode.type;
+    if (!keyText) continue;
+    keyed.push({ keyNode, valueNode, keyText });
+  }
+
+  if (keyed.length === 0) return;
+
+  const typeNode = getSectionFirstItem(node, "type");
+  const label = compositeLiteralLabel(typeNode);
+  const allKeys = keyed.map((k) => k.keyText).filter(Boolean) as string[];
+  if (allKeys.length === 0) return;
+
+  const keyGroups = splitCorrectIntoCards(allKeys);
+  const keySet = new Set(allKeys);
+  const qs: Q11[] = [];
+  const keyStem =
+    label.literalNoun === "literal"
+      ? `Which ${label.keyPlural} are present in this literal?`
+      : `Which ${label.keyPlural} are present in this ${label.literalNoun} literal?`;
+
+  for (const group of keyGroups) {
+    if (group.length === 0) continue;
+    const optionPool = buildKeyGroupOptionPool(
+      group,
+      keySet,
+      code,
+      node.startIndex,
+      node.endIndex
+    );
+    qs.push({
+      kind: "composite.keys",
+      stem: keyStem,
+      answerLabel: "",
+      options: optionPool,
+      questionType: "multi",
+      multiCorrect: group,
+      multiSelectHint: group.length,
+      sourceRefs: [sourceRef],
+      generatorRule: "composite.keys",
+    });
+  }
+
+  for (const entry of keyed) {
+    const valueNode = entry.valueNode;
+    if (!valueNode) continue;
+    const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
+    qs.push({
+      kind: "composite.value",
+      stem: `What is the value for ${label.keySingular} ${entry.keyText}?`,
+      answerLabel: valueText,
+      options: buildDistractors(valueText),
+      sourceRefs: [
+        sourceRef,
+        {
+          nodeType: entry.keyNode.type,
+          start: entry.keyNode.startIndex,
+          end: entry.keyNode.endIndex,
+          path: computeAstPath(root, entry.keyNode),
+        },
+        {
+          nodeType: valueNode.type,
+          start: valueNode.startIndex,
+          end: valueNode.endIndex,
+          path: computeAstPath(root, valueNode),
+        },
+      ],
+      generatorRule: "composite.value",
+    });
+
+    const valueQuestions = generateQuestionsV11(root, valueNode, profile, code);
+    if (valueQuestions.length > 0) qs.push(...valueQuestions);
+
+    if (valueNode.type === "func_literal") {
+      const body = childByField(valueNode, "body") || firstChildOfType(valueNode, "block");
+      if (body) qs.push(...collectQuestionsForBlock(root, body, profile, code));
+    }
+  }
+
   return qs;
 };
 
@@ -1242,8 +1443,15 @@ const ruleShortVarDecl: Rule = ({ root, node, code, sourceRef, profile }) => {
     }
   }
 
+  if (rightNode) {
+    const composites = findCompositeLiteralNodes(rightNode);
+    for (const lit of composites) {
+      qs.push(...generateQuestionsV11(root, lit, profile, code));
+    }
+  }
+
   if (profile === "deep" && rightNode) {
-    const funcLits = findFuncLiteralNodes(rightNode);
+    const funcLits = findFuncLiteralNodes(rightNode, true);
     for (const lit of funcLits) {
       qs.push(...generateQuestionsV11(root, lit, profile, code));
     }
@@ -1252,7 +1460,7 @@ const ruleShortVarDecl: Rule = ({ root, node, code, sourceRef, profile }) => {
   return qs;
 };
 
-const ruleAssignment: Rule = ({ root, node, code, sourceRef }) => {
+const ruleAssignment: Rule = ({ root, node, code, sourceRef, profile }) => {
   const leftNode = getSectionFirstItem(node, "left");
   const rightNode = getSectionFirstItem(node, "right");
   const leftTexts = getExpressionListTexts(leftNode, code);
@@ -1321,6 +1529,13 @@ const ruleAssignment: Rule = ({ root, node, code, sourceRef }) => {
         sourceRefs: [sourceRef],
         generatorRule: "assign.operator",
       });
+    }
+  }
+
+  if (rightNode) {
+    const composites = findCompositeLiteralNodes(rightNode);
+    for (const lit of composites) {
+      qs.push(...generateQuestionsV11(root, lit, profile, code));
     }
   }
 
@@ -1637,11 +1852,16 @@ const ruleCommunicationCase: Rule = ({ node, code, sourceRef, profile }) => {
   return qs;
 };
 
-const ruleReturnStatement: Rule = ({ node, code, sourceRef }) => {
+const ruleReturnStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
   const valueNode = firstChildOfType(node, "expression_list");
   if (!valueNode) return [];
   const values = getExpressionListTexts(valueNode, code);
   if (values.length === 0) return [];
+  const compositeQs: Q11[] = [];
+  const composites = findCompositeLiteralNodes(valueNode);
+  for (const lit of composites) {
+    compositeQs.push(...generateQuestionsV11(root, lit, profile, code));
+  }
   if (values.length === 1) {
     return [
       {
@@ -1652,6 +1872,7 @@ const ruleReturnStatement: Rule = ({ node, code, sourceRef }) => {
         sourceRefs: [sourceRef],
         generatorRule: "return.value",
       },
+      ...compositeQs,
     ];
   }
   const optionPool = buildMultiSelectOptionPool(
@@ -1672,6 +1893,7 @@ const ruleReturnStatement: Rule = ({ node, code, sourceRef }) => {
       sourceRefs: [sourceRef],
       generatorRule: "return.values",
     },
+    ...compositeQs,
   ];
 };
 
@@ -1852,23 +2074,32 @@ const buildCallQuestions = (
 };
 
 
-const ruleGoDeferStatement: Rule = ({ node, code, sourceRef, profile }) => {
+const ruleGoDeferStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
   const expr = (node.namedChildren || [])[0];
   if (!expr) return [];
+  let qs: Q11[] = [];
   if (expr.type === "call_expression") {
-    return buildCallQuestions(expr, code, sourceRef, profile, "What function is invoked?");
+    qs = buildCallQuestions(expr, code, sourceRef, profile, "What function is invoked?");
+  } else {
+    const exprText = textForRange(expr.startIndex, expr.endIndex, code) || expr.type;
+    qs = [
+      {
+        kind: "go_defer.expr",
+        stem: "What function is invoked?",
+        answerLabel: exprText,
+        options: buildDistractors(exprText),
+        sourceRefs: [sourceRef],
+        generatorRule: "go_defer.expr",
+      },
+    ];
   }
-  const exprText = textForRange(expr.startIndex, expr.endIndex, code) || expr.type;
-  return [
-    {
-      kind: "go_defer.expr",
-      stem: "What function is invoked?",
-      answerLabel: exprText,
-      options: buildDistractors(exprText),
-      sourceRefs: [sourceRef],
-      generatorRule: "go_defer.expr",
-    },
-  ];
+
+  const composites = findCompositeLiteralNodes(expr);
+  for (const lit of composites) {
+    qs.push(...generateQuestionsV11(root, lit, profile, code));
+  }
+
+  return qs;
 };
 
 const ruleBranchStatement: Rule = ({ node, code, sourceRef }) => {
@@ -1902,11 +2133,16 @@ const ruleBranchStatement: Rule = ({ node, code, sourceRef }) => {
   return qs;
 };
 
-const ruleExpressionStatement: Rule = ({ node, code, sourceRef, profile }) => {
+const ruleExpressionStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
   const expr = (node.namedChildren || [])[0];
   if (!expr) return [];
   if (expr.type !== "call_expression") return [];
-  return buildCallQuestions(expr, code, sourceRef, profile, "What function is called?");
+  const qs = buildCallQuestions(expr, code, sourceRef, profile, "What function is called?");
+  const composites = findCompositeLiteralNodes(expr);
+  for (const lit of composites) {
+    qs.push(...generateQuestionsV11(root, lit, profile, code));
+  }
+  return qs;
 };
 
 const rules: Record<string, Rule[]> = {
@@ -1914,6 +2150,7 @@ const rules: Record<string, Rule[]> = {
   function_declaration: [headerRule, ruleFunctionDecl],
   method_declaration: [headerRule, ruleMethodDecl],
   func_literal: [ruleFunctionDecl],
+  composite_literal: [ruleCompositeLiteral],
   type_declaration: [ruleTypeDeclaration],
   const_declaration: [ruleConstVarDecl],
   var_declaration: [ruleConstVarDecl],
