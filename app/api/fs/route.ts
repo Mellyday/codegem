@@ -47,6 +47,11 @@ function normalizePath(path: string): string {
   return path.trim().replace(/^\/+|\/+$/g, "");
 }
 
+// Fix #3: Check for . and .. segments in path
+function hasDotSegments(path?: string): boolean {
+  return normalizePrefix(path).split("/").some(seg => seg === "." || seg === "..");
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as FsAction;
@@ -78,9 +83,12 @@ export async function POST(request: Request) {
       if (name.includes("/")) {
         return NextResponse.json({ error: "Folder name cannot contain '/'" }, { status: 400 });
       }
-      // Reject . and .. segments
+      // Reject . and .. segments in name or prefix
       if (name === "." || name === "..") {
         return NextResponse.json({ error: "Invalid folder name" }, { status: 400 });
+      }
+      if (hasDotSegments(body.prefix)) {
+        return NextResponse.json({ error: "Invalid path: contains . or .. segment" }, { status: 400 });
       }
       const path = joinPath(body.prefix, name);
 
@@ -121,9 +129,12 @@ export async function POST(request: Request) {
       if (name.endsWith("/")) {
         return NextResponse.json({ error: "File name cannot end with '/'" }, { status: 400 });
       }
-      // Reject . and .. segments
+      // Reject . and .. segments in name or prefix
       if (name === "." || name === "..") {
         return NextResponse.json({ error: "Invalid file name" }, { status: 400 });
+      }
+      if (hasDotSegments(body.prefix)) {
+        return NextResponse.json({ error: "Invalid path: contains . or .. segment" }, { status: 400 });
       }
       const path = joinPath(body.prefix, name);
 

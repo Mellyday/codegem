@@ -160,11 +160,6 @@ function initSchema(database: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_runs_user_quiz ON distractor_runs(user_id, quiz_id);
-
-    -- Unique indexes to prevent duplicate paths (improvement #6)
-    -- These enforce uniqueness at the database level to prevent race conditions
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_repos_user_repo_path ON repos(user_id, repo_id, path);
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_files_user_project_path ON files(user_id, project_id, path);
   `);
 }
 
@@ -175,6 +170,16 @@ function runMigrations(database: Database.Database): void {
         const info = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
         if (!info.some(r => r.name === column)) {
             database.exec(ddl);
+        }
+    };
+
+    // Helper to safely create index (catches errors if duplicates exist)
+    const ensureIndex = (ddl: string) => {
+        try {
+            database.exec(ddl);
+        } catch (e) {
+            // Index creation may fail if duplicates exist - log but don't crash
+            console.warn("Index creation skipped (may have duplicates):", ddl, e);
         }
     };
 
@@ -189,6 +194,11 @@ function runMigrations(database: Database.Database): void {
         `ALTER TABLE repos ADD COLUMN parse_status TEXT DEFAULT 'success'`);
     ensureColumn("repos", "parse_error",
         `ALTER TABLE repos ADD COLUMN parse_error TEXT`);
+
+    // Unique indexes to prevent duplicate paths (with safe try/catch)
+    // These may fail if duplicates already exist in the database
+    ensureIndex(`CREATE UNIQUE INDEX IF NOT EXISTS uq_repos_user_repo_path ON repos(user_id, repo_id, path)`);
+    ensureIndex(`CREATE UNIQUE INDEX IF NOT EXISTS uq_files_user_project_path ON files(user_id, project_id, path)`);
 }
 
 // Helper to generate UUID-like IDs (using explicit crypto import - improvement E)

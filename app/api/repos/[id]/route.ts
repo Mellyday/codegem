@@ -14,17 +14,25 @@ export async function GET(
     const db = getDb();
     const { id } = await context.params;
 
-    // First check if this repo belongs to current user or is a dev repo
-    const ownerCheck = db.prepare(`
-      SELECT MIN(user_id) as user_id FROM repos WHERE repo_id = ?
-    `).get(id) as { user_id: string } | undefined;
+    // Fix #1: Properly determine effective user_id
+    // Prefer logged-in user's copy, then fall back to DEV
+    let effectiveUserId: string | null = null;
 
-    if (!ownerCheck) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    if (userId) {
+      const repoForUser = db.prepare(`
+        SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1
+      `).get(id, userId);
+      if (repoForUser) effectiveUserId = userId;
     }
 
-    // Only allow access if user owns the repo or it's a dev repo
-    if (ownerCheck.user_id !== DEV_USER_ID && (!userId || ownerCheck.user_id !== userId)) {
+    if (!effectiveUserId) {
+      const repoForDev = db.prepare(`
+        SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1
+      `).get(id, DEV_USER_ID);
+      if (repoForDev) effectiveUserId = DEV_USER_ID;
+    }
+
+    if (!effectiveUserId) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
@@ -34,7 +42,7 @@ export async function GET(
         MIN(url) as url,
         MIN(name) as name,
         MIN(owner) as owner,
-        MIN(user_id) as user_id,
+        user_id,
         MIN(created_at) as created_at,
         MAX(updated_at) as updated_at,
         COUNT(*) as total_files,
@@ -42,8 +50,8 @@ export async function GET(
         SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) as failed_files
       FROM repos
       WHERE user_id = ? AND repo_id = ?
-      GROUP BY repo_id
-    `).get(ownerCheck.user_id, id) as {
+      GROUP BY user_id, repo_id
+    `).get(effectiveUserId, id) as {
       repo_id: string;
       url: string;
       name: string;
@@ -89,21 +97,27 @@ export async function DELETE(
     const db = getDb();
     const { id } = await context.params;
 
-    // Check if repo exists AND belongs to the user (or is a dev repo)
+    // Fix #2: Check if user owns this repo (scoped by user_id)
     const exists = db.prepare(`
-      SELECT repo_id, user_id FROM repos WHERE repo_id = ? LIMIT 1
-    `).get(id) as { repo_id: string; user_id: string } | undefined;
+      SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1
+    `).get(id, userId);
 
     if (!exists) {
+      // Check if it's a DEV repo
+      const devRepo = db.prepare(`
+        SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1
+      `).get(id, DEV_USER_ID);
+
+      if (devRepo) {
+        // DEV repos are read-only for non-dev users
+        return NextResponse.json({ error: "Cannot delete shared repository" }, { status: 403 });
+      }
+
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 
-    if (exists.user_id !== DEV_USER_ID && exists.user_id !== userId) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    // Delete all files for this repo
-    db.prepare(`DELETE FROM repos WHERE repo_id = ?`).run(id);
+    // Delete ONLY the user's rows (scoped by user_id)
+    db.prepare(`DELETE FROM repos WHERE repo_id = ? AND user_id = ?`).run(id, userId);
 
     return NextResponse.json({ ok: true });
   } catch (error) {
