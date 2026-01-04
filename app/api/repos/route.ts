@@ -14,7 +14,7 @@ export async function GET(req: Request) {
     const { userId } = await auth();
     const db = getDb();
 
-    // Get all repos grouped by (user_id, repo_id) to prevent cross-user collisions
+    // Fix #1: Filter in SQL to avoid scanning all users' data
     const rows = db.prepare(`
       SELECT 
         user_id,
@@ -29,8 +29,9 @@ export async function GET(req: Request) {
         SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) as failed_files
       FROM repos
       WHERE repo_id IS NOT NULL
+        AND (user_id = ? OR user_id = ?)
       GROUP BY user_id, repo_id
-    `).all() as Array<{
+    `).all(userId ?? "__no_user__", DEV_USER_ID) as Array<{
       user_id: string;
       repo_id: string;
       url: string;
@@ -43,12 +44,7 @@ export async function GET(req: Request) {
       failed_files: number;
     }>;
 
-    // Filter by user: show current user's repos + dev repos
-    const filteredRows = rows.filter(r =>
-      r.user_id === DEV_USER_ID || (userId && r.user_id === userId)
-    );
-
-    const list = filteredRows.map((g) => ({
+    const list = rows.map((g) => ({
       id: String(g.repo_id),
       url: g.url,
       name: g.name,
@@ -72,7 +68,13 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const { userId } = await auth();
-    const headerUserId = req.headers.get("x-user-id") || undefined;
+
+    // Fix #2: Only allow x-user-id header override in development
+    const headerUserId =
+      process.env.NODE_ENV !== "production"
+        ? req.headers.get("x-user-id") || undefined
+        : undefined;
+
     const effectiveUserId = userId ?? headerUserId;
     if (!effectiveUserId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     const body = (await req.json()) as PostBody;

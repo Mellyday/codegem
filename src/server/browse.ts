@@ -51,20 +51,16 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
   // Get current user (if logged in) for filtering
   const userId = await getOptionalUserId();
 
-  // Build repos list - group by (user_id, repo_id) to prevent cross-user collisions
+  // Build repos list - filter in SQL to avoid scanning all users' data
   const repoRows = db.prepare(`
     SELECT user_id, repo_id, MIN(owner) as owner, MIN(name) as name
     FROM repos
     WHERE repo_id IS NOT NULL
+      AND (user_id = ? OR user_id = ?)
     GROUP BY user_id, repo_id
-  `).all() as Array<{ user_id: string; repo_id: string; owner: string; name: string }>;
+  `).all(userId ?? "__no_user__", DEV_USER_ID) as Array<{ user_id: string; repo_id: string; owner: string; name: string }>;
 
-  // Filter repos by user
-  const filteredRepos = repoRows.filter(r =>
-    r.user_id === DEV_USER_ID || (userId && r.user_id === userId)
-  );
-
-  const repos: RepoOrProjectItem[] = filteredRepos
+  const repos: RepoOrProjectItem[] = repoRows
     .map((g) => ({
       id: String(g.repo_id),
       type: "repo" as const,
@@ -72,20 +68,16 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  // Build projects list - group by (user_id, project_id) to prevent cross-user collisions
+  // Build projects list - filter in SQL
   const projectRows = db.prepare(`
     SELECT user_id, project_id, MIN(project_name) as project_name
     FROM files
     WHERE project_id IS NOT NULL
+      AND (user_id = ? OR user_id = ?)
     GROUP BY user_id, project_id
-  `).all() as Array<{ user_id: string; project_id: string; project_name: string | null }>;
+  `).all(userId ?? "__no_user__", DEV_USER_ID) as Array<{ user_id: string; project_id: string; project_name: string | null }>;
 
-  // Filter projects by user
-  const filteredProjects = projectRows.filter(p =>
-    p.user_id === DEV_USER_ID || (userId && p.user_id === userId)
-  );
-
-  const projects: RepoOrProjectItem[] = filteredProjects
+  const projects: RepoOrProjectItem[] = projectRows
     .filter((g) => g.project_id)
     .map((g) => ({
       id: String(g.project_id),
