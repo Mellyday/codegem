@@ -37,6 +37,16 @@ function joinPath(prefix: string | undefined, name: string): string {
   return [p, name].filter(Boolean).join("/");
 }
 
+// Fix #1: Escape LIKE wildcards to prevent unintended matches
+function escapeLike(s: string): string {
+  return s.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
+// Fix #2: Normalize path (remove leading/trailing slashes)
+function normalizePath(path: string): string {
+  return path.trim().replace(/^\/+|\/+$/g, "");
+}
+
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as FsAction;
@@ -67,6 +77,10 @@ export async function POST(request: Request) {
       if (!name) return NextResponse.json({ error: "Missing name" }, { status: 400 });
       if (name.includes("/")) {
         return NextResponse.json({ error: "Folder name cannot contain '/'" }, { status: 400 });
+      }
+      // Reject . and .. segments
+      if (name === "." || name === "..") {
+        return NextResponse.json({ error: "Invalid folder name" }, { status: 400 });
       }
       const path = joinPath(body.prefix, name);
 
@@ -100,8 +114,16 @@ export async function POST(request: Request) {
     if (body.action === "create_snippet") {
       const name = body.name?.trim();
       if (!name) return NextResponse.json({ error: "Missing name" }, { status: 400 });
+      // Fix #3: Block / in file name to prevent bypassing folder semantics
+      if (name.includes("/")) {
+        return NextResponse.json({ error: "File name cannot contain '/'" }, { status: 400 });
+      }
       if (name.endsWith("/")) {
         return NextResponse.json({ error: "File name cannot end with '/'" }, { status: 400 });
+      }
+      // Reject . and .. segments
+      if (name === "." || name === "..") {
+        return NextResponse.json({ error: "Invalid file name" }, { status: 400 });
       }
       const path = joinPath(body.prefix, name);
 
@@ -156,21 +178,22 @@ export async function POST(request: Request) {
     }
 
     if (body.action === "delete") {
-      const path = body.path?.trim();
+      // Fix #2: Normalize delete path
+      const path = normalizePath(body.path ?? "");
       if (!path) return NextResponse.json({ error: "Missing path" }, { status: 400 });
 
       let deletedCount = 0;
 
       if (body.isDir) {
-        // Delete the folder marker and all files under this path prefix
-        // Critical: scope by user_id to prevent unauthorized deletion
+        // Fix #1: Escape LIKE wildcards and use ESCAPE clause
+        const likePattern = `${escapeLike(path)}/%`;
         const result = db.prepare(`
-          DELETE FROM ${tableName} WHERE user_id = ? AND ${idColumn} = ? AND (path = ? OR path LIKE ?)
-        `).run(userId, body.id, path, `${path}/%`);
+          DELETE FROM ${tableName} 
+          WHERE user_id = ? AND ${idColumn} = ? AND (path = ? OR path LIKE ? ESCAPE '\\')
+        `).run(userId, body.id, path, likePattern);
         deletedCount = result.changes;
       } else {
         // Delete single file
-        // Critical: scope by user_id to prevent unauthorized deletion
         const result = db.prepare(`
           DELETE FROM ${tableName} WHERE user_id = ? AND ${idColumn} = ? AND path = ?
         `).run(userId, body.id, path);

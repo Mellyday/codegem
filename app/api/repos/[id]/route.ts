@@ -14,6 +14,20 @@ export async function GET(
     const db = getDb();
     const { id } = await context.params;
 
+    // First check if this repo belongs to current user or is a dev repo
+    const ownerCheck = db.prepare(`
+      SELECT MIN(user_id) as user_id FROM repos WHERE repo_id = ?
+    `).get(id) as { user_id: string } | undefined;
+
+    if (!ownerCheck) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // Only allow access if user owns the repo or it's a dev repo
+    if (ownerCheck.user_id !== DEV_USER_ID && (!userId || ownerCheck.user_id !== userId)) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
     const row = db.prepare(`
       SELECT 
         repo_id,
@@ -27,9 +41,9 @@ export async function GET(
         SUM(CASE WHEN parse_status = 'success' THEN 1 ELSE 0 END) as parsed_files,
         SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) as failed_files
       FROM repos
-      WHERE repo_id = ?
+      WHERE user_id = ? AND repo_id = ?
       GROUP BY repo_id
-    `).get(id) as {
+    `).get(ownerCheck.user_id, id) as {
       repo_id: string;
       url: string;
       name: string;
@@ -43,11 +57,6 @@ export async function GET(
     } | undefined;
 
     if (!row) {
-      return NextResponse.json({ error: "Not found" }, { status: 404 });
-    }
-
-    // Check user permission
-    if (row.user_id !== DEV_USER_ID && (!userId || row.user_id !== userId)) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
 

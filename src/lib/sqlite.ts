@@ -160,6 +160,11 @@ function initSchema(database: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_runs_user_quiz ON distractor_runs(user_id, quiz_id);
+
+    -- Unique indexes to prevent duplicate paths (improvement #6)
+    -- These enforce uniqueness at the database level to prevent race conditions
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_repos_user_repo_path ON repos(user_id, repo_id, path);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_files_user_project_path ON files(user_id, project_id, path);
   `);
 }
 
@@ -178,6 +183,12 @@ function runMigrations(database: Database.Database): void {
         `ALTER TABLE files ADD COLUMN parse_status TEXT DEFAULT 'success'`);
     ensureColumn("files", "parse_error",
         `ALTER TABLE files ADD COLUMN parse_error TEXT`);
+
+    // Fix #5: Also migrate repos table (if created before these columns existed)
+    ensureColumn("repos", "parse_status",
+        `ALTER TABLE repos ADD COLUMN parse_status TEXT DEFAULT 'success'`);
+    ensureColumn("repos", "parse_error",
+        `ALTER TABLE repos ADD COLUMN parse_error TEXT`);
 }
 
 // Helper to generate UUID-like IDs (using explicit crypto import - improvement E)
