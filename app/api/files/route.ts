@@ -44,7 +44,7 @@ export async function POST(request: Request) {
       body.extension,
       body.sourceCode,
       toJson(body.ast),
-      Buffer.from(body.sourceCode, "utf8").length,
+      Buffer.byteLength(body.sourceCode, "utf8"),
       body.parseStatus ?? "success",
       body.parseError ?? null,
       now,

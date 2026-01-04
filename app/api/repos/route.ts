@@ -14,16 +14,14 @@ export async function GET(req: Request) {
     const { userId } = await auth();
     const db = getDb();
 
-    // Get all repos grouped by repo_id
-    // Note: Using MIN() for user_id to get deterministic results
-    // In practice, all rows for a repo_id should have the same user_id
+    // Get all repos grouped by (user_id, repo_id) to prevent cross-user collisions
     const rows = db.prepare(`
       SELECT 
+        user_id,
         repo_id,
         MIN(url) as url,
         MIN(name) as name,
         MIN(owner) as owner,
-        MIN(user_id) as user_id,
         MIN(created_at) as created_at,
         MAX(updated_at) as updated_at,
         COUNT(*) as total_files,
@@ -31,13 +29,13 @@ export async function GET(req: Request) {
         SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) as failed_files
       FROM repos
       WHERE repo_id IS NOT NULL
-      GROUP BY repo_id
+      GROUP BY user_id, repo_id
     `).all() as Array<{
+      user_id: string;
       repo_id: string;
       url: string;
       name: string;
       owner: string;
-      user_id: string;
       created_at: string;
       updated_at: string;
       total_files: number;

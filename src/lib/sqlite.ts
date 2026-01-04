@@ -1,6 +1,7 @@
 import Database from "better-sqlite3";
 import path from "node:path";
 import fs from "node:fs";
+import crypto from "node:crypto";
 
 // Determine database path based on environment
 // In production (Coolify), use /app/data for persistent volume
@@ -33,6 +34,9 @@ export function getDb(): Database.Database {
 
         // Initialize schema
         initSchema(db);
+
+        // Run migrations for existing databases
+        runMigrations(db);
     }
     return db;
 }
@@ -64,6 +68,8 @@ function initSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_repos_repo_id ON repos(repo_id);
     CREATE INDEX IF NOT EXISTS idx_repos_user_id ON repos(user_id);
     CREATE INDEX IF NOT EXISTS idx_repos_path ON repos(path);
+    -- Composite index for hot query pattern (improvement C)
+    CREATE INDEX IF NOT EXISTS idx_repos_user_repo_path ON repos(user_id, repo_id, path);
 
     -- files: Stores user-created files and project files
     CREATE TABLE IF NOT EXISTS files (
@@ -89,6 +95,8 @@ function initSchema(database: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_files_user_id ON files(user_id);
     CREATE INDEX IF NOT EXISTS idx_files_path ON files(path);
     CREATE INDEX IF NOT EXISTS idx_files_repo_id ON files(repo_id);
+    -- Composite index for hot query pattern (improvement C)
+    CREATE INDEX IF NOT EXISTS idx_files_user_project_path ON files(user_id, project_id, path);
 
     -- quizzes: Stores quiz definitions
     CREATE TABLE IF NOT EXISTS quizzes (
@@ -155,7 +163,24 @@ function initSchema(database: Database.Database): void {
   `);
 }
 
-// Helper to generate UUID-like IDs (similar to MongoDB ObjectId)
+// Improvement A: Schema migrations for existing databases
+function runMigrations(database: Database.Database): void {
+    // Helper to safely add columns if they don't exist
+    const ensureColumn = (table: string, column: string, ddl: string) => {
+        const info = database.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+        if (!info.some(r => r.name === column)) {
+            database.exec(ddl);
+        }
+    };
+
+    // Add parse_status and parse_error to files if missing (for existing databases)
+    ensureColumn("files", "parse_status",
+        `ALTER TABLE files ADD COLUMN parse_status TEXT DEFAULT 'success'`);
+    ensureColumn("files", "parse_error",
+        `ALTER TABLE files ADD COLUMN parse_error TEXT`);
+}
+
+// Helper to generate UUID-like IDs (using explicit crypto import - improvement E)
 export function generateId(): string {
     return crypto.randomUUID();
 }

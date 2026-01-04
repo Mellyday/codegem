@@ -163,15 +163,17 @@ export async function POST(request: Request) {
 
       if (body.isDir) {
         // Delete the folder marker and all files under this path prefix
+        // Critical: scope by user_id to prevent unauthorized deletion
         const result = db.prepare(`
-          DELETE FROM ${tableName} WHERE ${idColumn} = ? AND (path = ? OR path LIKE ?)
-        `).run(body.id, path, `${path}/%`);
+          DELETE FROM ${tableName} WHERE user_id = ? AND ${idColumn} = ? AND (path = ? OR path LIKE ?)
+        `).run(userId, body.id, path, `${path}/%`);
         deletedCount = result.changes;
       } else {
         // Delete single file
+        // Critical: scope by user_id to prevent unauthorized deletion
         const result = db.prepare(`
-          DELETE FROM ${tableName} WHERE ${idColumn} = ? AND path = ?
-        `).run(body.id, path);
+          DELETE FROM ${tableName} WHERE user_id = ? AND ${idColumn} = ? AND path = ?
+        `).run(userId, body.id, path);
         deletedCount = result.changes;
       }
 

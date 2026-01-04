@@ -51,14 +51,13 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
   // Get current user (if logged in) for filtering
   const userId = await getOptionalUserId();
 
-  // Build repos list - group by repo_id
-  // Using MIN() for deterministic results in GROUP BY
+  // Build repos list - group by (user_id, repo_id) to prevent cross-user collisions
   const repoRows = db.prepare(`
-    SELECT repo_id, MIN(owner) as owner, MIN(name) as name, MIN(user_id) as user_id
+    SELECT user_id, repo_id, MIN(owner) as owner, MIN(name) as name
     FROM repos
     WHERE repo_id IS NOT NULL
-    GROUP BY repo_id
-  `).all() as Array<{ repo_id: string; owner: string; name: string; user_id: string }>;
+    GROUP BY user_id, repo_id
+  `).all() as Array<{ user_id: string; repo_id: string; owner: string; name: string }>;
 
   // Filter repos by user
   const filteredRepos = repoRows.filter(r =>
@@ -73,14 +72,13 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
 
-  // Build projects list - group by project_id
-  // Using MIN() for deterministic results in GROUP BY
+  // Build projects list - group by (user_id, project_id) to prevent cross-user collisions
   const projectRows = db.prepare(`
-    SELECT project_id, MIN(project_name) as project_name, MIN(user_id) as user_id
+    SELECT user_id, project_id, MIN(project_name) as project_name
     FROM files
     WHERE project_id IS NOT NULL
-    GROUP BY project_id
-  `).all() as Array<{ project_id: string; project_name: string | null; user_id: string }>;
+    GROUP BY user_id, project_id
+  `).all() as Array<{ user_id: string; project_id: string; project_name: string | null }>;
 
   // Filter projects by user
   const filteredProjects = projectRows.filter(p =>
