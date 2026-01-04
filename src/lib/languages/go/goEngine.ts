@@ -686,6 +686,21 @@ const compositeLiteralLabel = (
   return { keyPlural: "keys", keySingular: "key", literalNoun: "literal" };
 };
 
+const compositeLiteralTypeAnswer = (
+  node: TreeSitterAstNode,
+  typeNode: TreeSitterAstNode | undefined,
+  code: string | undefined
+): string | undefined => {
+  if (!typeNode) return undefined;
+  const typeText = textForRange(typeNode.startIndex, typeNode.endIndex, code) || typeNode.type;
+  if (!typeText) return undefined;
+  if (!code) return typeText;
+  let idx = node.startIndex - 1;
+  while (idx >= 0 && /\s/.test(code[idx])) idx -= 1;
+  if (idx >= 0 && code[idx] === "&") return `&${typeText}`;
+  return typeText;
+};
+
 const collectQuestionsFromSteps = (steps: EngineStep[]): Q11[] => {
   const out: Q11[] = [];
   const collect = (step: EngineStep) => {
@@ -1293,6 +1308,7 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
     keyText: string;
   }> = [];
 
+  const keyNodeByText = new Map<string, TreeSitterAstNode>();
   for (const elem of elements) {
     if (elem.type !== "keyed_element") continue;
     const keyNode = getSectionFirstItem(elem, "key");
@@ -1301,6 +1317,7 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
     const keyText = textForRange(keyNode.startIndex, keyNode.endIndex, code) || keyNode.type;
     if (!keyText) continue;
     keyed.push({ keyNode, valueNode, keyText });
+    if (!keyNodeByText.has(keyText)) keyNodeByText.set(keyText, keyNode);
   }
 
   if (keyed.length === 0) return;
@@ -1318,8 +1335,41 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
       ? `Which ${label.keyPlural} are present in this literal?`
       : `Which ${label.keyPlural} are present in this ${label.literalNoun} literal?`;
 
+  const typeAnswer = compositeLiteralTypeAnswer(node, typeNode, code);
+  if (typeAnswer) {
+    const typeStem =
+      label.literalNoun === "literal"
+        ? "What is the type of this literal?"
+        : `What is the type of this ${label.literalNoun} literal?`;
+    const typeRef = typeNode
+      ? {
+        nodeType: typeNode.type,
+        start: typeNode.startIndex,
+        end: typeNode.endIndex,
+        path: computeAstPath(root, typeNode),
+      }
+      : undefined;
+    qs.push({
+      kind: "composite.type",
+      stem: typeStem,
+      answerLabel: typeAnswer,
+      options: buildDistractors(typeAnswer),
+      sourceRefs: typeRef ? [typeRef, sourceRef] : [sourceRef],
+      generatorRule: "composite.type",
+    });
+  }
+
   for (const group of keyGroups) {
     if (group.length === 0) continue;
+    const keyNode = keyNodeByText.get(group[0]);
+    const keyRef = keyNode
+      ? {
+        nodeType: keyNode.type,
+        start: keyNode.startIndex,
+        end: keyNode.endIndex,
+        path: computeAstPath(root, keyNode),
+      }
+      : undefined;
     const optionPool = buildKeyGroupOptionPool(
       group,
       keySet,
@@ -1335,7 +1385,7 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
       questionType: "multi",
       multiCorrect: group,
       multiSelectHint: group.length,
-      sourceRefs: [sourceRef],
+      sourceRefs: keyRef ? [keyRef, sourceRef] : [sourceRef],
       generatorRule: "composite.keys",
     });
   }
@@ -1343,36 +1393,39 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
   for (const entry of keyed) {
     const valueNode = entry.valueNode;
     if (!valueNode) continue;
-    const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
-    qs.push({
-      kind: "composite.value",
-      stem: `What is the value for ${label.keySingular} ${entry.keyText}?`,
-      answerLabel: valueText,
-      options: buildDistractors(valueText),
-      sourceRefs: [
-        sourceRef,
-        {
-          nodeType: entry.keyNode.type,
-          start: entry.keyNode.startIndex,
-          end: entry.keyNode.endIndex,
-          path: computeAstPath(root, entry.keyNode),
-        },
-        {
-          nodeType: valueNode.type,
-          start: valueNode.startIndex,
-          end: valueNode.endIndex,
-          path: computeAstPath(root, valueNode),
-        },
-      ],
-      generatorRule: "composite.value",
-    });
-
     const valueQuestions = generateQuestionsV11(root, valueNode, profile, code);
-    if (valueQuestions.length > 0) qs.push(...valueQuestions);
-
+    const bodyQuestions: Q11[] = [];
     if (valueNode.type === "func_literal") {
       const body = childByField(valueNode, "body") || firstChildOfType(valueNode, "block");
-      if (body) qs.push(...collectQuestionsForBlock(root, body, profile, code));
+      if (body) bodyQuestions.push(...collectQuestionsForBlock(root, body, profile, code));
+    }
+
+    if (valueQuestions.length === 0 && bodyQuestions.length === 0) {
+      const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
+      qs.push({
+        kind: "composite.value",
+        stem: `What is the value for ${label.keySingular} ${entry.keyText}?`,
+        answerLabel: valueText,
+        options: buildDistractors(valueText),
+        sourceRefs: [
+          {
+            nodeType: valueNode.type,
+            start: valueNode.startIndex,
+            end: valueNode.endIndex,
+            path: computeAstPath(root, valueNode),
+          },
+          {
+            nodeType: entry.keyNode.type,
+            start: entry.keyNode.startIndex,
+            end: entry.keyNode.endIndex,
+            path: computeAstPath(root, entry.keyNode),
+          },
+          sourceRef,
+        ],
+        generatorRule: "composite.value",
+      });
+    } else {
+      qs.push(...valueQuestions, ...bodyQuestions);
     }
   }
 
