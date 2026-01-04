@@ -1,11 +1,10 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb } from "../../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb, generateId, toDbDate } from "../../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 /**
- * DEV-ONLY endpoint to push test files to a shared "tests" project in MongoDB.
+ * DEV-ONLY endpoint to push test files to a shared "tests" project in SQLite.
  * Will refuse to run in production (NODE_ENV === 'production').
  * 
  * - All files go to the same "tests" project (reuses existing projectId if found)
@@ -75,8 +74,7 @@ export async function POST(request: Request) {
             return NextResponse.json({ error: "Missing or empty 'files' array" }, { status: 400 });
         }
 
-        const db = await getDb();
-        const files = db.collection("files");
+        const db = getDb();
 
         // Try to get the authenticated user's ID so quiz saves work
         let devUserId: string;
@@ -87,28 +85,23 @@ export async function POST(request: Request) {
             devUserId = "dev-push-project";
         }
 
-        // Find an existing "tests" project or create a new projectId
-        // We identify the "tests" project by looking for files with projectName: "tests"
-        const existingFile = await files.findOne(
-            { projectName: body.name },
-            { projection: { projectId: 1 } }
-        );
+        // Find an existing project by name or create a new projectId
+        const existingFile = db.prepare(`
+            SELECT project_id FROM files WHERE project_name = ? LIMIT 1
+        `).get(body.name) as { project_id: string } | undefined;
 
-        const projectId = existingFile?.projectId
-            ? existingFile.projectId
-            : new ObjectId();
-
+        const projectId = existingFile?.project_id || generateId();
         const isNewProject = !existingFile;
 
         // Check for duplicate file paths within this project
         const requestedPaths = body.files.map(f => f.path);
-        const existingPaths = await files.find(
-            { projectId, path: { $in: requestedPaths } },
-            { projection: { path: 1 } }
-        ).toArray();
+        const placeholders = requestedPaths.map(() => '?').join(',');
+        const existingPaths = db.prepare(`
+            SELECT path FROM files WHERE project_id = ? AND path IN (${placeholders})
+        `).all(projectId, ...requestedPaths) as Array<{ path: string }>;
 
         if (existingPaths.length > 0) {
-            const duplicates = existingPaths.map((d: any) => d.path);
+            const duplicates = existingPaths.map(d => d.path);
             return NextResponse.json(
                 {
                     error: "Duplicate file(s) already exist in project",
@@ -118,33 +111,42 @@ export async function POST(request: Request) {
             );
         }
 
-        const now = new Date();
-        const docs = body.files.map((f) => {
-            const inferred = inferLanguageAndExtension(f.path);
-            return {
-                userId: devUserId,
-                repoId: null,
-                projectId,
-                projectName: body.name, // Store project name for labeling
-                path: f.path,
-                language: f.language || inferred.language,
-                extension: f.extension || inferred.extension,
-                sourceCode: f.sourceCode,
-                ast: null,
-                parseStatus: "success" as const,
-                size: Buffer.from(f.sourceCode, "utf8").length,
-                createdAt: now,
-                updatedAt: now,
-            };
+        const now = toDbDate(new Date());
+        const insertStmt = db.prepare(`
+            INSERT INTO files (
+                id, user_id, repo_id, project_id, project_name, path,
+                language, extension, source_code, ast, size, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+
+        const insertMany = db.transaction((files: FileInput[]) => {
+            for (const f of files) {
+                const inferred = inferLanguageAndExtension(f.path);
+                insertStmt.run(
+                    generateId(),
+                    devUserId,
+                    null, // repoId
+                    projectId,
+                    body.name,
+                    f.path,
+                    f.language || inferred.language,
+                    f.extension || inferred.extension,
+                    f.sourceCode,
+                    null, // ast
+                    Buffer.from(f.sourceCode, "utf8").length,
+                    now,
+                    now
+                );
+            }
         });
 
-        await files.insertMany(docs);
+        insertMany(body.files);
 
         return NextResponse.json({
             ok: true,
             projectId: String(projectId),
             projectName: body.name,
-            filesInserted: docs.length,
+            filesInserted: body.files.length,
             isNewProject,
         });
     } catch (error) {

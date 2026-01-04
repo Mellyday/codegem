@@ -1,7 +1,6 @@
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "@/src/lib/mongodb";
+import { getDb, toDbDate, toJson } from "@/src/lib/sqlite";
 import { parseWithTreeSitter } from "@/src/lib/parser/treeSitterServer";
-import { ObjectId } from "mongodb";
 
 export async function POST(
     req: Request,
@@ -12,25 +11,20 @@ export async function POST(
         return Response.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    const { id } = await params;
-    let repoId: ObjectId;
-    try {
-        repoId = new ObjectId(id);
-    } catch {
-        return Response.json({ error: "Invalid repo ID" }, { status: 400 });
-    }
-
-    const db = await getDb();
-    const reposCol = db.collection("repos");
+    const { id: repoId } = await params;
+    const db = getDb();
 
     // Find all failed files for this repo belonging to this user
-    const failedFiles = await reposCol
-        .find({
-            repoId,
-            userId,
-            parseStatus: "failed",
-        })
-        .toArray();
+    const failedFiles = db.prepare(`
+        SELECT id, path, source_code, extension
+        FROM repos
+        WHERE repo_id = ? AND user_id = ? AND parse_status = 'failed'
+    `).all(repoId, userId) as Array<{
+        id: string;
+        path: string;
+        source_code: string | null;
+        extension: string;
+    }>;
 
     if (failedFiles.length === 0) {
         return Response.json({
@@ -45,8 +39,20 @@ export async function POST(
     let stillFailed = 0;
     const errors: { path: string; error: string }[] = [];
 
+    const updateSuccessStmt = db.prepare(`
+        UPDATE repos
+        SET language = ?, ast = ?, parse_status = 'success', parse_error = NULL, updated_at = ?
+        WHERE id = ?
+    `);
+
+    const updateFailedStmt = db.prepare(`
+        UPDATE repos
+        SET parse_error = ?, updated_at = ?
+        WHERE id = ?
+    `);
+
     for (const file of failedFiles) {
-        const { sourceCode, extension, path: filePath, _id } = file;
+        const { source_code: sourceCode, extension, path: filePath, id } = file;
 
         // Skip if no source code stored (legacy failed files before this fix)
         if (!sourceCode || sourceCode.length === 0) {
@@ -60,20 +66,13 @@ export async function POST(
 
         try {
             const parsed = await parseWithTreeSitter(sourceCode, extension);
-            const now = new Date();
+            const now = toDbDate(new Date());
 
-            await reposCol.updateOne(
-                { _id },
-                {
-                    $set: {
-                        language: parsed.languageId,
-                        ast: parsed.ast,
-                        parseStatus: "success",
-                        parseError: null,
-                        updatedAt: now,
-                    },
-                    $unset: { parseError: "" },
-                }
+            updateSuccessStmt.run(
+                parsed.languageId,
+                toJson(parsed.ast),
+                now,
+                id
             );
             succeeded++;
         } catch (err) {
@@ -82,14 +81,10 @@ export async function POST(
             errors.push({ path: filePath, error: errorMsg });
 
             // Update with new error message
-            await reposCol.updateOne(
-                { _id },
-                {
-                    $set: {
-                        parseError: errorMsg,
-                        updatedAt: new Date(),
-                    },
-                }
+            updateFailedStmt.run(
+                errorMsg,
+                toDbDate(new Date()),
+                id
             );
         }
     }

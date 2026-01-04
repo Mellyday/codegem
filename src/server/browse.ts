@@ -1,6 +1,5 @@
-import { getDb } from "@/src/lib/mongodb";
+import { getDb, generateId, toDbDate, fromJson, toJson } from "@/src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
-import { ObjectId } from "mongodb";
 
 export type RepoOrProjectRef = {
   id: string; // stringified ObjectId
@@ -41,11 +40,10 @@ async function getOptionalUserId(): Promise<string | null> {
 const DEV_USER_ID = "dev-push-project";
 
 export async function listReposAndProjects(): Promise<TopLevelListing> {
-  // Be resilient when MongoDB is unavailable (e.g., offline or DNS SRV blocked)
-  // If DB connection fails, return empty lists instead of erroring the page.
-  let db: any;
+  // Be resilient when DB is unavailable
+  let db;
   try {
-    db = await getDb();
+    db = getDb();
   } catch {
     return { repos: [], projects: [] };
   }
@@ -53,58 +51,48 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
   // Get current user (if logged in) for filtering
   const userId = await getOptionalUserId();
 
-  // Build user filter: show current user's items + dev items
-  // If not logged in, only show dev items
-  const userFilter = userId
-    ? { userId: { $in: [userId, DEV_USER_ID] } }
-    : { userId: DEV_USER_ID };
+  // Build repos list - group by repo_id
+  const repoRows = db.prepare(`
+    SELECT repo_id, owner, name, user_id
+    FROM repos
+    WHERE repo_id IS NOT NULL
+    GROUP BY repo_id
+  `).all() as Array<{ repo_id: string; owner: string; name: string; user_id: string }>;
 
-  const files = db.collection("files");
-  const reposCol = db.collection("repos");
+  // Filter repos by user
+  const filteredRepos = repoRows.filter(r =>
+    r.user_id === DEV_USER_ID || (userId && r.user_id === userId)
+  );
 
-  // Repos are stored in the "repos" collection - filter by user
-  const repoAgg = await reposCol
-    .aggregate([
-      { $match: { repoId: { $ne: null }, ...userFilter } },
-      {
-        $group: {
-          _id: "$repoId",
-          owner: { $first: "$owner" },
-          name: { $first: "$name" },
-        },
-      },
-    ])
-    .toArray();
-
-  // Projects are stored in the "files" collection - filter by user
-  const projectAgg = await files
-    .aggregate([
-      { $match: { projectId: { $ne: null }, ...userFilter } },
-      {
-        $group: {
-          _id: "$projectId",
-          projectName: { $first: "$projectName" },
-        },
-      },
-    ])
-    .toArray();
-
-  const repos: RepoOrProjectItem[] = repoAgg
-    .map((g: any) => ({
-      id: String(g._id),
+  const repos: RepoOrProjectItem[] = filteredRepos
+    .map((g) => ({
+      id: String(g.repo_id),
       type: "repo" as const,
-      label: g.owner && g.name ? `${g.owner}/${g.name}` : `Repo ${String(g._id)}`,
+      label: g.owner && g.name ? `${g.owner}/${g.name}` : `Repo ${String(g.repo_id)}`,
     }))
-    .sort((a: RepoOrProjectItem, b: RepoOrProjectItem) => a.label.localeCompare(b.label));
+    .sort((a, b) => a.label.localeCompare(b.label));
 
-  const projects: RepoOrProjectItem[] = projectAgg
-    .filter((g: any) => g._id)
-    .map((g: any) => ({
-      id: String(g._id),
+  // Build projects list - group by project_id
+  const projectRows = db.prepare(`
+    SELECT project_id, project_name, user_id
+    FROM files
+    WHERE project_id IS NOT NULL
+    GROUP BY project_id
+  `).all() as Array<{ project_id: string; project_name: string | null; user_id: string }>;
+
+  // Filter projects by user
+  const filteredProjects = projectRows.filter(p =>
+    p.user_id === DEV_USER_ID || (userId && p.user_id === userId)
+  );
+
+  const projects: RepoOrProjectItem[] = filteredProjects
+    .filter((g) => g.project_id)
+    .map((g) => ({
+      id: String(g.project_id),
       type: "project" as const,
-      label: g.projectName || `Project ${String(g._id)}`,
+      label: g.project_name || `Project ${String(g.project_id)}`,
     }))
-    .sort((a: RepoOrProjectItem, b: RepoOrProjectItem) => a.label.localeCompare(b.label));
+    .sort((a, b) => a.label.localeCompare(b.label));
 
   return { repos, projects };
 }
@@ -116,42 +104,48 @@ type ListChildrenInput =
 export async function listPathChildren(
   input: ListChildrenInput
 ): Promise<PathListing> {
-  const db = await getDb();
-  const files = db.collection("files");
-
+  const db = getDb();
   const prefix = normalizePrefix(input.prefix);
-  const match: any = {};
-  let col = files as any;
-  if (input.kind === "repo") {
-    match.repoId = coerceId(input.id);
-    match.projectId = null;
-    col = db.collection("repos");
-  } else {
-    match.projectId = coerceId(input.id);
-    col = files;
-  }
 
-  // Fetch candidate files under the prefix (or all at root if empty)
-  // We need: documents where path === prefix (file at this path) or path startsWith `${prefix}/`
-  const or: any[] = [];
-  if (prefix) {
-    or.push({ path: prefix });
-    or.push({ path: { $regex: `^${escapeRegex(prefix + "/")}` } });
-  } else {
-    // At root: any path without a slash is a file at root; any with a slash contributes dirs
-    or.push({});
-  }
-
-  const cursor = col.find({ ...match, ...(or.length ? { $or: or } : {}) }, {
-    projection: { path: 1, extension: 1, language: 1, size: 1, isDir: 1 },
-  });
-  const docs = (await cursor.toArray()) as unknown as Array<{
+  let docs: Array<{
     path: string;
     extension?: string;
     language?: string;
     size?: number;
-    isDir?: boolean;
+    is_dir?: number;
   }>;
+
+  if (input.kind === "repo") {
+    // Query repos table
+    if (prefix) {
+      docs = db.prepare(`
+        SELECT path, extension, language, size, is_dir
+        FROM repos
+        WHERE repo_id = ? AND (path = ? OR path LIKE ?)
+      `).all(input.id, prefix, `${prefix}/%`) as typeof docs;
+    } else {
+      docs = db.prepare(`
+        SELECT path, extension, language, size, is_dir
+        FROM repos
+        WHERE repo_id = ?
+      `).all(input.id) as typeof docs;
+    }
+  } else {
+    // Query files table
+    if (prefix) {
+      docs = db.prepare(`
+        SELECT path, extension, language, size, is_dir
+        FROM files
+        WHERE project_id = ? AND (path = ? OR path LIKE ?)
+      `).all(input.id, prefix, `${prefix}/%`) as typeof docs;
+    } else {
+      docs = db.prepare(`
+        SELECT path, extension, language, size, is_dir
+        FROM files
+        WHERE project_id = ?
+      `).all(input.id) as typeof docs;
+    }
+  }
 
   // Build immediate children at this level
   const dirSet = new Set<string>();
@@ -165,7 +159,7 @@ export async function listPathChildren(
     if (parts.length === 0) continue;
 
     const immediate = parts.length === 1;
-    if (doc.isDir) {
+    if (doc.is_dir) {
       // Explicit folder marker: always contributes a directory at this level
       dirSet.add(parts[0]);
       continue;
@@ -187,13 +181,8 @@ export async function listPathChildren(
 
   return {
     prefix,
-    dirs: Array.from(dirSet).sort((a: string, b: string) => a.localeCompare(b)),
-    files: filesOut.sort(
-      (
-        a: PathListing["files"][number],
-        b: PathListing["files"][number]
-      ) => a.name.localeCompare(b.name)
-    ),
+    dirs: Array.from(dirSet).sort((a, b) => a.localeCompare(b)),
+    files: filesOut.sort((a, b) => a.name.localeCompare(b.name)),
   };
 }
 
@@ -208,30 +197,42 @@ export async function getFileAtPath(input: {
   })
   | null
 > {
-  const db = await getDb();
-  const files = db.collection("files");
-  const reposCol = db.collection("repos");
-  const match: any = { path: input.path };
-  let col = files as any;
+  const db = getDb();
+
+  let doc: {
+    path: string;
+    extension?: string;
+    language?: string;
+    size?: number;
+    source_code?: string;
+    is_dir?: number;
+  } | undefined;
+
   if (input.kind === "repo") {
-    match.repoId = coerceId(input.id);
-    match.projectId = null;
-    col = reposCol;
+    doc = db.prepare(`
+      SELECT path, extension, language, size, source_code, is_dir
+      FROM repos
+      WHERE repo_id = ? AND path = ?
+    `).get(input.id, input.path) as typeof doc;
   } else {
-    match.projectId = coerceId(input.id);
-    col = files;
+    doc = db.prepare(`
+      SELECT path, extension, language, size, source_code, is_dir
+      FROM files
+      WHERE project_id = ? AND path = ?
+    `).get(input.id, input.path) as typeof doc;
   }
-  const doc = (await col.findOne(match)) as any;
+
   if (!doc) return null;
-  if ((doc as any).isDir) return null; // Do not treat folders as files
+  if (doc.is_dir) return null; // Do not treat folders as files
+
   const segments = doc.path.split("/");
   return {
     name: segments[segments.length - 1],
-    path: doc.path as string,
-    extension: doc.extension as string | undefined,
-    language: doc.language as string | undefined,
-    size: doc.size as number | undefined,
-    sourceCode: doc.sourceCode as string,
+    path: doc.path,
+    extension: doc.extension,
+    language: doc.language,
+    size: doc.size,
+    sourceCode: doc.source_code || "",
   };
 }
 
@@ -242,14 +243,4 @@ function normalizePrefix(prefix?: string): string {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function coerceId(id: string): any {
-  // Try to coerce stringified ObjectIds to real ObjectIds for proper matching
-  try {
-    // Accept 24-hex string or already an ObjectId-like value
-    return new ObjectId(id);
-  } catch {
-    return (id as unknown) as any;
-  }
 }

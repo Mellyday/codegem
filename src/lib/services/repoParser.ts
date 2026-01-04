@@ -1,7 +1,8 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { ObjectId, type Db } from "mongodb";
+import { getDb, generateId, toDbDate, toJson } from "../sqlite";
 import { parseWithTreeSitter, canParseWithTreeSitter, type TreeSitterAstNode } from "../parser/treeSitterServer";
+import type Database from "better-sqlite3";
 
 export type RepoProgress = {
   totalFiles: number;
@@ -35,10 +36,10 @@ function relativePath(root: string, filePath: string): string {
 }
 
 export async function parseAndPersistRepo(
-  db: Db,
+  db: Database.Database,
   params: {
     userId: string;
-    repoId: ObjectId;
+    repoId: string;
     url: string;
     owner: string;
     name: string;
@@ -46,9 +47,6 @@ export async function parseAndPersistRepo(
   }
 ): Promise<RepoProgress> {
   const { userId, repoId, url, owner, name, rootDir } = params;
-  // Per requirement: for GitHub auto-fetching flows, AST documents should be
-  // stored in the "repos" collection exclusively, not in "files".
-  const targetCol = db.collection("repos");
   const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0 };
 
   // First pass: count parseable files
@@ -59,52 +57,70 @@ export async function parseAndPersistRepo(
   }
   progress.totalFiles = allPaths.length;
 
+  const insertStmt = db.prepare(`
+    INSERT INTO repos (
+      id, user_id, repo_id, project_id, url, owner, name, path,
+      language, extension, source_code, ast, parse_status, parse_error,
+      size, created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?
+    )
+  `);
+
   for (const absPath of allPaths) {
     const ext = fileExtension(absPath);
     const relPath = relativePath(rootDir, absPath);
+    const now = toDbDate(new Date());
+
     try {
       const sourceCode = await fs.readFile(absPath, "utf8");
       const parsed = await parseWithTreeSitter(sourceCode, ext);
-      const now = new Date();
-      await targetCol.insertOne({
+
+      insertStmt.run(
+        generateId(),
         userId,
         repoId,
-        projectId: null,
+        null, // projectId
         url,
         owner,
         name,
-        path: relPath,
-        language: parsed.languageId,
-        extension: ext,
+        relPath,
+        parsed.languageId,
+        ext,
         sourceCode,
-        ast: parsed.ast as TreeSitterAstNode,
-        parseStatus: "success",
-        size: Buffer.byteLength(sourceCode, "utf8"),
-        createdAt: now,
-        updatedAt: now,
-      });
+        toJson(parsed.ast as TreeSitterAstNode),
+        "success",
+        null,
+        Buffer.byteLength(sourceCode, "utf8"),
+        now,
+        now
+      );
       progress.parsedFiles += 1;
     } catch (err) {
       progress.failedFiles += 1;
       const sourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
-      await targetCol.insertOne({
+
+      insertStmt.run(
+        generateId(),
         userId,
         repoId,
-        projectId: null,
+        null, // projectId
         url,
         owner,
         name,
-        path: relPath,
-        language: "unknown",
-        extension: ext,
-        sourceCode, // Store source code for retry
-        ast: null,
-        parseStatus: "failed",
-        parseError: String(err),
-        size: Buffer.byteLength(sourceCode, "utf8"),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as any);
+        relPath,
+        "unknown",
+        ext,
+        sourceCode,
+        null,
+        "failed",
+        String(err),
+        Buffer.byteLength(sourceCode, "utf8"),
+        now,
+        now
+      );
     }
   }
 
@@ -122,7 +138,7 @@ export type ProgressEvent =
 
 type WithProgressParams = {
   userId: string;
-  repoId: ObjectId;
+  repoId: string;
   url: string;
   owner: string;
   name: string;
@@ -131,11 +147,10 @@ type WithProgressParams = {
 };
 
 export async function parseAndPersistRepoWithProgress(
-  db: Db,
+  db: Database.Database,
   params: WithProgressParams
 ): Promise<RepoProgress> {
   const { userId, repoId, url, owner, name, rootDir, onProgress } = params;
-  const targetCol = db.collection("repos");
   const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0 };
 
   // Collect all files and categorize them
@@ -171,11 +186,24 @@ export async function parseAndPersistRepoWithProgress(
 
   progress.totalFiles = parsableFiles.length;
 
+  const insertStmt = db.prepare(`
+    INSERT INTO repos (
+      id, user_id, repo_id, project_id, url, owner, name, path,
+      language, extension, source_code, ast, parse_status, parse_error,
+      size, created_at, updated_at
+    ) VALUES (
+      ?, ?, ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?
+    )
+  `);
+
   // Process parsable files
   for (let i = 0; i < parsableFiles.length; i++) {
     const relPath = parsableFiles[i];
     const absPath = path.join(rootDir, relPath);
     const ext = fileExtension(absPath);
+    const now = toDbDate(new Date());
 
     onProgress({
       type: 'processing',
@@ -187,47 +215,51 @@ export async function parseAndPersistRepoWithProgress(
     try {
       const sourceCode = await fs.readFile(absPath, "utf8");
       const parsed = await parseWithTreeSitter(sourceCode, ext);
-      const now = new Date();
-      await targetCol.insertOne({
+
+      insertStmt.run(
+        generateId(),
         userId,
         repoId,
-        projectId: null,
+        null, // projectId
         url,
         owner,
         name,
-        path: relPath,
-        language: parsed.languageId,
-        extension: ext,
+        relPath,
+        parsed.languageId,
+        ext,
         sourceCode,
-        ast: parsed.ast as TreeSitterAstNode,
-        parseStatus: "success",
-        size: Buffer.byteLength(sourceCode, "utf8"),
-        createdAt: now,
-        updatedAt: now,
-      });
+        toJson(parsed.ast as TreeSitterAstNode),
+        "success",
+        null,
+        Buffer.byteLength(sourceCode, "utf8"),
+        now,
+        now
+      );
       progress.parsedFiles += 1;
       onProgress({ type: 'parsed', file: relPath, success: true });
     } catch (err) {
       progress.failedFiles += 1;
       const failedSourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
-      await targetCol.insertOne({
+
+      insertStmt.run(
+        generateId(),
         userId,
         repoId,
-        projectId: null,
+        null, // projectId
         url,
         owner,
         name,
-        path: relPath,
-        language: "unknown",
-        extension: ext,
-        sourceCode: failedSourceCode, // Store source code for retry
-        ast: null,
-        parseStatus: "failed",
-        parseError: String(err),
-        size: Buffer.byteLength(failedSourceCode, "utf8"),
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      } as any);
+        relPath,
+        "unknown",
+        ext,
+        failedSourceCode,
+        null,
+        "failed",
+        String(err),
+        Buffer.byteLength(failedSourceCode, "utf8"),
+        now,
+        now
+      );
       onProgress({ type: 'parsed', file: relPath, success: false, error: String(err) });
     }
   }

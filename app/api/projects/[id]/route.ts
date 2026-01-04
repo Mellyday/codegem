@@ -1,40 +1,41 @@
 export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "../../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb } from "../../../../src/lib/sqlite";
 
 export async function GET(
     _req: Request,
     context: { params: Promise<{ id: string }> }
 ) {
     try {
-        const db = await getDb();
-        const files = db.collection("files");
+        const db = getDb();
         const { id } = await context.params;
-        const _id = safeObjectId(id);
 
-        const agg = await files
-            .aggregate([
-                { $match: { projectId: _id } as any },
-                {
-                    $group: {
-                        _id: "$projectId",
-                        createdAt: { $min: "$createdAt" },
-                        updatedAt: { $max: "$updatedAt" },
-                        totalFiles: { $sum: 1 },
-                    },
-                },
-            ])
-            .toArray();
+        const row = db.prepare(`
+            SELECT 
+                project_id,
+                MIN(created_at) as created_at,
+                MAX(updated_at) as updated_at,
+                COUNT(*) as total_files
+            FROM files
+            WHERE project_id = ?
+            GROUP BY project_id
+        `).get(id) as {
+            project_id: string;
+            created_at: string;
+            updated_at: string;
+            total_files: number;
+        } | undefined;
 
-        if (!agg.length) return NextResponse.json({ error: "Not found" }, { status: 404 });
-        const g: any = agg[0];
+        if (!row) {
+            return NextResponse.json({ error: "Not found" }, { status: 404 });
+        }
+
         return NextResponse.json({
-            id: String(g._id),
-            totalFiles: g.totalFiles || 0,
-            createdAt: g.createdAt,
-            updatedAt: g.updatedAt,
+            id: String(row.project_id),
+            totalFiles: row.total_files || 0,
+            createdAt: row.created_at,
+            updatedAt: row.updated_at,
         });
     } catch (error) {
         return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -48,28 +49,23 @@ export async function DELETE(
     try {
         const { userId } = await auth();
         if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-        const db = await getDb();
-        const files = db.collection("files");
+        const db = getDb();
         const { id } = await context.params;
-        const _id = safeObjectId(id);
 
-        // Check if project exists (don't filter by userId since projects may have been
-        // created with "dev-push-project" or a different user ID)
-        const exists = await files.findOne({ projectId: _id } as any, { projection: { _id: 1 } });
-        if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
+        // Check if project exists
+        const exists = db.prepare(`
+            SELECT project_id FROM files WHERE project_id = ? LIMIT 1
+        `).get(id) as { project_id: string } | undefined;
 
-        // Delete all files for this project (auth check above ensures only logged-in users can delete)
-        await files.deleteMany({ projectId: _id } as any);
+        if (!exists) {
+            return NextResponse.json({ error: "Not found" }, { status: 404 });
+        }
+
+        // Delete all files for this project
+        db.prepare(`DELETE FROM files WHERE project_id = ?`).run(id);
+
         return NextResponse.json({ ok: true });
     } catch (error) {
         return NextResponse.json({ error: String(error) }, { status: 500 });
-    }
-}
-
-function safeObjectId(id: string) {
-    try {
-        return new ObjectId(id);
-    } catch {
-        return id as any;
     }
 }

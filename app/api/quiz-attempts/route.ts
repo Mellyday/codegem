@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb } from "../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb, generateId, toDbDate } from "../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 type MedalType = "bronze" | "silver" | "gold" | null;
@@ -50,12 +49,8 @@ function calculateStars(
     const allAttemptsSorted = [...attempts].sort(
         (a, b) => a.attemptedAt.getTime() - b.attemptedAt.getTime()
     );
-    const relevantSorted = [...relevantAttempts].sort(
-        (a, b) => a.attemptedAt.getTime() - b.attemptedAt.getTime()
-    );
 
-    // Get first medal-earning attempt and last attempt of any kind
-    const firstMedalAttempt = relevantSorted[0];
+    // Get last attempt of any kind
     const lastAttempt = allAttemptsSorted[allAttemptsSorted.length - 1];
     const now = new Date();
 
@@ -181,38 +176,60 @@ export async function POST(request: Request) {
         const score = totalQuestions > 0 ? (correctAnswers / totalQuestions) * 100 : 0;
         const medalEarned = calculateMedal(score);
 
-        const db = await getDb();
-        const attempts = db.collection("quiz_attempts");
+        const db = getDb();
+        const now = toDbDate(new Date());
 
-        const now = new Date();
-        const attemptDoc: QuizAttempt = {
-            userId: clerkUserId,
-            quizId: String(quizId),
+        db.prepare(`
+            INSERT INTO quiz_attempts (
+                id, user_id, quiz_id, section_index, attempted_at,
+                total_questions, correct_answers, score, medal_earned, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            generateId(),
+            clerkUserId,
+            String(quizId),
             sectionIndex,
-            attemptedAt: now,
+            now,
             totalQuestions,
             correctAnswers,
             score,
             medalEarned,
-            createdAt: now,
-        };
-
-        await attempts.insertOne(attemptDoc as any);
+            now
+        );
 
         // Fetch all attempts for this section to calculate stars
-        const allAttempts = await attempts
-            .find({
-                userId: clerkUserId,
-                quizId: String(quizId),
-                sectionIndex,
-            })
-            .sort({ attemptedAt: 1 })
-            .toArray();
+        const rows = db.prepare(`
+            SELECT user_id, quiz_id, section_index, attempted_at, total_questions,
+                   correct_answers, score, medal_earned, created_at
+            FROM quiz_attempts
+            WHERE user_id = ? AND quiz_id = ? AND section_index = ?
+            ORDER BY attempted_at ASC
+        `).all(clerkUserId, String(quizId), sectionIndex) as Array<{
+            user_id: string;
+            quiz_id: string;
+            section_index: number;
+            attempted_at: string;
+            total_questions: number;
+            correct_answers: number;
+            score: number;
+            medal_earned: string | null;
+            created_at: string;
+        }>;
 
         // Calculate medals and stars
         const medalRank = { bronze: 1, silver: 2, gold: 3 };
         const medalMap = new Map<string, { stars: 1 | 2 | 3 }>();
-        const attemptsList = allAttempts as unknown as QuizAttempt[];
+        const attemptsList: QuizAttempt[] = rows.map(r => ({
+            userId: r.user_id,
+            quizId: r.quiz_id,
+            sectionIndex: r.section_index,
+            attemptedAt: new Date(r.attempted_at),
+            totalQuestions: r.total_questions,
+            correctAnswers: r.correct_answers,
+            score: r.score,
+            medalEarned: r.medal_earned as MedalType,
+            createdAt: new Date(r.created_at),
+        }));
 
         for (const medalType of ["bronze", "silver", "gold"] as const) {
             const hasThisMedal = attemptsList.some(
@@ -253,19 +270,38 @@ export async function GET(request: Request) {
             return NextResponse.json({ error: "Missing quizId" }, { status: 400 });
         }
 
-        const db = await getDb();
-        const attempts = db.collection("quiz_attempts");
+        const db = getDb();
 
         // Fetch all attempts for this quiz
-        const allAttempts = await attempts
-            .find({
-                userId: clerkUserId,
-                quizId: String(quizId),
-            })
-            .sort({ attemptedAt: 1 })
-            .toArray();
+        const rows = db.prepare(`
+            SELECT user_id, quiz_id, section_index, attempted_at, total_questions,
+                   correct_answers, score, medal_earned, created_at
+            FROM quiz_attempts
+            WHERE user_id = ? AND quiz_id = ?
+            ORDER BY attempted_at ASC
+        `).all(clerkUserId, String(quizId)) as Array<{
+            user_id: string;
+            quiz_id: string;
+            section_index: number;
+            attempted_at: string;
+            total_questions: number;
+            correct_answers: number;
+            score: number;
+            medal_earned: string | null;
+            created_at: string;
+        }>;
 
-        const attemptsList = allAttempts as unknown as QuizAttempt[];
+        const attemptsList: QuizAttempt[] = rows.map(r => ({
+            userId: r.user_id,
+            quizId: r.quiz_id,
+            sectionIndex: r.section_index,
+            attemptedAt: new Date(r.attempted_at),
+            totalQuestions: r.total_questions,
+            correctAnswers: r.correct_answers,
+            score: r.score,
+            medalEarned: r.medal_earned as MedalType,
+            createdAt: new Date(r.created_at),
+        }));
 
         // Group by section
         const bySectionIndex = new Map<number, QuizAttempt[]>();

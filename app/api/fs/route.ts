@@ -1,8 +1,7 @@
 export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
-import { getDb } from "@/src/lib/mongodb";
+import { getDb, generateId, toDbDate } from "@/src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
-import { ObjectId } from "mongodb";
 
 type FsAction =
   | {
@@ -46,14 +45,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
 
-    // Session is already validated by Clerk via auth(); no extra lookup needed
-
     if (!body || (body.action !== "create_folder" && body.action !== "create_snippet" && body.action !== "delete")) {
       return NextResponse.json({ error: "Invalid action" }, { status: 400 });
     }
 
-    const db = await getDb();
-    const files = db.collection("files");
+    const db = getDb();
 
     // Basic validation
     const { kind, id } = body as any;
@@ -68,32 +64,39 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "Folder name cannot contain '/'" }, { status: 400 });
       }
       const path = joinPath(body.prefix, name);
-      const match: any = { userId, path };
+
+      // Check if path already exists
+      let existing: { id: string } | undefined;
       if (body.kind === "repo") {
-        match.repoId = body.id as any;
-        match.projectId = null;
+        existing = db.prepare(`
+          SELECT id FROM files WHERE user_id = ? AND path = ? AND repo_id = ? AND project_id IS NULL LIMIT 1
+        `).get(userId, path, body.id) as typeof existing;
       } else {
-        match.projectId = body.id as any;
+        existing = db.prepare(`
+          SELECT id FROM files WHERE user_id = ? AND path = ? AND project_id = ? LIMIT 1
+        `).get(userId, path, body.id) as typeof existing;
       }
-      const existing = await files.findOne(match, { projection: { _id: 1 } });
+
       if (existing) {
         return NextResponse.json({ error: "Path already exists" }, { status: 409 });
       }
-      const now = new Date();
-      const doc: any = {
+
+      const now = toDbDate(new Date());
+      const newId = generateId();
+
+      db.prepare(`
+        INSERT INTO files (id, user_id, path, is_dir, repo_id, project_id, created_at)
+        VALUES (?, ?, ?, 1, ?, ?, ?)
+      `).run(
+        newId,
         userId,
         path,
-        isDir: true,
-        createdAt: now,
-      };
-      if (body.kind === "repo") {
-        doc.repoId = body.id as any;
-        doc.projectId = null;
-      } else {
-        doc.projectId = body.id as any;
-      }
-      const res = await files.insertOne(doc);
-      return NextResponse.json({ ok: true, id: String(res.insertedId) });
+        body.kind === "repo" ? body.id : null,
+        body.kind === "project" ? body.id : null,
+        now
+      );
+
+      return NextResponse.json({ ok: true, id: newId });
     }
 
     if (body.action === "create_snippet") {
@@ -103,78 +106,78 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: "File name cannot end with '/'" }, { status: 400 });
       }
       const path = joinPath(body.prefix, name);
-      const match: any = { userId, path };
+
+      // Check if path already exists
+      let existing: { id: string } | undefined;
       if (body.kind === "repo") {
-        match.repoId = body.id as any;
-        match.projectId = null;
+        existing = db.prepare(`
+          SELECT id FROM files WHERE user_id = ? AND path = ? AND repo_id = ? AND project_id IS NULL LIMIT 1
+        `).get(userId, path, body.id) as typeof existing;
       } else {
-        match.projectId = body.id as any;
+        existing = db.prepare(`
+          SELECT id FROM files WHERE user_id = ? AND path = ? AND project_id = ? LIMIT 1
+        `).get(userId, path, body.id) as typeof existing;
       }
-      const existing = await files.findOne(match, { projection: { _id: 1, isDir: 1 } });
+
       if (existing) {
         return NextResponse.json({ error: "Path already exists" }, { status: 409 });
       }
-      const now = new Date();
+
+      const now = toDbDate(new Date());
       const extension = name.includes(".") ? name.split(".").pop() : undefined;
-      const doc: any = {
+      const newId = generateId();
+
+      db.prepare(`
+        INSERT INTO files (id, user_id, path, extension, language, size, source_code, repo_id, project_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        newId,
         userId,
         path,
         extension,
-        language: (body as any).language,
-        size: (body.sourceCode ?? "").length,
-        sourceCode: body.sourceCode ?? "",
-        createdAt: now,
-      };
-      if (body.kind === "repo") {
-        doc.repoId = body.id as any;
-        doc.projectId = null;
-      } else {
-        doc.projectId = body.id as any;
-      }
-      const res = await files.insertOne(doc);
-      return NextResponse.json({ ok: true, id: String(res.insertedId) });
+        (body as any).language,
+        (body.sourceCode ?? "").length,
+        body.sourceCode ?? "",
+        body.kind === "repo" ? body.id : null,
+        body.kind === "project" ? body.id : null,
+        now
+      );
+
+      return NextResponse.json({ ok: true, id: newId });
     }
 
     if (body.action === "delete") {
       const path = body.path?.trim();
       if (!path) return NextResponse.json({ error: "Missing path" }, { status: 400 });
 
-      const match: any = { path };
-      // Coerce ID to ObjectId for proper matching with dev-pushed files
-      let idAsObject: any = body.id;
-      try {
-        idAsObject = new ObjectId(String(body.id));
-      } catch {
-        // Keep as string if not a valid ObjectId
-      }
-      if (body.kind === "repo") {
-        match.repoId = idAsObject;
-        match.projectId = null;
-      } else {
-        match.projectId = idAsObject;
-      }
-
       let deletedCount = 0;
 
       if (body.isDir) {
         // Delete the folder marker and all files under this path prefix
-        const folderMatch: any = {
-          $or: [
-            { ...match }, // The folder itself
-            {
-              ...(body.kind === "repo"
-                ? { repoId: idAsObject, projectId: null }
-                : { projectId: idAsObject }),
-              path: { $regex: `^${path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/` }
-            }
-          ]
-        };
-        const res = await files.deleteMany(folderMatch);
-        deletedCount = res.deletedCount ?? 0;
+        if (body.kind === "repo") {
+          const result = db.prepare(`
+            DELETE FROM files WHERE repo_id = ? AND project_id IS NULL AND (path = ? OR path LIKE ?)
+          `).run(body.id, path, `${path}/%`);
+          deletedCount = result.changes;
+        } else {
+          const result = db.prepare(`
+            DELETE FROM files WHERE project_id = ? AND (path = ? OR path LIKE ?)
+          `).run(body.id, path, `${path}/%`);
+          deletedCount = result.changes;
+        }
       } else {
         // Delete single file
-        const res = await files.deleteOne(match);
-        deletedCount = res.deletedCount ?? 0;
+        if (body.kind === "repo") {
+          const result = db.prepare(`
+            DELETE FROM files WHERE repo_id = ? AND project_id IS NULL AND path = ?
+          `).run(body.id, path);
+          deletedCount = result.changes;
+        } else {
+          const result = db.prepare(`
+            DELETE FROM files WHERE project_id = ? AND path = ?
+          `).run(body.id, path);
+          deletedCount = result.changes;
+        }
       }
 
       if (deletedCount === 0) {

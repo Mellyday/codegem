@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb } from "../../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb, toJson, fromJson } from "../../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 export async function PATCH(
@@ -17,40 +16,35 @@ export async function PATCH(
             return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
         }
 
-        const db = await getDb();
-        const quizzes = db.collection("quizzes");
+        const db = getDb();
 
-        const _id = (() => {
-            try {
-                return new ObjectId(id);
-            } catch {
-                return id as any;
-            }
-        })();
-
-        // Build update object conditionally
-        const updateDoc: any = {};
+        // Build update SET clauses dynamically
+        const updates: string[] = [];
+        const values: any[] = [];
 
         if (Array.isArray(body.sectionMarkers)) {
             // Validate and sort section markers
             const markers = body.sectionMarkers
                 .filter((m: any) => typeof m === "number" && m >= 0)
                 .sort((a: number, b: number) => a - b);
-            updateDoc.sectionMarkers = markers;
+            updates.push("section_markers = ?");
+            values.push(toJson(markers));
         }
 
         if (Array.isArray(body.sectionNames)) {
-            updateDoc.sectionNames = body.sectionNames;
+            updates.push("section_names = ?");
+            values.push(toJson(body.sectionNames));
         }
 
         // If both are provided, validate they match in length
-        // N markers create N+1 sections: [0, marker1), [marker1, marker2), ..., [lastMarker, end)
-        // So we need N+1 section names for N markers
-        if (updateDoc.sectionMarkers && updateDoc.sectionNames) {
-            const expectedNames = updateDoc.sectionMarkers.length + 1;
-            if (updateDoc.sectionNames.length !== expectedNames) {
+        if (body.sectionMarkers && body.sectionNames) {
+            const markers = body.sectionMarkers
+                .filter((m: any) => typeof m === "number" && m >= 0)
+                .sort((a: number, b: number) => a - b);
+            const expectedNames = markers.length + 1;
+            if (body.sectionNames.length !== expectedNames) {
                 return NextResponse.json(
-                    { error: `Expected ${expectedNames} section names for ${updateDoc.sectionMarkers.length} markers, got ${updateDoc.sectionNames.length}` },
+                    { error: `Expected ${expectedNames} section names for ${markers.length} markers, got ${body.sectionNames.length}` },
                     { status: 400 }
                 );
             }
@@ -58,43 +52,40 @@ export async function PATCH(
 
         // Handle setting isCanonical
         if (typeof body.isCanonical === "boolean") {
-            updateDoc.isCanonical = body.isCanonical;
+            updates.push("is_canonical = ?");
+            values.push(body.isCanonical ? 1 : 0);
 
             // If setting as canonical, we need to unset on other quizzes for the same file
             if (body.isCanonical === true) {
                 // First, get this quiz's fileId to find sibling quizzes
-                const thisQuiz = await quizzes.findOne(
-                    { _id, userId: clerkUserId } as any,
-                    { projection: { fileId: 1 } }
-                );
+                const thisQuiz = db.prepare(`
+                    SELECT file_id FROM quizzes WHERE id = ? AND user_id = ?
+                `).get(id, clerkUserId) as { file_id: string } | undefined;
 
-                if (thisQuiz && thisQuiz.fileId) {
+                if (thisQuiz && thisQuiz.file_id) {
                     // Unset isCanonical on all other quizzes for this file
-                    await quizzes.updateMany(
-                        {
-                            userId: clerkUserId,
-                            fileId: thisQuiz.fileId,
-                            _id: { $ne: _id },
-                        } as any,
-                        { $set: { isCanonical: false } }
-                    );
+                    db.prepare(`
+                        UPDATE quizzes SET is_canonical = 0
+                        WHERE user_id = ? AND file_id = ? AND id != ?
+                    `).run(clerkUserId, thisQuiz.file_id, id);
                 }
             }
         }
 
-        if (Object.keys(updateDoc).length === 0) {
+        if (updates.length === 0) {
             return NextResponse.json(
                 { error: "No valid updates provided" },
                 { status: 400 }
             );
         }
 
-        const result = await quizzes.updateOne(
-            { _id, userId: clerkUserId } as any,
-            { $set: updateDoc }
-        );
+        values.push(id, clerkUserId);
+        const result = db.prepare(`
+            UPDATE quizzes SET ${updates.join(", ")}
+            WHERE id = ? AND user_id = ?
+        `).run(...values);
 
-        if (result.matchedCount === 0) {
+        if (result.changes === 0) {
             return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
         }
 

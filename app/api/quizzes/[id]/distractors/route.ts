@@ -1,8 +1,7 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "../../../../../src/lib/mongodb";
+import { getDb, toJson, fromJson } from "../../../../../src/lib/sqlite";
 import {
   generateDistractorsInBatches,
   LLM_DISTRACTOR_BATCH_SIZE,
@@ -32,8 +31,8 @@ type QuizCard = {
 };
 
 type QuizDoc = {
-  _id: ObjectId;
-  userId: string;
+  id: string;
+  user_id: string;
   cards: QuizCard[];
 };
 
@@ -54,23 +53,22 @@ export async function POST(
   if (!rawId) {
     return NextResponse.json({ error: "Missing quiz id" }, { status: 400 });
   }
-  let quizId: ObjectId;
-  try {
-    quizId = new ObjectId(String(rawId));
-  } catch {
-    return NextResponse.json({ error: "Invalid quiz id" }, { status: 400 });
-  }
+  const quizId = String(rawId);
 
-  const db = await getDb();
-  const quizzes = db.collection("quizzes");
-  const quiz = (await quizzes.findOne({
-    _id: quizId,
-    userId,
-  })) as QuizDoc | null;
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT id, user_id, cards FROM quizzes WHERE id = ? AND user_id = ?
+  `).get(quizId, userId) as { id: string; user_id: string; cards: string } | undefined;
 
-  if (!quiz) {
+  if (!row) {
     return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
   }
+
+  const quiz: QuizDoc = {
+    id: row.id,
+    user_id: row.user_id,
+    cards: fromJson<QuizCard[]>(row.cards) || [],
+  };
 
   const provider = (body?.provider ||
     process.env.LLM_DISTRACTOR_PROVIDER ||
@@ -148,7 +146,7 @@ export async function POST(
       existingDistractors: Array.isArray(card.llmDistractors)
         ? card.llmDistractors
         : undefined,
-      stableKey: `${String(quizId)}:${card.order ?? i}`,
+      stableKey: `${quizId}:${card.order ?? i}`,
     });
   }
 
@@ -221,6 +219,11 @@ export async function POST(
     });
   };
 
+  const saveCards = () => {
+    db.prepare(`UPDATE quizzes SET cards = ? WHERE id = ? AND user_id = ?`)
+      .run(toJson(quiz.cards), quizId, userId);
+  };
+
   if (wantsProgress) {
     const encoder = new TextEncoder();
     const stream = new ReadableStream({
@@ -245,10 +248,7 @@ export async function POST(
               : undefined
           );
           if (changed) {
-            await quizzes.updateOne(
-              { _id: quizId, userId },
-              { $set: { cards: quiz.cards } }
-            );
+            saveCards();
           }
           emit({
             type: "complete",
@@ -279,10 +279,7 @@ export async function POST(
   await runGeneration();
 
   if (changed) {
-    await quizzes.updateOne(
-      { _id: quizId, userId },
-      { $set: { cards: quiz.cards } }
-    );
+    saveCards();
   }
 
   return NextResponse.json({

@@ -1,10 +1,9 @@
 export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "../../../src/lib/mongodb";
+import { getDb, generateId, toDbDate } from "../../../src/lib/sqlite";
 import { cloneGithubRepo, parseGithubUrl } from "../../../src/lib/services/repoFetcher";
 import { parseAndPersistRepo } from "../../../src/lib/services/repoParser";
-import { ObjectId } from "mongodb";
 
 type PostBody = { url: string };
 
@@ -13,52 +12,57 @@ const DEV_USER_ID = "dev-push-project";
 export async function GET(req: Request) {
   try {
     const { userId } = await auth();
+    const db = getDb();
 
-    // Build user filter: show current user's repos + dev repos
-    // If not logged in, only show dev repos
-    const userFilter = userId
-      ? { userId: { $in: [userId, DEV_USER_ID] } }
-      : { userId: DEV_USER_ID };
+    // Get all repos grouped by repo_id
+    const rows = db.prepare(`
+      SELECT 
+        repo_id,
+        url,
+        name,
+        owner,
+        user_id,
+        MIN(created_at) as created_at,
+        MAX(updated_at) as updated_at,
+        COUNT(*) as total_files,
+        SUM(CASE WHEN parse_status = 'success' THEN 1 ELSE 0 END) as parsed_files,
+        SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) as failed_files
+      FROM repos
+      WHERE repo_id IS NOT NULL
+      GROUP BY repo_id
+    `).all() as Array<{
+      repo_id: string;
+      url: string;
+      name: string;
+      owner: string;
+      user_id: string;
+      created_at: string;
+      updated_at: string;
+      total_files: number;
+      parsed_files: number;
+      failed_files: number;
+    }>;
 
-    const db = await getDb();
-    const reposCol = db.collection("repos");
-    const pipeline = [
-      // Filter by user: show user's own repos + dev repos
-      { $match: { repoId: { $ne: null }, ...userFilter } },
-      {
-        $group: {
-          _id: "$repoId",
-          url: { $first: "$url" },
-          name: { $first: "$name" },
-          owner: { $first: "$owner" },
-          createdAt: { $min: "$createdAt" },
-          updatedAt: { $max: "$updatedAt" },
-          totalFiles: { $sum: 1 },
-          parsedFiles: {
-            $sum: { $cond: [{ $eq: ["$parseStatus", "success"] }, 1, 0] },
-          },
-          failedFiles: {
-            $sum: { $cond: [{ $eq: ["$parseStatus", "failed"] }, 1, 0] },
-          },
-        },
-      },
-      { $sort: { updatedAt: -1 } },
-    ];
-    const agg = await reposCol.aggregate(pipeline).toArray();
-    const list = agg.map((g: any) => ({
-      id: String(g._id),
+    // Filter by user: show current user's repos + dev repos
+    const filteredRows = rows.filter(r =>
+      r.user_id === DEV_USER_ID || (userId && r.user_id === userId)
+    );
+
+    const list = filteredRows.map((g) => ({
+      id: String(g.repo_id),
       url: g.url,
       name: g.name,
       owner: g.owner,
       status: "completed",
       progress: {
-        totalFiles: g.totalFiles || 0,
-        parsedFiles: g.parsedFiles || 0,
-        failedFiles: g.failedFiles || 0,
+        totalFiles: g.total_files || 0,
+        parsedFiles: g.parsed_files || 0,
+        failedFiles: g.failed_files || 0,
       },
-      createdAt: g.createdAt,
-      updatedAt: g.updatedAt,
+      createdAt: g.created_at,
+      updatedAt: g.updated_at,
     }));
+
     return NextResponse.json({ repos: list });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -74,14 +78,14 @@ export async function POST(req: Request) {
     const body = (await req.json()) as PostBody;
     if (!body?.url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
 
-    const db = await getDb();
+    const db = getDb();
     const { owner, name } = parseGithubUrl(body.url);
 
     let clonedDir: string | undefined;
     try {
       const cloned = await cloneGithubRepo(body.url);
       clonedDir = cloned.dir;
-      const repoId = new ObjectId();
+      const repoId = generateId();
       const progress = await parseAndPersistRepo(db, {
         userId: effectiveUserId as string,
         repoId,

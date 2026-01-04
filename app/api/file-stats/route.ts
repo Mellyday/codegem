@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb } from "../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb, fromJson } from "../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 type MedalType = "bronze" | "silver" | "gold" | null;
@@ -40,14 +39,6 @@ function calculateStars(
     }
 
     return currentStars;
-}
-
-function coerceId(id: string): any {
-    try {
-        return new ObjectId(id);
-    } catch {
-        return id as any;
-    }
 }
 
 type FileStats = {
@@ -89,99 +80,102 @@ export async function GET(request: Request) {
             );
         }
 
-        const db = await getDb();
-        const quizzes = db.collection("quizzes");
-        const attempts = db.collection("quiz_attempts");
-        const filesCol = db.collection("files");
-        const reposCol = db.collection("repos");
+        const db = getDb();
 
-        const idAsObject = coerceId(id);
-
-        // Build match for files
-        const fileMatch: any = {};
-        let col = filesCol as any;
-        if (kind === "repo") {
-            fileMatch.repoId = idAsObject;
-            col = reposCol;
-        } else {
-            fileMatch.projectId = idAsObject;
-        }
-
-        // Fetch all files under this path (including subdirectories)
+        // Fetch all files under this path
         const pathPrefix = prefix ? `${prefix}/` : "";
-        const fileQuery = prefix
-            ? { ...fileMatch, path: { $regex: `^${pathPrefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}` } }
-            : fileMatch;
+        let allFiles: Array<{ id: string; path: string }>;
 
-        // Also include files at the exact prefix level
-        const or: any[] = [fileQuery];
-        if (!prefix) {
-            // At root, get all files
+        if (kind === "repo") {
+            if (prefix) {
+                allFiles = db.prepare(`
+                    SELECT id, path FROM repos WHERE repo_id = ? AND path LIKE ?
+                `).all(id, `${pathPrefix}%`) as typeof allFiles;
+            } else {
+                allFiles = db.prepare(`
+                    SELECT id, path FROM repos WHERE repo_id = ?
+                `).all(id) as typeof allFiles;
+            }
+        } else {
+            if (prefix) {
+                allFiles = db.prepare(`
+                    SELECT id, path FROM files WHERE project_id = ? AND path LIKE ?
+                `).all(id, `${pathPrefix}%`) as typeof allFiles;
+            } else {
+                allFiles = db.prepare(`
+                    SELECT id, path FROM files WHERE project_id = ?
+                `).all(id) as typeof allFiles;
+            }
         }
-
-        const allFiles = await col
-            .find(fileQuery, { projection: { _id: 1, path: 1 } })
-            .toArray();
 
         // Get file IDs
         const fileIdToPath = new Map<string, string>();
         for (const f of allFiles) {
-            fileIdToPath.set(String(f._id), f.path);
+            fileIdToPath.set(f.id, f.path);
         }
-        const fileIds = Array.from(fileIdToPath.keys()).map((id) => {
-            try {
-                return new ObjectId(id);
-            } catch {
-                return id;
-            }
-        });
+        const fileIds = Array.from(fileIdToPath.keys());
 
         if (fileIds.length === 0) {
             return NextResponse.json({ files: {}, folders: {} });
         }
 
         // Find all canonical quizzes for these files
-        const canonicalQuizzes = await quizzes
-            .find({
-                userId: clerkUserId,
-                fileId: { $in: fileIds },
-                isCanonical: true,
-            })
-            .toArray();
+        const placeholders = fileIds.map(() => '?').join(',');
+        const canonicalQuizzes = db.prepare(`
+            SELECT id, file_id, section_markers
+            FROM quizzes
+            WHERE user_id = ? AND file_id IN (${placeholders}) AND is_canonical = 1
+        `).all(clerkUserId, ...fileIds) as Array<{
+            id: string;
+            file_id: string;
+            section_markers: string | null;
+        }>;
 
         // Build fileId -> quiz mapping
-        const fileIdToQuiz = new Map<string, any>();
+        const fileIdToQuiz = new Map<string, { id: string; sectionMarkers: number[] }>();
         const quizIds: string[] = [];
         for (const quiz of canonicalQuizzes) {
-            const fid = String(quiz.fileId);
-            fileIdToQuiz.set(fid, quiz);
-            quizIds.push(String(quiz._id));
+            const fid = quiz.file_id;
+            fileIdToQuiz.set(fid, {
+                id: quiz.id,
+                sectionMarkers: fromJson<number[]>(quiz.section_markers) || [],
+            });
+            quizIds.push(quiz.id);
         }
 
         // Fetch all attempts for these quizzes
-        const allAttempts = await attempts
-            .find({
-                userId: clerkUserId,
-                quizId: { $in: quizIds },
-            })
-            .toArray();
+        let allAttempts: Array<{
+            quiz_id: string;
+            section_index: number;
+            attempted_at: string;
+            medal_earned: string | null;
+        }> = [];
+
+        if (quizIds.length > 0) {
+            const quizPlaceholders = quizIds.map(() => '?').join(',');
+            allAttempts = db.prepare(`
+                SELECT quiz_id, section_index, attempted_at, medal_earned
+                FROM quiz_attempts
+                WHERE user_id = ? AND quiz_id IN (${quizPlaceholders})
+            `).all(clerkUserId, ...quizIds) as typeof allAttempts;
+        }
 
         // Group attempts by quizId and sectionIndex
         type AttemptInfo = { attemptedAt: Date; medalEarned: MedalType };
         const attemptsByQuizSection = new Map<string, Map<number, AttemptInfo[]>>();
         for (const a of allAttempts) {
-            const qid = String(a.quizId);
+            const qid = a.quiz_id;
             if (!attemptsByQuizSection.has(qid)) {
                 attemptsByQuizSection.set(qid, new Map());
             }
             const sectionMap = attemptsByQuizSection.get(qid)!;
-            const sectionIndex = a.sectionIndex ?? 0;
+            const sectionIndex = a.section_index ?? 0;
             if (!sectionMap.has(sectionIndex)) {
                 sectionMap.set(sectionIndex, []);
             }
             sectionMap.get(sectionIndex)!.push({
-                attemptedAt: new Date(a.attemptedAt),
-                medalEarned: a.medalEarned as MedalType,
+                attemptedAt: new Date(a.attempted_at),
+                medalEarned: a.medal_earned as MedalType,
             });
         }
 
@@ -215,7 +209,7 @@ export async function GET(request: Request) {
             const sectionCount = sectionMarkers.length > 0 ? sectionMarkers.length + 1 : 1;
 
             // Get attempts for this quiz
-            const quizId = String(quiz._id);
+            const quizId = quiz.id;
             const sectionAttempts = attemptsByQuizSection.get(quizId) || new Map();
 
             // Calculate medal stats

@@ -2,10 +2,9 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "@/src/lib/mongodb";
+import { getDb, generateId } from "@/src/lib/sqlite";
 import { cloneGithubRepo, parseGithubUrl } from "@/src/lib/services/repoFetcher";
 import { parseAndPersistRepoWithProgress } from "@/src/lib/services/repoParser";
-import { ObjectId } from "mongodb";
 
 export type StreamEvent =
     | { type: 'start'; owner: string; name: string; url: string }
@@ -80,8 +79,8 @@ export async function POST(req: Request) {
                 const cloned = await cloneGithubRepo(body.url);
 
                 // Get database
-                const db = await getDb();
-                const repoId = new ObjectId();
+                const db = getDb();
+                const repoId = generateId();
 
                 // Parse with progress callback
                 const progress = await parseAndPersistRepoWithProgress(db, {

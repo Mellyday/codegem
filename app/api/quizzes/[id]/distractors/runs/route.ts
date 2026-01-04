@@ -1,8 +1,7 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { ObjectId } from "mongodb";
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "@/src/lib/mongodb";
+import { getDb, generateId, toDbDate, toJson, fromJson } from "@/src/lib/sqlite";
 import {
   generateDistractorsInBatches,
   LLM_DISTRACTOR_BATCH_SIZE,
@@ -35,31 +34,31 @@ type QuizCard = {
 };
 
 type QuizDoc = {
-  _id: ObjectId;
-  userId: string;
+  id: string;
+  user_id: string;
   cards: QuizCard[];
 };
 
 type RunDoc = {
-  _id: ObjectId;
-  userId: string;
-  quizId: ObjectId;
+  id: string;
+  user_id: string;
+  quiz_id: string;
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   total: number;
   completed: number;
   failed: number;
-  updatedCards: number[];
+  updated_cards: number[];
   failures: Array<{ order: number; error: string }>;
   skipped: number;
   provider: string;
   model: string;
-  batchSize: number;
-  missingOnly: boolean;
-  errorMessage?: string;
-  createdAt: Date;
-  updatedAt: Date;
-  startedAt?: Date;
-  completedAt?: Date;
+  batch_size: number;
+  missing_only: boolean;
+  error_message?: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  completed_at?: string;
 };
 
 const toNumber = (value: unknown, fallback = 0) => {
@@ -68,19 +67,19 @@ const toNumber = (value: unknown, fallback = 0) => {
 };
 
 const serializeRun = (run: RunDoc) => ({
-  runId: String(run._id),
-  quizId: String(run.quizId),
+  runId: run.id,
+  quizId: run.quiz_id,
   status: run.status,
   total: toNumber(run.total),
   completed: toNumber(run.completed),
   failed: toNumber(run.failed),
-  updatedCards: run.updatedCards,
+  updatedCards: run.updated_cards,
   failures: run.failures,
   skipped: toNumber(run.skipped),
   provider: run.provider,
   model: run.model,
-  batchSize: toNumber(run.batchSize),
-  errorMessage: run.errorMessage,
+  batchSize: toNumber(run.batch_size),
+  errorMessage: run.error_message,
 });
 
 export async function POST(
@@ -100,24 +99,22 @@ export async function POST(
   if (!rawId) {
     return NextResponse.json({ error: "Missing quiz id" }, { status: 400 });
   }
-  let quizId: ObjectId;
-  try {
-    quizId = new ObjectId(String(rawId));
-  } catch {
-    return NextResponse.json({ error: "Invalid quiz id" }, { status: 400 });
-  }
+  const quizId = String(rawId);
 
-  const db = await getDb();
-  const quizzes = db.collection("quizzes");
-  const runs = db.collection<RunDoc>("distractorRuns");
-  const quiz = (await quizzes.findOne({
-    _id: quizId,
-    userId,
-  })) as QuizDoc | null;
+  const db = getDb();
+  const row = db.prepare(`
+    SELECT id, user_id, cards FROM quizzes WHERE id = ? AND user_id = ?
+  `).get(quizId, userId) as { id: string; user_id: string; cards: string } | undefined;
 
-  if (!quiz) {
+  if (!row) {
     return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
   }
+
+  const quiz: QuizDoc = {
+    id: row.id,
+    user_id: row.user_id,
+    cards: fromJson<QuizCard[]>(row.cards) || [],
+  };
 
   const provider = (body?.provider ||
     process.env.LLM_DISTRACTOR_PROVIDER ||
@@ -192,54 +189,80 @@ export async function POST(
       existingDistractors: Array.isArray(card.llmDistractors)
         ? card.llmDistractors
         : undefined,
-      stableKey: `${String(quizId)}:${card.order ?? i}`,
+      stableKey: `${quizId}:${card.order ?? i}`,
     });
   }
 
   const precheckFailures = failures.length;
   const totalToGenerate = generationQueue.length;
   const totalCards = totalToGenerate + precheckFailures;
-  const now = new Date();
+  const now = toDbDate(new Date());
   const initialStatus: RunDoc["status"] =
     totalToGenerate > 0
       ? "queued"
       : precheckFailures > 0
         ? "failed"
         : "completed";
+
+  const runId = generateId();
   const runDoc: RunDoc = {
-    _id: new ObjectId(),
-    userId,
-    quizId,
+    id: runId,
+    user_id: userId,
+    quiz_id: quizId,
     status: initialStatus,
     total: totalCards,
     completed: precheckFailures,
     failed: precheckFailures,
-    updatedCards: [],
+    updated_cards: [],
     failures,
     skipped: skippedCount,
     provider,
     model,
-    batchSize: LLM_DISTRACTOR_BATCH_SIZE,
-    missingOnly,
-    ...(initialStatus === "failed" ? { errorMessage: failures[0]?.error } : {}),
-    createdAt: now,
-    updatedAt: now,
-    ...(totalToGenerate ? {} : { completedAt: now }),
+    batch_size: LLM_DISTRACTOR_BATCH_SIZE,
+    missing_only: missingOnly,
+    ...(initialStatus === "failed" ? { error_message: failures[0]?.error } : {}),
+    created_at: now,
+    updated_at: now,
+    ...(totalToGenerate ? {} : { completed_at: now }),
   };
 
-  await runs.insertOne(runDoc);
+  db.prepare(`
+    INSERT INTO distractor_runs (
+      id, user_id, quiz_id, status, total, completed, failed,
+      updated_cards, failures, skipped, provider, model, batch_size,
+      missing_only, error_message, created_at, updated_at, completed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    runDoc.id,
+    runDoc.user_id,
+    runDoc.quiz_id,
+    runDoc.status,
+    runDoc.total,
+    runDoc.completed,
+    runDoc.failed,
+    toJson(runDoc.updated_cards),
+    toJson(runDoc.failures),
+    runDoc.skipped,
+    runDoc.provider,
+    runDoc.model,
+    runDoc.batch_size,
+    runDoc.missing_only ? 1 : 0,
+    runDoc.error_message || null,
+    runDoc.created_at,
+    runDoc.updated_at,
+    runDoc.completed_at || null
+  );
 
   if (totalToGenerate) {
-    const runId = String(runDoc._id);
     const controller = new AbortController();
     registerRunController(runId, controller);
 
     void (async () => {
       try {
-        await runs.updateOne(
-          { _id: runDoc._id, userId },
-          { $set: { status: "running", startedAt: new Date(), updatedAt: new Date() } }
-        );
+        db.prepare(`
+          UPDATE distractor_runs SET status = 'running', started_at = ?, updated_at = ?
+          WHERE id = ? AND user_id = ?
+        `).run(toDbDate(new Date()), toDbDate(new Date()), runId, userId);
 
         const results = await generateDistractorsInBatches(
           generationQueue.map((item) => ({
@@ -261,16 +284,16 @@ export async function POST(
             sharedCodeContext: fullCode,
             signal: controller.signal,
             onProgress: async (progress) => {
-              await runs.updateOne(
-                { _id: runDoc._id, userId },
-                {
-                  $set: {
-                    total: progress.total + precheckFailures,
-                    completed: progress.completed + precheckFailures,
-                    failed: progress.failed + precheckFailures,
-                    updatedAt: new Date(),
-                  },
-                }
+              db.prepare(`
+                UPDATE distractor_runs SET total = ?, completed = ?, failed = ?, updated_at = ?
+                WHERE id = ? AND user_id = ?
+              `).run(
+                progress.total + precheckFailures,
+                progress.completed + precheckFailures,
+                progress.failed + precheckFailures,
+                toDbDate(new Date()),
+                runId,
+                userId
               );
             },
           }
@@ -309,25 +332,16 @@ export async function POST(
         });
 
         if (controller.signal.aborted) {
-          await runs.updateOne(
-            { _id: runDoc._id, userId },
-            {
-              $set: {
-                status: "cancelled",
-                errorMessage: "Cancelled by user.",
-                updatedAt: new Date(),
-                completedAt: new Date(),
-              },
-            }
-          );
+          db.prepare(`
+            UPDATE distractor_runs SET status = 'cancelled', error_message = ?, updated_at = ?, completed_at = ?
+            WHERE id = ? AND user_id = ?
+          `).run("Cancelled by user.", toDbDate(new Date()), toDbDate(new Date()), runId, userId);
           return;
         }
 
         if (changed) {
-          await quizzes.updateOne(
-            { _id: quizId, userId },
-            { $set: { cards: quiz.cards } }
-          );
+          db.prepare(`UPDATE quizzes SET cards = ? WHERE id = ? AND user_id = ?`)
+            .run(toJson(quiz.cards), quizId, userId);
         }
 
         const finalStatus =
@@ -337,20 +351,22 @@ export async function POST(
               ? "failed"
               : "completed";
 
-        await runs.updateOne(
-          { _id: runDoc._id, userId },
-          {
-            $set: {
-              status: finalStatus,
-              updatedCards,
-              failures,
-              completed: totalCards,
-              failed: failures.length,
-              errorMessage: finalStatus === "failed" ? failures[0]?.error : undefined,
-              updatedAt: new Date(),
-              completedAt: new Date(),
-            },
-          }
+        db.prepare(`
+          UPDATE distractor_runs 
+          SET status = ?, updated_cards = ?, failures = ?, completed = ?, failed = ?, 
+              error_message = ?, updated_at = ?, completed_at = ?
+          WHERE id = ? AND user_id = ?
+        `).run(
+          finalStatus,
+          toJson(updatedCards),
+          toJson(failures),
+          totalCards,
+          failures.length,
+          finalStatus === "failed" ? failures[0]?.error : null,
+          toDbDate(new Date()),
+          toDbDate(new Date()),
+          runId,
+          userId
         );
       } catch (err) {
         const isAbort =
@@ -358,16 +374,17 @@ export async function POST(
           (err instanceof Error && err.name === "AbortError");
         const errorMessage =
           err instanceof Error ? err.message : "Failed to generate distractors.";
-        await runs.updateOne(
-          { _id: runDoc._id, userId },
-          {
-            $set: {
-              status: isAbort ? "cancelled" : "failed",
-              errorMessage: isAbort ? "Cancelled by user." : errorMessage,
-              updatedAt: new Date(),
-              completedAt: new Date(),
-            },
-          }
+
+        db.prepare(`
+          UPDATE distractor_runs SET status = ?, error_message = ?, updated_at = ?, completed_at = ?
+          WHERE id = ? AND user_id = ?
+        `).run(
+          isAbort ? "cancelled" : "failed",
+          isAbort ? "Cancelled by user." : errorMessage,
+          toDbDate(new Date()),
+          toDbDate(new Date()),
+          runId,
+          userId
         );
       } finally {
         clearRunController(runId);

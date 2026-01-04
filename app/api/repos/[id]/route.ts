@@ -1,8 +1,7 @@
 export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getDb } from "../../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb } from "../../../../src/lib/sqlite";
 
 const DEV_USER_ID = "dev-push-project";
 
@@ -12,52 +11,59 @@ export async function GET(
 ) {
   try {
     const { userId } = await auth();
-
-    // Build user filter: allow access to own repos + dev repos
-    const userFilter = userId
-      ? { userId: { $in: [userId, DEV_USER_ID] } }
-      : { userId: DEV_USER_ID };
-
-    const db = await getDb();
-    const repos = db.collection("repos");
+    const db = getDb();
     const { id } = await context.params;
-    const _id = safeObjectId(id);
 
-    const agg = await repos
-      .aggregate([
-        // Filter by user: only show user's own repos + dev repos
-        { $match: { repoId: _id, ...userFilter } as any },
-        {
-          $group: {
-            _id: "$repoId",
-            url: { $first: "$url" },
-            name: { $first: "$name" },
-            owner: { $first: "$owner" },
-            createdAt: { $min: "$createdAt" },
-            updatedAt: { $max: "$updatedAt" },
-            totalFiles: { $sum: 1 },
-            parsedFiles: { $sum: { $cond: [{ $eq: ["$parseStatus", "success"] }, 1, 0] } },
-            failedFiles: { $sum: { $cond: [{ $eq: ["$parseStatus", "failed"] }, 1, 0] } },
-          },
-        },
-      ])
-      .toArray();
+    const row = db.prepare(`
+      SELECT 
+        repo_id,
+        url,
+        name,
+        owner,
+        user_id,
+        MIN(created_at) as created_at,
+        MAX(updated_at) as updated_at,
+        COUNT(*) as total_files,
+        SUM(CASE WHEN parse_status = 'success' THEN 1 ELSE 0 END) as parsed_files,
+        SUM(CASE WHEN parse_status = 'failed' THEN 1 ELSE 0 END) as failed_files
+      FROM repos
+      WHERE repo_id = ?
+      GROUP BY repo_id
+    `).get(id) as {
+      repo_id: string;
+      url: string;
+      name: string;
+      owner: string;
+      user_id: string;
+      created_at: string;
+      updated_at: string;
+      total_files: number;
+      parsed_files: number;
+      failed_files: number;
+    } | undefined;
 
-    if (!agg.length) return NextResponse.json({ error: "Not found" }, { status: 404 });
-    const g: any = agg[0];
+    if (!row) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // Check user permission
+    if (row.user_id !== DEV_USER_ID && (!userId || row.user_id !== userId)) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
     return NextResponse.json({
-      id: String(g._id),
-      url: g.url,
-      name: g.name,
-      owner: g.owner,
+      id: String(row.repo_id),
+      url: row.url,
+      name: row.name,
+      owner: row.owner,
       status: "completed",
       progress: {
-        totalFiles: g.totalFiles || 0,
-        parsedFiles: g.parsedFiles || 0,
-        failedFiles: g.failedFiles || 0,
+        totalFiles: row.total_files || 0,
+        parsedFiles: row.parsed_files || 0,
+        failedFiles: row.failed_files || 0,
       },
-      createdAt: g.createdAt,
-      updatedAt: g.updatedAt,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
@@ -71,28 +77,27 @@ export async function DELETE(
   try {
     const { userId } = await auth();
     if (!userId) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    const db = await getDb();
-    const repos = db.collection("repos");
+    const db = getDb();
     const { id } = await context.params;
-    const _id = safeObjectId(id);
 
     // Check if repo exists AND belongs to the user (or is a dev repo)
-    const userFilter = { userId: { $in: [userId, DEV_USER_ID] } };
-    const exists = await repos.findOne({ repoId: _id, ...userFilter } as any, { projection: { _id: 1 } });
-    if (!exists) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    const exists = db.prepare(`
+      SELECT repo_id, user_id FROM repos WHERE repo_id = ? LIMIT 1
+    `).get(id) as { repo_id: string; user_id: string } | undefined;
 
-    // Delete all files for this repo (only if user owns it per check above)
-    await repos.deleteMany({ repoId: _id, ...userFilter } as any);
+    if (!exists) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    if (exists.user_id !== DEV_USER_ID && exists.user_id !== userId) {
+      return NextResponse.json({ error: "Not found" }, { status: 404 });
+    }
+
+    // Delete all files for this repo
+    db.prepare(`DELETE FROM repos WHERE repo_id = ?`).run(id);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
-  }
-}
-
-function safeObjectId(id: string) {
-  try {
-    return new ObjectId(id);
-  } catch {
-    return id as any;
   }
 }

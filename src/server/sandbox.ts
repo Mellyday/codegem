@@ -1,4 +1,4 @@
-import { getDb } from "../lib/mongodb";
+import { getDb } from "../lib/sqlite";
 
 export type SandboxRoute = {
   fileName: string;
@@ -8,20 +8,21 @@ export type SandboxRoute = {
 };
 
 export async function listSandboxes(): Promise<SandboxRoute[]> {
-  const db = await getDb();
-  const files = db.collection("files");
-  const docs = await files
-    .find({}, { projection: { path: 1, extension: 1 } })
-    .toArray();
+  const db = getDb();
+
+  const docs = db.prepare(`
+    SELECT path, extension
+    FROM files
+  `).all() as Array<{ path: string; extension: string | null }>;
 
   const routes: SandboxRoute[] = docs
-    .map((doc: any) => {
-      const routePath = (doc.path as string).replace(/\.[^/.]+$/, "");
-      const extension = (doc.extension as string) || "";
+    .map((doc) => {
+      const routePath = doc.path.replace(/\.[^/.]+$/, "");
+      const extension = doc.extension || "";
       const astSupport: "tree-sitter" | "none" =
         extension === "py" ? "tree-sitter" : "none";
       return {
-        fileName: doc.path as string,
+        fileName: doc.path,
         routePath,
         label: routePath,
         astSupport,
@@ -35,13 +36,19 @@ export async function listSandboxes(): Promise<SandboxRoute[]> {
 export async function readSandbox(
   routePath: string
 ): Promise<{ fileName: string; code: string } | null> {
-  const db = await getDb();
-  const files = db.collection("files");
+  const db = getDb();
   const path = `${routePath}.py`;
-  const doc = await files.findOne({ path });
-  if (!doc || typeof (doc as any).sourceCode !== "string") return null;
+
+  const doc = db.prepare(`
+    SELECT path, source_code
+    FROM files
+    WHERE path = ?
+  `).get(path) as { path: string; source_code: string | null } | undefined;
+
+  if (!doc || typeof doc.source_code !== "string") return null;
+
   return {
-    fileName: doc.path as string,
-    code: (doc as any).sourceCode as string,
+    fileName: doc.path,
+    code: doc.source_code,
   };
 }

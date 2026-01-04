@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb } from "../../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb, generateId, toDbDate, toJson, fromJson } from "../../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 import { getFileAtPath } from "../../../../src/server/browse";
 import {
@@ -67,71 +66,45 @@ export async function POST(request: Request) {
             );
         }
 
-        const db = await getDb();
-        const quizzes = db.collection("quizzes");
-        const filesCol = db.collection("files");
-        const reposCol = db.collection("repos");
-
-        // Convert id to ObjectId if possible
-        let idAsObject: any = id;
-        try {
-            idAsObject = new ObjectId(String(id));
-        } catch {
-            idAsObject = id;
-        }
+        const db = getDb();
 
         // Find the file document
-        const match: any = { path };
-        let col = filesCol as any;
+        let fileDoc: { id: string } | undefined;
         if (kind === "repo") {
-            match.repoId = idAsObject;
-            col = reposCol;
+            fileDoc = db.prepare(`
+                SELECT id FROM repos WHERE repo_id = ? AND path = ? LIMIT 1
+            `).get(id, path) as typeof fileDoc;
         } else {
-            match.projectId = idAsObject;
-        }
-
-        // Try with ObjectId first, then raw string
-        let fileDoc = await col.findOne(match, { projection: { _id: 1 } });
-        if (!fileDoc && kind === "repo") {
-            fileDoc = await col.findOne(
-                { ...match, repoId: id },
-                { projection: { _id: 1 } }
-            );
-        } else if (!fileDoc && kind === "project") {
-            fileDoc = await col.findOne(
-                { ...match, projectId: id },
-                { projection: { _id: 1 } }
-            );
+            fileDoc = db.prepare(`
+                SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1
+            `).get(id, path) as typeof fileDoc;
         }
 
         if (!fileDoc) {
             return NextResponse.json({ error: "File not found" }, { status: 404 });
         }
 
-        const fileId = fileDoc._id;
+        const fileId = fileDoc.id;
 
         // Check if ANY quiz already exists for this file (any profile)
-        const existingQuizCount = await quizzes.countDocuments({
-            userId: clerkUserId,
-            fileId,
-        });
+        const existingQuizCount = db.prepare(`
+            SELECT COUNT(*) as count FROM quizzes WHERE user_id = ? AND file_id = ?
+        `).get(clerkUserId, fileId) as { count: number };
 
         // Check if a canonical quiz already exists
-        const canonicalQuiz = await quizzes.findOne({
-            userId: clerkUserId,
-            fileId,
-            isCanonical: true,
-        });
+        const canonicalQuiz = db.prepare(`
+            SELECT id FROM quizzes WHERE user_id = ? AND file_id = ? AND is_canonical = 1 LIMIT 1
+        `).get(clerkUserId, fileId) as { id: string } | undefined;
 
         if (canonicalQuiz) {
             // Canonical quiz exists - return it
             return NextResponse.json({
                 exists: true,
-                quizId: String(canonicalQuiz._id),
+                quizId: canonicalQuiz.id,
             });
         }
 
-        if (existingQuizCount > 0) {
+        if (existingQuizCount.count > 0) {
             // Quizzes exist but no canonical - signal to client
             return NextResponse.json({
                 exists: true,
@@ -174,60 +147,68 @@ export async function POST(request: Request) {
         }) as any;
 
         // Prepare document for insertion
-        const now = new Date();
+        const now = toDbDate(new Date());
         const rootText = file.sourceCode.substring(root.startIndex, root.endIndex);
-        const doc = {
-            userId: clerkUserId,
+        const quizId = generateId();
+
+        const cards = quizPayload?.cards?.map((c: QuizCard, idx: number) => ({
+            order: c.order ?? idx,
+            type: c.type,
+            text: String(c.text ?? ""),
+            action: c.action || "next",
+            ...(c.question ? { question: c.question } : {}),
+            ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
+            ...(c.difficulty ? { difficulty: c.difficulty } : {}),
+            ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
+            ...(c.questionType ? { questionType: c.questionType } : {}),
+            ...(Array.isArray(c.multiCorrect) ? { multiCorrect: c.multiCorrect } : {}),
+            ...(typeof c.multiSelectHint === "number"
+                ? { multiSelectHint: c.multiSelectHint }
+                : {}),
+            ...(Array.isArray(c.optionPool) ? { optionPool: c.optionPool } : {}),
+            ...(Array.isArray(c.llmDistractors)
+                ? { llmDistractors: c.llmDistractors }
+                : {}),
+            ...(typeof c.revealStart === "number"
+                ? { revealStart: c.revealStart }
+                : {}),
+            ...(typeof c.revealEndBeforeChild === "number"
+                ? { revealEndBeforeChild: c.revealEndBeforeChild }
+                : {}),
+            ...(typeof c.revealEndAfterChild === "number"
+                ? { revealEndAfterChild: c.revealEndAfterChild }
+                : {}),
+        })) ?? [];
+
+        db.prepare(`
+            INSERT INTO quizzes (
+                id, user_id, file_id, origin, name, type, root_node, profile,
+                is_canonical, cards, section_markers, section_names, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+            quizId,
+            clerkUserId,
             fileId,
-            origin: { kind, id, path },
-            name: "Heuristic shallow",
-            type: "CustomQuizV1.1",
-            profile: "shallow" as const,
-            rootNode: {
+            toJson({ kind, id, path }),
+            "Heuristic shallow",
+            "CustomQuizV1.1",
+            toJson({
                 type: root.type,
-                text: rootText.slice(0, 500), // Limit stored text
+                text: rootText.slice(0, 500),
                 start: root.startIndex,
                 end: root.endIndex,
-            },
-            cards:
-                quizPayload?.cards?.map((c: QuizCard, idx: number) => ({
-                    order: c.order ?? idx,
-                    type: c.type,
-                    text: String(c.text ?? ""),
-                    action: c.action || "next",
-                    ...(c.question ? { question: c.question } : {}),
-                    ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
-                    ...(c.difficulty ? { difficulty: c.difficulty } : {}),
-                    ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
-                    ...(c.questionType ? { questionType: c.questionType } : {}),
-                    ...(Array.isArray(c.multiCorrect) ? { multiCorrect: c.multiCorrect } : {}),
-                    ...(typeof c.multiSelectHint === "number"
-                        ? { multiSelectHint: c.multiSelectHint }
-                        : {}),
-                    ...(Array.isArray(c.optionPool) ? { optionPool: c.optionPool } : {}),
-                    ...(Array.isArray(c.llmDistractors)
-                        ? { llmDistractors: c.llmDistractors }
-                        : {}),
-                    ...(typeof c.revealStart === "number"
-                        ? { revealStart: c.revealStart }
-                        : {}),
-                    ...(typeof c.revealEndBeforeChild === "number"
-                        ? { revealEndBeforeChild: c.revealEndBeforeChild }
-                        : {}),
-                    ...(typeof c.revealEndAfterChild === "number"
-                        ? { revealEndAfterChild: c.revealEndAfterChild }
-                        : {}),
-                })) ?? [],
-            isCanonical: true, // First quiz for this file becomes canonical
-            createdAt: now,
-        };
-
-        const result = await quizzes.insertOne(doc);
-        const quizId = String(result.insertedId);
+            }),
+            "shallow",
+            1, // isCanonical = true
+            toJson(cards),
+            null,
+            null,
+            now
+        );
 
         return NextResponse.json({
             quizId,
-            totalCards: doc.cards.length,
+            totalCards: cards.length,
         });
     } catch (error: any) {
         console.error("POST /api/quizzes/auto-generate error:", error);
@@ -264,64 +245,41 @@ export async function GET(request: Request) {
         const ext = path.split(".").pop()?.toLowerCase() || "";
         const supported = canParseWithTreeSitter(ext);
 
-        const db = await getDb();
-        const quizzes = db.collection("quizzes");
-        const filesCol = db.collection("files");
-        const reposCol = db.collection("repos");
-
-        // Convert id to ObjectId if possible
-        let idAsObject: any = id;
-        try {
-            idAsObject = new ObjectId(String(id));
-        } catch {
-            idAsObject = id;
-        }
+        const db = getDb();
 
         // Find the file document
-        const match: any = { path };
-        let col = filesCol as any;
+        let fileDoc: { id: string } | undefined;
         if (kind === "repo") {
-            match.repoId = idAsObject;
-            col = reposCol;
+            fileDoc = db.prepare(`
+                SELECT id FROM repos WHERE repo_id = ? AND path = ? LIMIT 1
+            `).get(id, path) as typeof fileDoc;
         } else {
-            match.projectId = idAsObject;
-        }
-
-        let fileDoc = await col.findOne(match, { projection: { _id: 1 } });
-        if (!fileDoc && kind === "repo") {
-            fileDoc = await col.findOne(
-                { ...match, repoId: id },
-                { projection: { _id: 1 } }
-            );
-        } else if (!fileDoc && kind === "project") {
-            fileDoc = await col.findOne(
-                { ...match, projectId: id },
-                { projection: { _id: 1 } }
-            );
+            fileDoc = db.prepare(`
+                SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1
+            `).get(id, path) as typeof fileDoc;
         }
 
         if (!fileDoc) {
             return NextResponse.json({ exists: false, supported });
         }
 
-        const fileId = fileDoc._id;
+        const fileId = fileDoc.id;
 
         // Check if any quizzes exist for this file
-        const quizCount = await quizzes.countDocuments({
-            userId: clerkUserId,
-            fileId,
-        });
+        const quizCount = db.prepare(`
+            SELECT COUNT(*) as count FROM quizzes WHERE user_id = ? AND file_id = ?
+        `).get(clerkUserId, fileId) as { count: number };
 
-        if (quizCount === 0) {
+        if (quizCount.count === 0) {
             return NextResponse.json({ exists: false, supported });
         }
 
         // Find the canonical quiz (any profile)
-        const quiz = await quizzes.findOne({
-            userId: clerkUserId,
-            fileId,
-            isCanonical: true,
-        });
+        const quiz = db.prepare(`
+            SELECT id, cards, profile FROM quizzes
+            WHERE user_id = ? AND file_id = ? AND is_canonical = 1
+            LIMIT 1
+        `).get(clerkUserId, fileId) as { id: string; cards: string; profile: string } | undefined;
 
         if (!quiz) {
             // Quizzes exist but no canonical - signal to hide icon
@@ -333,7 +291,7 @@ export async function GET(request: Request) {
         }
 
         // Calculate distractor status for the canonical quiz
-        const cards = (quiz.cards || []) as QuizCard[];
+        const cards = fromJson<QuizCard[]>(quiz.cards) || [];
         let withDistractors = 0;
         let total = 0;
 
@@ -364,7 +322,7 @@ export async function GET(request: Request) {
 
         return NextResponse.json({
             exists: true,
-            quizId: String(quiz._id),
+            quizId: quiz.id,
             profile: quiz.profile,
             totalCards: total,
             distractorStatus,

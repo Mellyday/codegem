@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb } from "../../../src/lib/mongodb";
-import { ObjectId } from "mongodb";
+import { getDb, generateId, toDbDate, toJson, fromJson } from "../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 type SourceRef = {
@@ -54,20 +53,17 @@ type QuizPayload = {
 export async function POST(request: Request) {
   try {
     const body = (await request.json()) as QuizPayload;
-    const db = await getDb();
-    const quizzes = db.collection("quizzes");
-    const files = db.collection("files");
-    const reposCol = db.collection("repos");
+    const db = getDb();
     const { userId: clerkUserId } = await auth();
 
     if (!clerkUserId) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
-    // Session is already validated by Clerk via auth(); no extra lookup needed
 
     // Resolve fileId from fileKey if needed, supporting repo-backed files.
-    let fileId: any = body.fileId;
-    let origin: { kind: "repo" | "project"; id: any; path: string } | undefined;
+    let fileId: string | undefined = body.fileId;
+    let origin: { kind: "repo" | "project"; id: string; path: string } | undefined;
+
     if (!fileId) {
       if (!body.fileKey) {
         return NextResponse.json(
@@ -75,80 +71,57 @@ export async function POST(request: Request) {
           { status: 400 }
         );
       }
-      // For repos, files are shared across users; do not filter by userId.
-      // For projects, files are user-scoped; include userId in match.
-      const baseMatch: any = { path: body.fileKey.path };
-      const rawId = body.fileKey.id as any;
-      let idAsObject: any = rawId;
-      try {
-        idAsObject = new ObjectId(String(rawId));
-      } catch {
-        idAsObject = rawId;
-      }
-      const buildMatch = (useObject: boolean) => {
-        const match: any = { ...baseMatch };
-        if (body.fileKey!.kind === "repo") {
-          match.repoId = useObject ? idAsObject : rawId;
-          // Do not add userId for repos; repo docs are global/shared
-        } else {
-          match.projectId = useObject ? idAsObject : rawId;
-          match.userId = clerkUserId;
-        }
-        return match;
-      };
-      const mObj = buildMatch(true);
-      const mRaw = buildMatch(false);
-      let fileDoc: any | null = null;
+
+      let fileDoc: { id: string; path: string } | undefined;
+
       if (body.fileKey.kind === "repo") {
-        fileDoc = await reposCol.findOne(mObj, {
-          projection: { _id: 1, path: 1, repoId: 1 },
-        });
-        if (!fileDoc)
-          fileDoc = await reposCol.findOne(mRaw, {
-            projection: { _id: 1, path: 1, repoId: 1 },
-          });
+        fileDoc = db.prepare(`
+          SELECT id, path FROM repos
+          WHERE repo_id = ? AND path = ?
+          LIMIT 1
+        `).get(body.fileKey.id, body.fileKey.path) as typeof fileDoc;
       } else {
-        fileDoc = await files.findOne(mObj, {
-          projection: { _id: 1, path: 1, projectId: 1 },
-        });
-        if (!fileDoc)
-          fileDoc = await files.findOne(mRaw, {
-            projection: { _id: 1, path: 1, projectId: 1 },
-          });
+        // Project - first try with userId
+        fileDoc = db.prepare(`
+          SELECT id, path FROM files
+          WHERE project_id = ? AND path = ? AND user_id = ?
+          LIMIT 1
+        `).get(body.fileKey.id, body.fileKey.path, clerkUserId) as typeof fileDoc;
+
         // Fallback: search without userId for dev-pushed projects
         if (!fileDoc) {
-          const devMatch = { path: body.fileKey!.path, projectId: idAsObject };
-          fileDoc = await files.findOne(devMatch, {
-            projection: { _id: 1, path: 1, projectId: 1 },
-          });
+          fileDoc = db.prepare(`
+            SELECT id, path FROM files
+            WHERE project_id = ? AND path = ?
+            LIMIT 1
+          `).get(body.fileKey.id, body.fileKey.path) as typeof fileDoc;
         }
       }
+
       if (!fileDoc) {
         return NextResponse.json(
           { error: "File not found for provided key" },
           { status: 404 }
         );
       }
-      fileId = (fileDoc as any)._id;
+      fileId = fileDoc.id;
       origin = {
         kind: body.fileKey.kind,
-        id: rawId,
+        id: body.fileKey.id,
         path: body.fileKey.path,
-      } as any;
+      };
     } else {
       // If fileId provided, attempt to infer origin for convenience (best-effort)
       try {
-        const fileDoc = await files.findOne(
-          { _id: fileId as any },
-          {
-            projection: { repoId: 1, projectId: 1, path: 1 },
-          }
-        );
+        const fileDoc = db.prepare(`
+          SELECT id, repo_id, project_id, path FROM files WHERE id = ?
+        `).get(fileId) as { id: string; repo_id?: string; project_id?: string; path: string } | undefined;
+
         if (fileDoc) {
-          const kind = (fileDoc as any).repoId ? "repo" : "project";
-          const id = (fileDoc as any).repoId ?? (fileDoc as any).projectId;
-          if (id && (fileDoc as any).path) {
-            origin = { kind, id, path: (fileDoc as any).path };
+          const kind = fileDoc.repo_id ? "repo" : "project";
+          const id = fileDoc.repo_id ?? fileDoc.project_id;
+          if (id && fileDoc.path) {
+            origin = { kind, id, path: fileDoc.path };
           }
         }
       } catch {
@@ -156,66 +129,54 @@ export async function POST(request: Request) {
       }
     }
 
-    const now = new Date();
+    const now = toDbDate(new Date());
 
     // Check if any quizzes already exist for this file
     // If not, this new quiz will be the canonical one
-    const existingQuizCount = await quizzes.countDocuments({
-      userId: clerkUserId,
-      fileId,
-    });
-    const shouldBeCanonical = existingQuizCount === 0;
+    const existingQuizCount = db.prepare(`
+      SELECT COUNT(*) as count FROM quizzes WHERE user_id = ? AND file_id = ?
+    `).get(clerkUserId, fileId) as { count: number };
+    const shouldBeCanonical = existingQuizCount.count === 0;
 
-    const doc = {
-      userId: clerkUserId,
-      fileId,
-      ...(origin ? { origin } : {}),
-      name: body.name,
-      type: body.type,
-      rootNode: {
-        type: body.rootNode.type,
-        ...(body.rootNode.text ? { text: body.rootNode.text } : {}),
-        ...(typeof body.rootNode.start === "number"
-          ? { start: body.rootNode.start }
-          : {}),
-        ...(typeof body.rootNode.end === "number"
-          ? { end: body.rootNode.end }
-          : {}),
-        ...(Array.isArray(body.rootNode.path)
-          ? { path: body.rootNode.path }
-          : {}),
-      },
-      ...(body.profile ? { profile: body.profile } : {}),
-      ...(shouldBeCanonical ? { isCanonical: true } : {}),
-      cards:
-        body.cards?.map((c) => ({
-          order: c.order,
-          type: c.type,
-          text: c.text,
-          action: c.action,
-          ...(c.question ? { question: c.question } : {}),
-          ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
-          ...(c.difficulty ? { difficulty: c.difficulty } : {}),
-          ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
-          ...(c.questionType ? { questionType: c.questionType } : {}),
-          ...(Array.isArray(c.multiCorrect)
-            ? { multiCorrect: c.multiCorrect }
-            : {}),
-          ...(typeof (c as any).multiSelectHint === "number"
-            ? { multiSelectHint: (c as any).multiSelectHint }
-            : {}),
-          ...(Array.isArray((c as any).optionPool)
-            ? { optionPool: (c as any).optionPool }
-            : {}),
-          ...(Array.isArray((c as any).llmDistractors)
-            ? { llmDistractors: (c as any).llmDistractors }
-            : {}),
-        })) ?? [],
-      createdAt: now,
-    } as const;
-    const result = await quizzes.insertOne(doc);
+    const quizId = generateId();
+    const cards = body.cards?.map((c) => ({
+      order: c.order,
+      type: c.type,
+      text: c.text,
+      action: c.action,
+      ...(c.question ? { question: c.question } : {}),
+      ...(c.generatorRule ? { generatorRule: c.generatorRule } : {}),
+      ...(c.difficulty ? { difficulty: c.difficulty } : {}),
+      ...(c.sourceRef ? { sourceRef: c.sourceRef } : {}),
+      ...(c.questionType ? { questionType: c.questionType } : {}),
+      ...(Array.isArray(c.multiCorrect) ? { multiCorrect: c.multiCorrect } : {}),
+      ...(typeof c.multiSelectHint === "number" ? { multiSelectHint: c.multiSelectHint } : {}),
+      ...(Array.isArray(c.optionPool) ? { optionPool: c.optionPool } : {}),
+      ...(Array.isArray(c.llmDistractors) ? { llmDistractors: c.llmDistractors } : {}),
+    })) ?? [];
 
-    return NextResponse.json({ id: String(result.insertedId) });
+    db.prepare(`
+      INSERT INTO quizzes (
+        id, user_id, file_id, origin, name, type, root_node, profile,
+        is_canonical, cards, section_markers, section_names, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      quizId,
+      clerkUserId,
+      fileId,
+      origin ? toJson(origin) : null,
+      body.name,
+      body.type,
+      toJson(body.rootNode),
+      body.profile || null,
+      shouldBeCanonical ? 1 : 0,
+      toJson(cards),
+      null,
+      null,
+      now
+    );
+
+    return NextResponse.json({ id: quizId });
   } catch (error) {
     return NextResponse.json({ error: String(error) }, { status: 500 });
   }
@@ -227,10 +188,7 @@ export async function GET(request: Request) {
     const kind = url.searchParams.get("kind");
     const id = url.searchParams.get("id");
     const path = url.searchParams.get("path");
-    const db = await getDb();
-    const quizzes = db.collection("quizzes");
-    const files = db.collection("files");
-    const reposCol = db.collection("repos");
+    const db = getDb();
     const { userId: clerkUserId } = await auth();
 
     if (!clerkUserId) {
@@ -244,60 +202,64 @@ export async function GET(request: Request) {
       );
     }
 
-    // For repos, do not filter by userId; for projects, include userId
-    const baseMatch: any = { path };
-    let idAsObject: any = id as any;
-    try {
-      idAsObject = new ObjectId(String(id));
-    } catch {
-      idAsObject = id as any;
-    }
-    const buildMatch = (useObject: boolean) => {
-      const m: any = { ...baseMatch };
-      if (kind === "repo") {
-        m.repoId = useObject ? idAsObject : id;
-      } else {
-        m.projectId = useObject ? idAsObject : id;
-        m.userId = clerkUserId;
-      }
-      return m;
-    };
-    const mObj = buildMatch(true);
-    const mRaw = buildMatch(false);
-    let fileDoc: any | null = null;
+    // Find file ID
+    let fileDoc: { id: string } | undefined;
+
     if (kind === "repo") {
-      fileDoc = await reposCol.findOne(mObj, { projection: { _id: 1 } });
-      if (!fileDoc)
-        fileDoc = await reposCol.findOne(mRaw, { projection: { _id: 1 } });
+      fileDoc = db.prepare(`
+        SELECT id FROM repos WHERE repo_id = ? AND path = ? LIMIT 1
+      `).get(id, path) as typeof fileDoc;
     } else {
-      fileDoc = await files.findOne(mObj, { projection: { _id: 1 } });
-      if (!fileDoc)
-        fileDoc = await files.findOne(mRaw, { projection: { _id: 1 } });
-      // Fallback: search without userId for dev-pushed projects
+      fileDoc = db.prepare(`
+        SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
+      `).get(id, path, clerkUserId) as typeof fileDoc;
+
+      // Fallback for dev-pushed projects
       if (!fileDoc) {
-        const devMatch = { path, projectId: idAsObject };
-        fileDoc = await files.findOne(devMatch, { projection: { _id: 1 } });
+        fileDoc = db.prepare(`
+          SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1
+        `).get(id, path) as typeof fileDoc;
       }
     }
+
     const list: any[] = [];
     if (fileDoc) {
-      const fileId = (fileDoc as any)._id;
-      const cursor = quizzes
-        .find({ userId: clerkUserId, fileId }, { sort: { createdAt: -1 } })
-        .map((q) => ({
-          id: String((q as any)._id),
-          name: (q as any).name,
-          type: (q as any).type,
-          rootNode: (q as any).rootNode,
-          cards: (q as any).cards,
-          origin: (q as any).origin,
-          createdAt: (q as any).createdAt,
-          profile: (q as any).profile,
-          sectionMarkers: (q as any).sectionMarkers,
-          sectionNames: (q as any).sectionNames,
-          isCanonical: (q as any).isCanonical,
-        }));
-      list.push(...(await cursor.toArray()));
+      const fileId = fileDoc.id;
+      const rows = db.prepare(`
+        SELECT id, name, type, root_node, cards, origin, created_at, profile,
+               section_markers, section_names, is_canonical
+        FROM quizzes
+        WHERE user_id = ? AND file_id = ?
+        ORDER BY created_at DESC
+      `).all(clerkUserId, fileId) as Array<{
+        id: string;
+        name: string;
+        type: string;
+        root_node: string;
+        cards: string;
+        origin: string | null;
+        created_at: string;
+        profile: string | null;
+        section_markers: string | null;
+        section_names: string | null;
+        is_canonical: number;
+      }>;
+
+      for (const q of rows) {
+        list.push({
+          id: q.id,
+          name: q.name,
+          type: q.type,
+          rootNode: fromJson(q.root_node),
+          cards: fromJson(q.cards),
+          origin: fromJson(q.origin),
+          createdAt: q.created_at,
+          profile: q.profile,
+          sectionMarkers: fromJson(q.section_markers),
+          sectionNames: fromJson(q.section_names),
+          isCanonical: q.is_canonical === 1,
+        });
+      }
     }
     return NextResponse.json({ quizzes: list });
   } catch (error) {
@@ -316,17 +278,13 @@ export async function DELETE(request: Request) {
     if (!id) {
       return NextResponse.json({ error: "Missing id" }, { status: 400 });
     }
-    const db = await getDb();
-    const quizzes = db.collection("quizzes");
-    const _id = (() => {
-      try {
-        return new ObjectId(id);
-      } catch {
-        return id as any; // fallback in case ids were stored as strings
-      }
-    })();
-    const res = await quizzes.deleteOne({ _id, userId: clerkUserId } as any);
-    if (res.deletedCount === 0) {
+    const db = getDb();
+
+    const result = db.prepare(`
+      DELETE FROM quizzes WHERE id = ? AND user_id = ?
+    `).run(id, clerkUserId);
+
+    if (result.changes === 0) {
       return NextResponse.json({ error: "Not found" }, { status: 404 });
     }
     return NextResponse.json({ ok: true });
