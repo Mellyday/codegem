@@ -10,22 +10,21 @@ export type SandboxRoute = {
 export async function listSandboxes(): Promise<SandboxRoute[]> {
   const db = getDb();
 
+  // Issue #10 fix: Only list Python files that aren't directories
   const docs = db.prepare(`
     SELECT path, extension
     FROM files
+    WHERE extension = 'py' AND (is_dir = 0 OR is_dir IS NULL)
   `).all() as Array<{ path: string; extension: string | null }>;
 
   const routes: SandboxRoute[] = docs
     .map((doc) => {
       const routePath = doc.path.replace(/\.[^/.]+$/, "");
-      const extension = doc.extension || "";
-      const astSupport: "tree-sitter" | "none" =
-        extension === "py" ? "tree-sitter" : "none";
       return {
         fileName: doc.path,
         routePath,
         label: routePath,
-        astSupport,
+        astSupport: "tree-sitter" as const,
       };
     })
     .sort((a, b) => a.routePath.localeCompare(b.routePath));

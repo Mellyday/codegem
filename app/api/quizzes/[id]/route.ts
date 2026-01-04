@@ -1,6 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb, toJson, fromJson } from "../../../../src/lib/sqlite";
+import { getDb, toJson } from "../../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 export async function PATCH(
@@ -17,6 +17,15 @@ export async function PATCH(
         }
 
         const db = getDb();
+
+        // Issue #7 fix: Check existence first before attempting update
+        const existingQuiz = db.prepare(`
+            SELECT id, file_id FROM quizzes WHERE id = ? AND user_id = ?
+        `).get(id, clerkUserId) as { id: string; file_id: string } | undefined;
+
+        if (!existingQuiz) {
+            return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
+        }
 
         // Build update SET clauses dynamically
         const updates: string[] = [];
@@ -55,20 +64,26 @@ export async function PATCH(
             updates.push("is_canonical = ?");
             values.push(body.isCanonical ? 1 : 0);
 
-            // If setting as canonical, we need to unset on other quizzes for the same file
+            // Issue #8 fix: Use transaction for atomic canonical toggle
             if (body.isCanonical === true) {
-                // First, get this quiz's fileId to find sibling quizzes
-                const thisQuiz = db.prepare(`
-                    SELECT file_id FROM quizzes WHERE id = ? AND user_id = ?
-                `).get(id, clerkUserId) as { file_id: string } | undefined;
-
-                if (thisQuiz && thisQuiz.file_id) {
+                // Wrap in transaction to ensure atomicity
+                const setCanonical = db.transaction(() => {
                     // Unset isCanonical on all other quizzes for this file
                     db.prepare(`
                         UPDATE quizzes SET is_canonical = 0
                         WHERE user_id = ? AND file_id = ? AND id != ?
-                    `).run(clerkUserId, thisQuiz.file_id, id);
-                }
+                    `).run(clerkUserId, existingQuiz.file_id, id);
+
+                    // Apply the update including setting this one as canonical
+                    values.push(id, clerkUserId);
+                    db.prepare(`
+                        UPDATE quizzes SET ${updates.join(", ")}
+                        WHERE id = ? AND user_id = ?
+                    `).run(...values);
+                });
+
+                setCanonical();
+                return NextResponse.json({ ok: true });
             }
         }
 
@@ -80,14 +95,10 @@ export async function PATCH(
         }
 
         values.push(id, clerkUserId);
-        const result = db.prepare(`
+        db.prepare(`
             UPDATE quizzes SET ${updates.join(", ")}
             WHERE id = ? AND user_id = ?
         `).run(...values);
-
-        if (result.changes === 0) {
-            return NextResponse.json({ error: "Quiz not found" }, { status: 404 });
-        }
 
         return NextResponse.json({ ok: true });
     } catch (error) {

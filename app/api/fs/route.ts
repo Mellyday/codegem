@@ -129,7 +129,7 @@ export async function POST(request: Request) {
           path,
           extension,
           (body as any).language,
-          (body.sourceCode ?? "").length,
+          Buffer.byteLength(body.sourceCode ?? "", "utf8"),
           body.sourceCode ?? "",
           now,
           now
@@ -145,7 +145,7 @@ export async function POST(request: Request) {
           path,
           extension,
           (body as any).language,
-          (body.sourceCode ?? "").length,
+          Buffer.byteLength(body.sourceCode ?? "", "utf8"),
           body.sourceCode ?? "",
           now,
           now

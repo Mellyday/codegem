@@ -5,6 +5,18 @@ import { auth } from "@clerk/nextjs/server";
 
 type MedalType = "bronze" | "silver" | "gold" | null;
 
+// SQLite parameter limit - use chunks smaller than 999
+const SQLITE_PARAM_CHUNK_SIZE = 500;
+
+// Helper to chunk arrays for SQLite IN queries (issue #6 fix)
+function chunkArray<T>(arr: T[], size: number): T[][] {
+    const chunks: T[][] = [];
+    for (let i = 0; i < arr.length; i += size) {
+        chunks.push(arr.slice(i, i + size));
+    }
+    return chunks;
+}
+
 // Calculate star level based on time since last attempt
 function calculateStars(
     attempts: Array<{ attemptedAt: Date; medalEarned: MedalType }>,
@@ -119,17 +131,25 @@ export async function GET(request: Request) {
             return NextResponse.json({ files: {}, folders: {} });
         }
 
-        // Find all canonical quizzes for these files
-        const placeholders = fileIds.map(() => '?').join(',');
-        const canonicalQuizzes = db.prepare(`
-            SELECT id, file_id, section_markers
-            FROM quizzes
-            WHERE user_id = ? AND file_id IN (${placeholders}) AND is_canonical = 1
-        `).all(clerkUserId, ...fileIds) as Array<{
+        // Issue #6 fix: Chunk file IDs to avoid SQLite parameter limit
+        const fileIdChunks = chunkArray(fileIds, SQLITE_PARAM_CHUNK_SIZE);
+
+        // Find all canonical quizzes for these files (chunked)
+        const canonicalQuizzes: Array<{
             id: string;
             file_id: string;
             section_markers: string | null;
-        }>;
+        }> = [];
+
+        for (const chunk of fileIdChunks) {
+            const placeholders = chunk.map(() => '?').join(',');
+            const chunkResults = db.prepare(`
+                SELECT id, file_id, section_markers
+                FROM quizzes
+                WHERE user_id = ? AND file_id IN (${placeholders}) AND is_canonical = 1
+            `).all(clerkUserId, ...chunk) as typeof canonicalQuizzes;
+            canonicalQuizzes.push(...chunkResults);
+        }
 
         // Build fileId -> quiz mapping
         const fileIdToQuiz = new Map<string, { id: string; sectionMarkers: number[] }>();
@@ -143,7 +163,7 @@ export async function GET(request: Request) {
             quizIds.push(quiz.id);
         }
 
-        // Fetch all attempts for these quizzes
+        // Issue #6 fix: Chunk quiz IDs for attempts query
         let allAttempts: Array<{
             quiz_id: string;
             section_index: number;
@@ -152,12 +172,16 @@ export async function GET(request: Request) {
         }> = [];
 
         if (quizIds.length > 0) {
-            const quizPlaceholders = quizIds.map(() => '?').join(',');
-            allAttempts = db.prepare(`
-                SELECT quiz_id, section_index, attempted_at, medal_earned
-                FROM quiz_attempts
-                WHERE user_id = ? AND quiz_id IN (${quizPlaceholders})
-            `).all(clerkUserId, ...quizIds) as typeof allAttempts;
+            const quizIdChunks = chunkArray(quizIds, SQLITE_PARAM_CHUNK_SIZE);
+            for (const chunk of quizIdChunks) {
+                const placeholders = chunk.map(() => '?').join(',');
+                const chunkResults = db.prepare(`
+                    SELECT quiz_id, section_index, attempted_at, medal_earned
+                    FROM quiz_attempts
+                    WHERE user_id = ? AND quiz_id IN (${placeholders})
+                `).all(clerkUserId, ...chunk) as typeof allAttempts;
+                allAttempts.push(...chunkResults);
+            }
         }
 
         // Group attempts by quizId and sectionIndex
