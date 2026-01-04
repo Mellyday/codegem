@@ -11,3 +11,4 @@ count.txt
 .tsbuildcache/
 # clerk configuration (can include secrets)
 /.clerk/
+data/
