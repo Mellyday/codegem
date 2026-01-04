@@ -67,17 +67,34 @@ export async function POST(request: Request) {
         }
 
         const db = getDb();
+        const DEV_USER_ID = "dev-push-project";
 
-        // Find the file document
+        // Find the file document - user-first, DEV-fallback
         let fileDoc: { id: string } | undefined;
         if (kind === "repo") {
+            // User-first
             fileDoc = db.prepare(`
-                SELECT id FROM repos WHERE repo_id = ? AND path = ? LIMIT 1
-            `).get(id, path) as typeof fileDoc;
+                SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
+            `).get(id, path, clerkUserId) as typeof fileDoc;
+
+            // DEV-fallback
+            if (!fileDoc) {
+                fileDoc = db.prepare(`
+                    SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
+                `).get(id, path, DEV_USER_ID) as typeof fileDoc;
+            }
         } else {
+            // User-first
             fileDoc = db.prepare(`
-                SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1
-            `).get(id, path) as typeof fileDoc;
+                SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
+            `).get(id, path, clerkUserId) as typeof fileDoc;
+
+            // DEV-fallback
+            if (!fileDoc) {
+                fileDoc = db.prepare(`
+                    SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
+                `).get(id, path, DEV_USER_ID) as typeof fileDoc;
+            }
         }
 
         if (!fileDoc) {
@@ -246,17 +263,34 @@ export async function GET(request: Request) {
         const supported = canParseWithTreeSitter(ext);
 
         const db = getDb();
+        const DEV_USER_ID_GET = "dev-push-project";
 
-        // Find the file document
+        // Find the file document - user-first, DEV-fallback
         let fileDoc: { id: string } | undefined;
         if (kind === "repo") {
+            // User-first
             fileDoc = db.prepare(`
-                SELECT id FROM repos WHERE repo_id = ? AND path = ? LIMIT 1
-            `).get(id, path) as typeof fileDoc;
+                SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
+            `).get(id, path, clerkUserId) as typeof fileDoc;
+
+            // DEV-fallback
+            if (!fileDoc) {
+                fileDoc = db.prepare(`
+                    SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
+                `).get(id, path, DEV_USER_ID_GET) as typeof fileDoc;
+            }
         } else {
+            // User-first
             fileDoc = db.prepare(`
-                SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1
-            `).get(id, path) as typeof fileDoc;
+                SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
+            `).get(id, path, clerkUserId) as typeof fileDoc;
+
+            // DEV-fallback
+            if (!fileDoc) {
+                fileDoc = db.prepare(`
+                    SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
+                `).get(id, path, DEV_USER_ID_GET) as typeof fileDoc;
+            }
         }
 
         if (!fileDoc) {

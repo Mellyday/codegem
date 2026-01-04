@@ -74,27 +74,37 @@ export async function POST(request: Request) {
 
       let fileDoc: { id: string; path: string } | undefined;
 
+      const DEV_USER_ID = "dev-push-project";
+
       if (body.fileKey.kind === "repo") {
+        // User-first, DEV-fallback for repos
         fileDoc = db.prepare(`
           SELECT id, path FROM repos
-          WHERE repo_id = ? AND path = ?
+          WHERE repo_id = ? AND path = ? AND user_id = ?
           LIMIT 1
-        `).get(body.fileKey.id, body.fileKey.path) as typeof fileDoc;
+        `).get(body.fileKey.id, body.fileKey.path, clerkUserId) as typeof fileDoc;
+
+        if (!fileDoc) {
+          fileDoc = db.prepare(`
+            SELECT id, path FROM repos
+            WHERE repo_id = ? AND path = ? AND user_id = ?
+            LIMIT 1
+          `).get(body.fileKey.id, body.fileKey.path, DEV_USER_ID) as typeof fileDoc;
+        }
       } else {
-        // Project - first try with userId
+        // User-first, DEV-fallback for projects
         fileDoc = db.prepare(`
           SELECT id, path FROM files
           WHERE project_id = ? AND path = ? AND user_id = ?
           LIMIT 1
         `).get(body.fileKey.id, body.fileKey.path, clerkUserId) as typeof fileDoc;
 
-        // Fallback: search without userId for dev-pushed projects
         if (!fileDoc) {
           fileDoc = db.prepare(`
             SELECT id, path FROM files
-            WHERE project_id = ? AND path = ?
+            WHERE project_id = ? AND path = ? AND user_id = ?
             LIMIT 1
-          `).get(body.fileKey.id, body.fileKey.path) as typeof fileDoc;
+          `).get(body.fileKey.id, body.fileKey.path, DEV_USER_ID) as typeof fileDoc;
         }
       }
 
@@ -202,23 +212,33 @@ export async function GET(request: Request) {
       );
     }
 
-    // Find file ID
+    // Find file ID - user-first, DEV-fallback
     let fileDoc: { id: string } | undefined;
+    const DEV_USER_ID_GET = "dev-push-project";
 
     if (kind === "repo") {
+      // User-first
       fileDoc = db.prepare(`
-        SELECT id FROM repos WHERE repo_id = ? AND path = ? LIMIT 1
-      `).get(id, path) as typeof fileDoc;
+        SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
+      `).get(id, path, clerkUserId) as typeof fileDoc;
+
+      // DEV-fallback
+      if (!fileDoc) {
+        fileDoc = db.prepare(`
+          SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
+        `).get(id, path, DEV_USER_ID_GET) as typeof fileDoc;
+      }
     } else {
+      // User-first
       fileDoc = db.prepare(`
         SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
       `).get(id, path, clerkUserId) as typeof fileDoc;
 
-      // Fallback for dev-pushed projects
+      // DEV-fallback
       if (!fileDoc) {
         fileDoc = db.prepare(`
-          SELECT id FROM files WHERE project_id = ? AND path = ? LIMIT 1
-        `).get(id, path) as typeof fileDoc;
+          SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
+        `).get(id, path, DEV_USER_ID_GET) as typeof fileDoc;
       }
     }
 

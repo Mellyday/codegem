@@ -94,29 +94,53 @@ export async function GET(request: Request) {
 
         const db = getDb();
 
-        // Fetch all files under this path
+        // Resolve effective user_id (user-first, DEV-fallback)
+        const DEV_USER_ID = "dev-push-project";
+        let effectiveUserId: string | null = null;
+
+        if (kind === "repo") {
+            const hasUser = db.prepare(`SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1`).get(id, clerkUserId);
+            if (hasUser) effectiveUserId = clerkUserId;
+            else {
+                const hasDev = db.prepare(`SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1`).get(id, DEV_USER_ID);
+                if (hasDev) effectiveUserId = DEV_USER_ID;
+            }
+        } else {
+            const hasUser = db.prepare(`SELECT 1 FROM files WHERE project_id = ? AND user_id = ? LIMIT 1`).get(id, clerkUserId);
+            if (hasUser) effectiveUserId = clerkUserId;
+            else {
+                const hasDev = db.prepare(`SELECT 1 FROM files WHERE project_id = ? AND user_id = ? LIMIT 1`).get(id, DEV_USER_ID);
+                if (hasDev) effectiveUserId = DEV_USER_ID;
+            }
+        }
+
+        if (!effectiveUserId) {
+            return NextResponse.json({ files: {}, folders: {} });
+        }
+
+        // Fetch all files under this path - NOW SCOPED BY user_id
         const pathPrefix = prefix ? `${prefix}/` : "";
         let allFiles: Array<{ id: string; path: string }>;
 
         if (kind === "repo") {
             if (prefix) {
                 allFiles = db.prepare(`
-                    SELECT id, path FROM repos WHERE repo_id = ? AND path LIKE ?
-                `).all(id, `${pathPrefix}%`) as typeof allFiles;
+                    SELECT id, path FROM repos WHERE user_id = ? AND repo_id = ? AND path LIKE ?
+                `).all(effectiveUserId, id, `${pathPrefix}%`) as typeof allFiles;
             } else {
                 allFiles = db.prepare(`
-                    SELECT id, path FROM repos WHERE repo_id = ?
-                `).all(id) as typeof allFiles;
+                    SELECT id, path FROM repos WHERE user_id = ? AND repo_id = ?
+                `).all(effectiveUserId, id) as typeof allFiles;
             }
         } else {
             if (prefix) {
                 allFiles = db.prepare(`
-                    SELECT id, path FROM files WHERE project_id = ? AND path LIKE ?
-                `).all(id, `${pathPrefix}%`) as typeof allFiles;
+                    SELECT id, path FROM files WHERE user_id = ? AND project_id = ? AND path LIKE ?
+                `).all(effectiveUserId, id, `${pathPrefix}%`) as typeof allFiles;
             } else {
                 allFiles = db.prepare(`
-                    SELECT id, path FROM files WHERE project_id = ?
-                `).all(id) as typeof allFiles;
+                    SELECT id, path FROM files WHERE user_id = ? AND project_id = ?
+                `).all(effectiveUserId, id) as typeof allFiles;
             }
         }
 

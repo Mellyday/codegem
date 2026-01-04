@@ -39,6 +39,28 @@ async function getOptionalUserId(): Promise<string | null> {
 
 const DEV_USER_ID = "dev-push-project";
 
+// User-first, DEV-fallback resolver for repos
+function resolveEffectiveUserIdForRepo(db: any, repoId: string, userId?: string | null): string | null {
+  if (userId) {
+    const hasUser = db.prepare(`SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1`).get(repoId, userId);
+    if (hasUser) return userId;
+  }
+  const hasDev = db.prepare(`SELECT 1 FROM repos WHERE repo_id = ? AND user_id = ? LIMIT 1`).get(repoId, DEV_USER_ID);
+  if (hasDev) return DEV_USER_ID;
+  return null;
+}
+
+// User-first, DEV-fallback resolver for projects
+function resolveEffectiveUserIdForProject(db: any, projectId: string, userId?: string | null): string | null {
+  if (userId) {
+    const hasUser = db.prepare(`SELECT 1 FROM files WHERE project_id = ? AND user_id = ? LIMIT 1`).get(projectId, userId);
+    if (hasUser) return userId;
+  }
+  const hasDev = db.prepare(`SELECT 1 FROM files WHERE project_id = ? AND user_id = ? LIMIT 1`).get(projectId, DEV_USER_ID);
+  if (hasDev) return DEV_USER_ID;
+  return null;
+}
+
 export async function listReposAndProjects(): Promise<TopLevelListing> {
   // Be resilient when DB is unavailable
   let db;
@@ -98,6 +120,18 @@ export async function listPathChildren(
 ): Promise<PathListing> {
   const db = getDb();
   const prefix = normalizePrefix(input.prefix);
+  const userId = await getOptionalUserId();
+
+  // Resolve effective user_id (user-first, DEV-fallback)
+  const effectiveUserId =
+    input.kind === "repo"
+      ? resolveEffectiveUserIdForRepo(db, input.id, userId)
+      : resolveEffectiveUserIdForProject(db, input.id, userId);
+
+  // If no accessible copy found, return empty
+  if (!effectiveUserId) {
+    return { prefix, dirs: [], files: [] };
+  }
 
   let docs: Array<{
     path: string;
@@ -108,34 +142,34 @@ export async function listPathChildren(
   }>;
 
   if (input.kind === "repo") {
-    // Query repos table
+    // Query repos table - NOW SCOPED BY user_id
     if (prefix) {
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
         FROM repos
-        WHERE repo_id = ? AND (path = ? OR path LIKE ?)
-      `).all(input.id, prefix, `${prefix}/%`) as typeof docs;
+        WHERE user_id = ? AND repo_id = ? AND (path = ? OR path LIKE ?)
+      `).all(effectiveUserId, input.id, prefix, `${prefix}/%`) as typeof docs;
     } else {
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
         FROM repos
-        WHERE repo_id = ?
-      `).all(input.id) as typeof docs;
+        WHERE user_id = ? AND repo_id = ?
+      `).all(effectiveUserId, input.id) as typeof docs;
     }
   } else {
-    // Query files table
+    // Query files table - NOW SCOPED BY user_id
     if (prefix) {
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
         FROM files
-        WHERE project_id = ? AND (path = ? OR path LIKE ?)
-      `).all(input.id, prefix, `${prefix}/%`) as typeof docs;
+        WHERE user_id = ? AND project_id = ? AND (path = ? OR path LIKE ?)
+      `).all(effectiveUserId, input.id, prefix, `${prefix}/%`) as typeof docs;
     } else {
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
         FROM files
-        WHERE project_id = ?
-      `).all(input.id) as typeof docs;
+        WHERE user_id = ? AND project_id = ?
+      `).all(effectiveUserId, input.id) as typeof docs;
     }
   }
 
@@ -190,6 +224,18 @@ export async function getFileAtPath(input: {
   | null
 > {
   const db = getDb();
+  const userId = await getOptionalUserId();
+
+  // Resolve effective user_id (user-first, DEV-fallback)
+  const effectiveUserId =
+    input.kind === "repo"
+      ? resolveEffectiveUserIdForRepo(db, input.id, userId)
+      : resolveEffectiveUserIdForProject(db, input.id, userId);
+
+  // If no accessible copy found, return null
+  if (!effectiveUserId) {
+    return null;
+  }
 
   let doc: {
     path: string;
@@ -201,17 +247,19 @@ export async function getFileAtPath(input: {
   } | undefined;
 
   if (input.kind === "repo") {
+    // NOW SCOPED BY user_id
     doc = db.prepare(`
       SELECT path, extension, language, size, source_code, is_dir
       FROM repos
-      WHERE repo_id = ? AND path = ?
-    `).get(input.id, input.path) as typeof doc;
+      WHERE user_id = ? AND repo_id = ? AND path = ?
+    `).get(effectiveUserId, input.id, input.path) as typeof doc;
   } else {
+    // NOW SCOPED BY user_id
     doc = db.prepare(`
       SELECT path, extension, language, size, source_code, is_dir
       FROM files
-      WHERE project_id = ? AND path = ?
-    `).get(input.id, input.path) as typeof doc;
+      WHERE user_id = ? AND project_id = ? AND path = ?
+    `).get(effectiveUserId, input.id, input.path) as typeof doc;
   }
 
   if (!doc) return null;
