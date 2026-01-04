@@ -52,8 +52,9 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
   const userId = await getOptionalUserId();
 
   // Build repos list - group by repo_id
+  // Using MIN() for deterministic results in GROUP BY
   const repoRows = db.prepare(`
-    SELECT repo_id, owner, name, user_id
+    SELECT repo_id, MIN(owner) as owner, MIN(name) as name, MIN(user_id) as user_id
     FROM repos
     WHERE repo_id IS NOT NULL
     GROUP BY repo_id
@@ -73,8 +74,9 @@ export async function listReposAndProjects(): Promise<TopLevelListing> {
     .sort((a, b) => a.label.localeCompare(b.label));
 
   // Build projects list - group by project_id
+  // Using MIN() for deterministic results in GROUP BY
   const projectRows = db.prepare(`
-    SELECT project_id, project_name, user_id
+    SELECT project_id, MIN(project_name) as project_name, MIN(user_id) as user_id
     FROM files
     WHERE project_id IS NOT NULL
     GROUP BY project_id

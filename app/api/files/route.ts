@@ -32,8 +32,8 @@ export async function POST(request: Request) {
     db.prepare(`
       INSERT INTO files (
         id, user_id, repo_id, project_id, path, language, extension,
-        source_code, ast, size, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        source_code, ast, size, parse_status, parse_error, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       id,
       clerkUserId,
@@ -45,6 +45,8 @@ export async function POST(request: Request) {
       body.sourceCode,
       toJson(body.ast),
       Buffer.from(body.sourceCode, "utf8").length,
+      body.parseStatus ?? "success",
+      body.parseError ?? null,
       now,
       now
     );

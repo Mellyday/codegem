@@ -17,10 +17,10 @@ export async function GET(
     const row = db.prepare(`
       SELECT 
         repo_id,
-        url,
-        name,
-        owner,
-        user_id,
+        MIN(url) as url,
+        MIN(name) as name,
+        MIN(owner) as owner,
+        MIN(user_id) as user_id,
         MIN(created_at) as created_at,
         MAX(updated_at) as updated_at,
         COUNT(*) as total_files,

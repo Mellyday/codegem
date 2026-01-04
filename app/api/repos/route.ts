@@ -15,13 +15,15 @@ export async function GET(req: Request) {
     const db = getDb();
 
     // Get all repos grouped by repo_id
+    // Note: Using MIN() for user_id to get deterministic results
+    // In practice, all rows for a repo_id should have the same user_id
     const rows = db.prepare(`
       SELECT 
         repo_id,
-        url,
-        name,
-        owner,
-        user_id,
+        MIN(url) as url,
+        MIN(name) as name,
+        MIN(owner) as owner,
+        MIN(user_id) as user_id,
         MIN(created_at) as created_at,
         MAX(updated_at) as updated_at,
         COUNT(*) as total_files,

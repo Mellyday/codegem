@@ -57,6 +57,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Missing kind or id" }, { status: 400 });
     }
 
+    // Determine which table to use based on kind
+    // repos table for kind="repo", files table for kind="project"
+    const tableName = kind === "repo" ? "repos" : "files";
+    const idColumn = kind === "repo" ? "repo_id" : "project_id";
+
     if (body.action === "create_folder") {
       const name = body.name?.trim();
       if (!name) return NextResponse.json({ error: "Missing name" }, { status: 400 });
@@ -66,16 +71,9 @@ export async function POST(request: Request) {
       const path = joinPath(body.prefix, name);
 
       // Check if path already exists
-      let existing: { id: string } | undefined;
-      if (body.kind === "repo") {
-        existing = db.prepare(`
-          SELECT id FROM files WHERE user_id = ? AND path = ? AND repo_id = ? AND project_id IS NULL LIMIT 1
-        `).get(userId, path, body.id) as typeof existing;
-      } else {
-        existing = db.prepare(`
-          SELECT id FROM files WHERE user_id = ? AND path = ? AND project_id = ? LIMIT 1
-        `).get(userId, path, body.id) as typeof existing;
-      }
+      const existing = db.prepare(`
+        SELECT id FROM ${tableName} WHERE user_id = ? AND path = ? AND ${idColumn} = ? LIMIT 1
+      `).get(userId, path, body.id) as { id: string } | undefined;
 
       if (existing) {
         return NextResponse.json({ error: "Path already exists" }, { status: 409 });
@@ -84,17 +82,17 @@ export async function POST(request: Request) {
       const now = toDbDate(new Date());
       const newId = generateId();
 
-      db.prepare(`
-        INSERT INTO files (id, user_id, path, is_dir, repo_id, project_id, created_at)
-        VALUES (?, ?, ?, 1, ?, ?, ?)
-      `).run(
-        newId,
-        userId,
-        path,
-        body.kind === "repo" ? body.id : null,
-        body.kind === "project" ? body.id : null,
-        now
-      );
+      if (kind === "repo") {
+        db.prepare(`
+          INSERT INTO repos (id, user_id, repo_id, path, is_dir, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, ?, ?)
+        `).run(newId, userId, body.id, path, now, now);
+      } else {
+        db.prepare(`
+          INSERT INTO files (id, user_id, project_id, path, is_dir, created_at, updated_at)
+          VALUES (?, ?, ?, ?, 1, ?, ?)
+        `).run(newId, userId, body.id, path, now, now);
+      }
 
       return NextResponse.json({ ok: true, id: newId });
     }
@@ -108,16 +106,9 @@ export async function POST(request: Request) {
       const path = joinPath(body.prefix, name);
 
       // Check if path already exists
-      let existing: { id: string } | undefined;
-      if (body.kind === "repo") {
-        existing = db.prepare(`
-          SELECT id FROM files WHERE user_id = ? AND path = ? AND repo_id = ? AND project_id IS NULL LIMIT 1
-        `).get(userId, path, body.id) as typeof existing;
-      } else {
-        existing = db.prepare(`
-          SELECT id FROM files WHERE user_id = ? AND path = ? AND project_id = ? LIMIT 1
-        `).get(userId, path, body.id) as typeof existing;
-      }
+      const existing = db.prepare(`
+        SELECT id FROM ${tableName} WHERE user_id = ? AND path = ? AND ${idColumn} = ? LIMIT 1
+      `).get(userId, path, body.id) as { id: string } | undefined;
 
       if (existing) {
         return NextResponse.json({ error: "Path already exists" }, { status: 409 });
@@ -127,21 +118,39 @@ export async function POST(request: Request) {
       const extension = name.includes(".") ? name.split(".").pop() : undefined;
       const newId = generateId();
 
-      db.prepare(`
-        INSERT INTO files (id, user_id, path, extension, language, size, source_code, repo_id, project_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).run(
-        newId,
-        userId,
-        path,
-        extension,
-        (body as any).language,
-        (body.sourceCode ?? "").length,
-        body.sourceCode ?? "",
-        body.kind === "repo" ? body.id : null,
-        body.kind === "project" ? body.id : null,
-        now
-      );
+      if (kind === "repo") {
+        db.prepare(`
+          INSERT INTO repos (id, user_id, repo_id, path, extension, language, size, source_code, parse_status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'success', ?, ?)
+        `).run(
+          newId,
+          userId,
+          body.id,
+          path,
+          extension,
+          (body as any).language,
+          (body.sourceCode ?? "").length,
+          body.sourceCode ?? "",
+          now,
+          now
+        );
+      } else {
+        db.prepare(`
+          INSERT INTO files (id, user_id, project_id, path, extension, language, size, source_code, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(
+          newId,
+          userId,
+          body.id,
+          path,
+          extension,
+          (body as any).language,
+          (body.sourceCode ?? "").length,
+          body.sourceCode ?? "",
+          now,
+          now
+        );
+      }
 
       return NextResponse.json({ ok: true, id: newId });
     }
@@ -154,30 +163,16 @@ export async function POST(request: Request) {
 
       if (body.isDir) {
         // Delete the folder marker and all files under this path prefix
-        if (body.kind === "repo") {
-          const result = db.prepare(`
-            DELETE FROM files WHERE repo_id = ? AND project_id IS NULL AND (path = ? OR path LIKE ?)
-          `).run(body.id, path, `${path}/%`);
-          deletedCount = result.changes;
-        } else {
-          const result = db.prepare(`
-            DELETE FROM files WHERE project_id = ? AND (path = ? OR path LIKE ?)
-          `).run(body.id, path, `${path}/%`);
-          deletedCount = result.changes;
-        }
+        const result = db.prepare(`
+          DELETE FROM ${tableName} WHERE ${idColumn} = ? AND (path = ? OR path LIKE ?)
+        `).run(body.id, path, `${path}/%`);
+        deletedCount = result.changes;
       } else {
         // Delete single file
-        if (body.kind === "repo") {
-          const result = db.prepare(`
-            DELETE FROM files WHERE repo_id = ? AND project_id IS NULL AND path = ?
-          `).run(body.id, path);
-          deletedCount = result.changes;
-        } else {
-          const result = db.prepare(`
-            DELETE FROM files WHERE project_id = ? AND path = ?
-          `).run(body.id, path);
-          deletedCount = result.changes;
-        }
+        const result = db.prepare(`
+          DELETE FROM ${tableName} WHERE ${idColumn} = ? AND path = ?
+        `).run(body.id, path);
+        deletedCount = result.changes;
       }
 
       if (deletedCount === 0) {

@@ -79,6 +79,8 @@ function initSchema(database: Database.Database): void {
       source_code TEXT,
       ast TEXT,
       size INTEGER,
+      parse_status TEXT DEFAULT 'success',
+      parse_error TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT
     );

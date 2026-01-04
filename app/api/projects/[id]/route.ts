@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
 import { getDb } from "../../../../src/lib/sqlite";
 
+const DEV_USER_ID = "dev-push-project";
+
 export async function GET(
     _req: Request,
     context: { params: Promise<{ id: string }> }
@@ -52,13 +54,18 @@ export async function DELETE(
         const db = getDb();
         const { id } = await context.params;
 
-        // Check if project exists
+        // Check if project exists AND verify ownership
         const exists = db.prepare(`
-            SELECT project_id FROM files WHERE project_id = ? LIMIT 1
-        `).get(id) as { project_id: string } | undefined;
+            SELECT project_id, user_id FROM files WHERE project_id = ? LIMIT 1
+        `).get(id) as { project_id: string; user_id: string } | undefined;
 
         if (!exists) {
             return NextResponse.json({ error: "Not found" }, { status: 404 });
+        }
+
+        // Only allow deletion if user owns the project or it's a dev project
+        if (exists.user_id !== userId && exists.user_id !== DEV_USER_ID) {
+            return NextResponse.json({ error: "Forbidden" }, { status: 403 });
         }
 
         // Delete all files for this project
