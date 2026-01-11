@@ -1,4 +1,4 @@
-import { getDb, generateId, toDbDate, fromJson, toJson } from "@/src/lib/sqlite";
+import { getDb, generateId, toDbDate, fromJson, toJson, normalizePrefix, escapeLike } from "@/src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 export type RepoOrProjectRef = {
@@ -147,8 +147,8 @@ export async function listPathChildren(
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
         FROM repos
-        WHERE user_id = ? AND repo_id = ? AND (path = ? OR path LIKE ?)
-      `).all(effectiveUserId, input.id, prefix, `${prefix}/%`) as typeof docs;
+        WHERE user_id = ? AND repo_id = ? AND (path = ? OR path LIKE ? ESCAPE '\\')
+      `).all(effectiveUserId, input.id, prefix, `${escapeLike(prefix)}/%`) as typeof docs;
     } else {
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
@@ -162,8 +162,8 @@ export async function listPathChildren(
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
         FROM files
-        WHERE user_id = ? AND project_id = ? AND (path = ? OR path LIKE ?)
-      `).all(effectiveUserId, input.id, prefix, `${prefix}/%`) as typeof docs;
+        WHERE user_id = ? AND project_id = ? AND (path = ? OR path LIKE ? ESCAPE '\\')
+      `).all(effectiveUserId, input.id, prefix, `${escapeLike(prefix)}/%`) as typeof docs;
     } else {
       docs = db.prepare(`
         SELECT path, extension, language, size, is_dir
@@ -274,11 +274,6 @@ export async function getFileAtPath(input: {
     size: doc.size,
     sourceCode: doc.source_code || "",
   };
-}
-
-function normalizePrefix(prefix?: string): string {
-  const p = (prefix || "").replace(/^\/+|\/+$/g, "");
-  return p;
 }
 
 function escapeRegex(s: string): string {

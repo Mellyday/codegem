@@ -1,6 +1,6 @@
 export const runtime = "nodejs";
 import { NextResponse } from "next/server";
-import { getDb, fromJson } from "../../../src/lib/sqlite";
+import { getDb, fromJson, normalizePrefix, escapeLike } from "../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 type MedalType = "bronze" | "silver" | "gold" | null;
@@ -119,24 +119,25 @@ export async function GET(request: Request) {
         }
 
         // Fetch all files under this path - NOW SCOPED BY user_id
-        const pathPrefix = prefix ? `${prefix}/` : "";
+        const p = normalizePrefix(prefix);
+        const pathPrefix = p ? `${p}/` : "";
         let allFiles: Array<{ id: string; path: string }>;
 
         if (kind === "repo") {
-            if (prefix) {
+            if (p) {
                 allFiles = db.prepare(`
-                    SELECT id, path FROM repos WHERE user_id = ? AND repo_id = ? AND path LIKE ?
-                `).all(effectiveUserId, id, `${pathPrefix}%`) as typeof allFiles;
+                    SELECT id, path FROM repos WHERE user_id = ? AND repo_id = ? AND path LIKE ? ESCAPE '\\'
+                `).all(effectiveUserId, id, `${escapeLike(pathPrefix)}%`) as typeof allFiles;
             } else {
                 allFiles = db.prepare(`
                     SELECT id, path FROM repos WHERE user_id = ? AND repo_id = ?
                 `).all(effectiveUserId, id) as typeof allFiles;
             }
         } else {
-            if (prefix) {
+            if (p) {
                 allFiles = db.prepare(`
-                    SELECT id, path FROM files WHERE user_id = ? AND project_id = ? AND path LIKE ?
-                `).all(effectiveUserId, id, `${pathPrefix}%`) as typeof allFiles;
+                    SELECT id, path FROM files WHERE user_id = ? AND project_id = ? AND path LIKE ? ESCAPE '\\'
+                `).all(effectiveUserId, id, `${escapeLike(pathPrefix)}%`) as typeof allFiles;
             } else {
                 allFiles = db.prepare(`
                     SELECT id, path FROM files WHERE user_id = ? AND project_id = ?

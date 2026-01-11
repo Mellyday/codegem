@@ -9,6 +9,8 @@ import {
 } from "../../../../src/lib/parser/treeSitterServer";
 import { getLanguageToolsForFileName } from "../../../../src/lib/languages/registry";
 
+const DEV_USER_ID = "dev-push-project";
+
 type QuizCard = {
     order: number;
     type: string;
@@ -67,7 +69,7 @@ export async function POST(request: Request) {
         }
 
         const db = getDb();
-        const DEV_USER_ID = "dev-push-project";
+
 
         // Find the file document - user-first, DEV-fallback
         let fileDoc: { id: string } | undefined;
@@ -263,7 +265,7 @@ export async function GET(request: Request) {
         const supported = canParseWithTreeSitter(ext);
 
         const db = getDb();
-        const DEV_USER_ID_GET = "dev-push-project";
+
 
         // Find the file document - user-first, DEV-fallback
         let fileDoc: { id: string } | undefined;
@@ -277,7 +279,7 @@ export async function GET(request: Request) {
             if (!fileDoc) {
                 fileDoc = db.prepare(`
                     SELECT id FROM repos WHERE repo_id = ? AND path = ? AND user_id = ? LIMIT 1
-                `).get(id, path, DEV_USER_ID_GET) as typeof fileDoc;
+                `).get(id, path, DEV_USER_ID) as typeof fileDoc;
             }
         } else {
             // User-first
@@ -289,7 +291,7 @@ export async function GET(request: Request) {
             if (!fileDoc) {
                 fileDoc = db.prepare(`
                     SELECT id FROM files WHERE project_id = ? AND path = ? AND user_id = ? LIMIT 1
-                `).get(id, path, DEV_USER_ID_GET) as typeof fileDoc;
+                `).get(id, path, DEV_USER_ID) as typeof fileDoc;
             }
         }
 

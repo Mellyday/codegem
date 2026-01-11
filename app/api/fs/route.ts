@@ -1,6 +1,6 @@
 export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
-import { getDb, generateId, toDbDate } from "@/src/lib/sqlite";
+import { getDb, generateId, toDbDate, normalizePrefix, escapeLike } from "@/src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
 
 type FsAction =
@@ -28,26 +28,17 @@ type FsAction =
     isDir?: boolean; // if true, recursively delete folder contents
   };
 
-function normalizePrefix(prefix?: string): string {
-  return (prefix || "").replace(/^\/+|\/+$/g, "");
-}
-
 function joinPath(prefix: string | undefined, name: string): string {
   const p = normalizePrefix(prefix);
   return [p, name].filter(Boolean).join("/");
 }
 
-// Fix #1: Escape LIKE wildcards to prevent unintended matches
-function escapeLike(s: string): string {
-  return s.replace(/[\\%_]/g, (m) => `\\${m}`);
-}
-
-// Fix #2: Normalize path (remove leading/trailing slashes)
+// Normalize path for delete operations
 function normalizePath(path: string): string {
   return path.trim().replace(/^\/+|\/+$/g, "");
 }
 
-// Fix #3: Check for . and .. segments in path
+// Check for . and .. segments in path
 function hasDotSegments(path?: string): boolean {
   return normalizePrefix(path).split("/").some(seg => seg === "." || seg === "..");
 }

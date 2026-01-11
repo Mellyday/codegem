@@ -242,3 +242,14 @@ export function closeDb(): void {
         db = null;
     }
 }
+
+// Helper to normalize path prefix (remove leading/trailing slashes)
+export function normalizePrefix(prefix?: string): string {
+    return (prefix || "").replace(/^\/+|\/+$/g, "");
+}
+
+// Helper to escape SQL LIKE wildcards (%, _, \)
+export function escapeLike(s: string): string {
+    return s.replace(/[\\%_]/g, (m) => `\\${m}`);
+}
+
