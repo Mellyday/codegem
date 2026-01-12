@@ -354,6 +354,22 @@ export const SandboxViewer = ({
 
   // Mobile panel toggle: which panel to show on small screens
   const [mobilePanel, setMobilePanel] = useState<"content" | "code">("content");
+  const isQuizView =
+    viewMode === "quiz_setup" ||
+    viewMode === "quiz_active" ||
+    viewMode === "quiz_complete";
+  const showMobilePanelToggle = viewMode === "ast" || viewMode === "lesson";
+  const showContentPanel = isQuizView || mobilePanel === "content";
+  const showCodePanel = isQuizView || mobilePanel === "code";
+  const contentOrderClass = isQuizView
+    ? "order-2 lg:order-1"
+    : "order-1 lg:order-1";
+  const codeOrderClass = isQuizView
+    ? "order-1 lg:order-2"
+    : "order-2 lg:order-2";
+  const codeScrollMaxClass = isQuizView
+    ? "max-h-[40vh] lg:max-h-[calc(100vh-64px-120px)]"
+    : "max-h-[calc(100vh-64px-120px)]";
 
   // Compute parent folder URL based on fileKey
   const parentFolderUrl = useMemo(() => {
@@ -500,7 +516,7 @@ export const SandboxViewer = ({
   // When in quiz mode, keep the code view scrolled to the bottom (show latest lines)
   useEffect(() => {
     if (
-      (viewMode === "quiz_active" || viewMode === "quiz_complete") &&
+      isQuizView &&
       codeScrollRef.current
     ) {
       const el = codeScrollRef.current;
@@ -513,7 +529,7 @@ export const SandboxViewer = ({
         }
       });
     }
-  }, [viewMode, revealEndIndex]);
+  }, [isQuizView, revealEndIndex]);
 
   // Active Tree-sitter root: either zoomed root or top-level AST (Tree-sitter only)
   const activeTsRoot: TreeSitterAstNode | undefined = useMemo(() => {
@@ -734,23 +750,24 @@ export const SandboxViewer = ({
   return (
     <div className="h-[calc(100vh-64px)] overflow-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60">
       {/* Header - matching project-navigator FileHeader style */}
-      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 lg:px-5 py-2 lg:py-3">
         {/* Left side - File info */}
-        <div className="flex items-center gap-4">
-          {/* File icon with language-specific styling */}
-          <div className={`flex items-center justify-center w-10 h-10 rounded-lg ring-1 ${fileInfo.iconContainerClass}`}>
+        <div className="flex items-center gap-2 lg:gap-4 min-w-0">
+          {/* File icon - smaller on mobile */}
+          <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-10 lg:h-10 rounded-lg ring-1 ${fileInfo.iconContainerClass}`}>
             {fileInfo.icon}
           </div>
 
           {/* File name and path */}
-          <div className="flex flex-col gap-0.5">
+          <div className="flex flex-col gap-0.5 min-w-0">
             <div className="flex items-center gap-2">
-              <h1 className="text-base font-semibold text-slate-800">{fileName}</h1>
-              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${fileInfo.badgeClass}`}>
+              <h1 className="text-sm lg:text-base font-semibold text-slate-800 truncate">{fileName}</h1>
+              <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-medium rounded-full ${fileInfo.badgeClass}`}>
                 {fileInfo.language}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-sm text-slate-500 font-mono">
+            {/* Hide path on mobile */}
+            <div className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 font-mono">
               <span className="opacity-60">repo</span>
               <ChevronRight className="w-3 h-3 opacity-40" />
               <span className="truncate max-w-md">{sandboxId}</span>
@@ -759,8 +776,9 @@ export const SandboxViewer = ({
         </div>
 
         {/* Right side - Actions */}
-        <div className="flex items-center gap-3">
-          <span className="text-sm text-slate-500">
+        <div className="flex items-center gap-1 lg:gap-3">
+          {/* Line count - hide on mobile */}
+          <span className="hidden lg:inline text-sm text-slate-500">
             {lineCount} lines
           </span>
 
@@ -787,8 +805,8 @@ export const SandboxViewer = ({
             </button>
           </div>
 
-          {/* Mobile panel toggle - only visible on small screens */}
-          {viewMode !== "quiz_setup" && (
+          {/* Mobile panel toggle - AST/Lesson only */}
+          {showMobilePanelToggle && (
             <div className="flex lg:hidden items-center gap-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
               <button
                 type="button"
@@ -799,7 +817,7 @@ export const SandboxViewer = ({
                   }`}
               >
                 <PanelLeft className="w-3.5 h-3.5" />
-                {viewMode === "ast" ? "AST" : "Quiz"}
+                {viewMode === "ast" ? "AST" : "Lesson"}
               </button>
               <button
                 type="button"
@@ -859,25 +877,19 @@ export const SandboxViewer = ({
       {state.status === "loaded" && (
         <div
           className={
-            viewMode === "quiz_setup"
-              ? "flex-1"
-              : viewMode === "quiz_active" || viewMode === "quiz_complete"
-                ? "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
-                : "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
+            isQuizView
+              ? "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
+              : "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
           }
         >
           {/* Main Content - AST / Quiz / Lesson */}
           <div
             className={
-              "bg-white flex-col h-full overflow-auto " +
-              (viewMode === "quiz_setup" ||
-                viewMode === "quiz_active" ||
-                viewMode === "quiz_complete"
-                ? "p-6 "
-                : "") +
-              (viewMode === "quiz_setup"
-                ? "flex "
-                : (mobilePanel === "content" ? "flex " : "hidden ") + "lg:flex lg:order-1")
+              "bg-white flex-col h-full min-h-0 overflow-hidden " +
+              (isQuizView ? "p-6 " : "") +
+              (showContentPanel ? "flex " : "hidden ") +
+              "lg:flex " +
+              contentOrderClass
             }
           >
             {viewMode === "ast" && (
@@ -904,10 +916,7 @@ export const SandboxViewer = ({
                 </div>
 
                 {/* AST Content */}
-                <div
-                  className="flex-1 overflow-auto p-4 scrollbar-teal"
-                  style={{ maxHeight: "calc(100vh - 64px - 316px)" }}
-                >
+                <div className="flex-1 min-h-0 overflow-auto p-4 scrollbar-teal">
                   {(parseResult === undefined || isParsing) && (
                     <p className="text-sm text-slate-500">Parsing code…</p>
                   )}
@@ -1033,39 +1042,35 @@ export const SandboxViewer = ({
                     ) : (
                       <AstTree root={parseResult.ast} defaultOpenDepth={2} />
                     ))}
-                </div>
-
-                {/* Action Buttons */}
-                {parseResult?.status === "success" &&
-                  parseResult.parser === "tree-sitter" && (
-                    <div className="border-t border-slate-200/60 p-3 mt-auto">
-                      <div className="flex flex-col gap-2">
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-400 to-cyan-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:from-teal-500 hover:to-cyan-600"
-                          onClick={() => setViewMode("lesson")}
-                        >
-                          <GraduationCap className="h-4 w-4" />
-                          Teach Me
-                        </button>
-                        <button
-                          type="button"
-                          className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
-                          onClick={() => setViewMode("quiz_setup")}
-                        >
-                          <HelpCircle className="h-4 w-4" />
-                          Quiz Me
-                        </button>
+                  {parseResult?.status === "success" &&
+                    parseResult.parser === "tree-sitter" && (
+                      <div className="sticky bottom-0 -mx-4 mt-4 border-t border-slate-200/60 bg-white/95 px-4 pt-3 pb-3">
+                        <div className="flex flex-col gap-2">
+                          <button
+                            type="button"
+                            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-400 to-cyan-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:from-teal-500 hover:to-cyan-600"
+                            onClick={() => setViewMode("lesson")}
+                          >
+                            <GraduationCap className="h-4 w-4" />
+                            Teach Me
+                          </button>
+                          <button
+                            type="button"
+                            className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
+                            onClick={() => setViewMode("quiz_setup")}
+                          >
+                            <HelpCircle className="h-4 w-4" />
+                            Quiz Me
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                </div>
               </>
             )}
 
-            {(viewMode === "quiz_setup" ||
-              viewMode === "quiz_active" ||
-              viewMode === "quiz_complete") &&
-              parseResult?.status === "success" && (
+            {isQuizView && parseResult?.status === "success" && (
+              <div className="flex-1 min-h-0 overflow-auto">
                 <QuizViewer
                   root={
                     (activeTsRoot as TreeSitterAstNode) ??
@@ -1092,11 +1097,12 @@ export const SandboxViewer = ({
                     setCurrentSectionIndex(sectionIndex);
                   }}
                 />
-              )}
+              </div>
+            )}
 
             {viewMode === "lesson" &&
               parseResult?.status === "success" && (
-                <div className="flex-1 overflow-auto p-4">
+                <div className="flex-1 min-h-0 overflow-auto p-4">
                   <LessonViewer
                     root={
                       (activeTsRoot as TreeSitterAstNode) ??
@@ -1113,51 +1119,50 @@ export const SandboxViewer = ({
               )}
           </div>
 
-          {/* Right Column - Source Code (hidden in quiz_setup mode) */}
-          {viewMode !== "quiz_setup" && (
-            <div className={`bg-cyan-50/80 flex-col ${mobilePanel === "code" ? "flex" : "hidden"} lg:flex lg:order-2`}>
-              {/* Source Code Header */}
-              <div className="flex items-center justify-between border-b border-cyan-200/60 bg-cyan-50 px-4 py-2.5">
-                <div className="flex items-center gap-2">
-                  <Code className="h-4 w-4 text-violet-500" />
-                  <h2 className="text-sm font-semibold text-slate-700">
-                    Source Code
-                  </h2>
-                </div>
-                <span className="text-xs text-slate-400">
-                  {codeSlice.lines.length} lines
-                </span>
+          {/* Right Column - Source Code */}
+          <div
+            className={`bg-cyan-50/80 flex-col min-h-0 ${showCodePanel ? "flex" : "hidden"} lg:flex ${codeOrderClass}`}
+          >
+            {/* Source Code Header */}
+            <div className="flex items-center justify-between border-b border-cyan-200/60 bg-cyan-50 px-4 py-2.5">
+              <div className="flex items-center gap-2">
+                <Code className="h-4 w-4 text-violet-500" />
+                <h2 className="text-sm font-semibold text-slate-700">
+                  Source Code
+                </h2>
               </div>
+              <span className="text-xs text-slate-400">
+                {codeSlice.lines.length} lines
+              </span>
+            </div>
 
-              {/* Source Code Content */}
-              <div
-                ref={codeScrollRef}
-                className="flex-1 overflow-auto px-0 py-0"
-                style={{ maxHeight: "calc(100vh - 64px - 120px)" }}
-              >
-                {/*
+            {/* Source Code Content */}
+            <div
+              ref={codeScrollRef}
+              className={`flex-1 overflow-auto px-0 py-0 ${codeScrollMaxClass}`}
+            >
+              {/*
                 Use a normal div with explicit whitespace + monospace so the
                 inner line <div>s don't break <pre> semantics on some browsers.
                 This fixes jagged line numbers and collapsed indentation,
                 especially on mobile Safari.
               */}
-                <div className="text-xs leading-snug font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
-                  {codeSlice.lines.map((line: string, i: number) => (
-                    <CodeLine
-                      key={i}
-                      line={line || " "}
-                      lineIndex={i}
-                      lineNo={i + 1}
-                      lineDigits={lineDigits}
-                      spans={lineSyntaxSpans[i] ?? []}
-                      hl={lineHL[i]}
-                      onLineClick={handleLineClick}
-                    />
-                  ))}
-                </div>
+              <div className="text-xs leading-snug font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
+                {codeSlice.lines.map((line: string, i: number) => (
+                  <CodeLine
+                    key={i}
+                    line={line || " "}
+                    lineIndex={i}
+                    lineNo={i + 1}
+                    lineDigits={lineDigits}
+                    spans={lineSyntaxSpans[i] ?? []}
+                    hl={lineHL[i]}
+                    onLineClick={handleLineClick}
+                  />
+                ))}
               </div>
             </div>
-          )}
+          </div>
         </div>
       )}
     </div>
