@@ -1122,7 +1122,7 @@ export const SandboxViewer = ({
             )}
 
             {isQuizView && parseResult?.status === "success" && (
-              <div className="flex-1 min-h-0 overflow-auto">
+              <div className="flex-1 min-h-0 overflow-auto scrollbar-subtle pr-2">
                 <QuizViewer
                   root={
                     (activeTsRoot as TreeSitterAstNode) ??

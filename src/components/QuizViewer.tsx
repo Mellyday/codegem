@@ -1151,7 +1151,7 @@ export const QuizViewer = ({
 
         {/* Step Navigator - chips + desktop slider */}
         <div className="flex items-center justify-between gap-2">
-          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-1 -mx-1 px-1">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-hidden py-1 -mx-1 px-1">
             {stepNavItems.map((it, idx) =>
               typeof it === "number" ? (
                 <button
