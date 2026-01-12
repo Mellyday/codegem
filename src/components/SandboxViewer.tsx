@@ -1,5 +1,5 @@
 "use client";
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle, ChevronRight, Copy, ExternalLink, PanelLeft, PanelRight } from "lucide-react";
 import {
@@ -342,6 +342,8 @@ export const SandboxViewer = ({
   >([]);
   // Ref to the scrollable code container so we can control scroll position
   const codeScrollRef = useRef<HTMLDivElement | null>(null);
+  const codePanelRef = useRef<HTMLDivElement | null>(null);
+  const prevCodePanelHeight = useRef<number | null>(null);
   // Zoom state for Tree-sitter AST: stack of previous roots and current zoom root
   const [zoomStackTs, setZoomStackTs] = useState<TreeSitterAstNode[]>([]);
   const [zoomRootTs, setZoomRootTs] = useState<TreeSitterAstNode | undefined>(
@@ -353,7 +355,7 @@ export const SandboxViewer = ({
   const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0);
 
   // Mobile panel toggle: which panel to show on small screens
-  const [mobilePanel, setMobilePanel] = useState<"content" | "code">("content");
+  const [mobilePanel, setMobilePanel] = useState<"content" | "code">("code");
   const isQuizView =
     viewMode === "quiz_setup" ||
     viewMode === "quiz_active" ||
@@ -367,8 +369,13 @@ export const SandboxViewer = ({
   const codeOrderClass = isQuizView
     ? "order-1 lg:order-2"
     : "order-2 lg:order-2";
+  const contentHeightClass = isQuizView ? "h-auto" : "h-full";
+  const contentOverflowClass = isQuizView ? "overflow-visible" : "overflow-hidden";
+  const codeScrollClass = isQuizView
+    ? "overflow-visible"
+    : "flex-1 min-h-0 overflow-auto";
   const codeScrollMaxClass = isQuizView
-    ? "max-h-[40vh] lg:max-h-[calc(100vh-64px-120px)]"
+    ? "max-h-none"
     : "max-h-[calc(100vh-64px-120px)]";
 
   // Compute parent folder URL based on fileKey
@@ -513,6 +520,11 @@ export const SandboxViewer = ({
     }
   }, [storageKey, viewMode, revealEndIndex, maskRanges]);
 
+  // Default to code view on mobile when entering a new file
+  useEffect(() => {
+    setMobilePanel("code");
+  }, [fileName, sandboxId]);
+
   // When in quiz mode, keep the code view scrolled to the bottom (show latest lines)
   useEffect(() => {
     if (
@@ -594,6 +606,25 @@ export const SandboxViewer = ({
     revealEndIndex,
     maskRanges,
   ]);
+
+  useLayoutEffect(() => {
+    if (!isQuizView) {
+      prevCodePanelHeight.current = null;
+      return;
+    }
+    const el = codePanelRef.current;
+    if (!el) return;
+    const nextHeight = el.getBoundingClientRect().height;
+    const prevHeight = prevCodePanelHeight.current;
+    prevCodePanelHeight.current = nextHeight;
+    if (prevHeight === null) return;
+    const delta = nextHeight - prevHeight;
+    if (delta === 0) return;
+    if (window.matchMedia("(min-width: 1024px)").matches) return;
+    if (el.getBoundingClientRect().top < 0) {
+      window.scrollBy({ top: delta, left: 0 });
+    }
+  }, [isQuizView, codeSlice.lines.length]);
 
   // Responsive, content-sized line number gutter width (in ch units)
   const lineDigits = useMemo(() => {
@@ -748,7 +779,14 @@ export const SandboxViewer = ({
   }, [state]);
 
   return (
-    <div className="h-[calc(100vh-64px)] overflow-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60">
+    <div
+      className={
+        (isQuizView
+          ? "min-h-[calc(100vh-64px)] "
+          : "h-[calc(100vh-64px)] overflow-hidden ") +
+        "overflow-x-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60"
+      }
+    >
       {/* Header - matching project-navigator FileHeader style */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 lg:px-5 py-2 lg:py-3">
         {/* Left side - File info */}
@@ -878,14 +916,18 @@ export const SandboxViewer = ({
         <div
           className={
             isQuizView
-              ? "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
+              ? "flex-1 grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
               : "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
           }
         >
           {/* Main Content - AST / Quiz / Lesson */}
           <div
             className={
-              "bg-white flex-col h-full min-h-0 overflow-hidden " +
+              "bg-white flex-col " +
+              contentHeightClass +
+              " min-h-0 " +
+              contentOverflowClass +
+              " " +
               (isQuizView ? "p-6 " : "") +
               (showContentPanel ? "flex " : "hidden ") +
               "lg:flex " +
@@ -1042,35 +1084,36 @@ export const SandboxViewer = ({
                     ) : (
                       <AstTree root={parseResult.ast} defaultOpenDepth={2} />
                     ))}
-                  {parseResult?.status === "success" &&
-                    parseResult.parser === "tree-sitter" && (
-                      <div className="sticky bottom-0 -mx-4 mt-4 border-t border-slate-200/60 bg-white/95 px-4 pt-3 pb-3">
-                        <div className="flex flex-col gap-2">
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-400 to-cyan-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:from-teal-500 hover:to-cyan-600"
-                            onClick={() => setViewMode("lesson")}
-                          >
-                            <GraduationCap className="h-4 w-4" />
-                            Teach Me
-                          </button>
-                          <button
-                            type="button"
-                            className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
-                            onClick={() => setViewMode("quiz_setup")}
-                          >
-                            <HelpCircle className="h-4 w-4" />
-                            Quiz Me
-                          </button>
-                        </div>
-                      </div>
-                    )}
                 </div>
+
+                {parseResult?.status === "success" &&
+                  parseResult.parser === "tree-sitter" && (
+                    <div className="border-t border-slate-200/60 p-3">
+                      <div className="flex flex-col gap-2">
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-400 to-cyan-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:from-teal-500 hover:to-cyan-600"
+                          onClick={() => setViewMode("lesson")}
+                        >
+                          <GraduationCap className="h-4 w-4" />
+                          Teach Me
+                        </button>
+                        <button
+                          type="button"
+                          className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
+                          onClick={() => setViewMode("quiz_setup")}
+                        >
+                          <HelpCircle className="h-4 w-4" />
+                          Quiz Me
+                        </button>
+                      </div>
+                    </div>
+                  )}
               </>
             )}
 
             {isQuizView && parseResult?.status === "success" && (
-              <div className="flex-1 min-h-0 overflow-auto">
+              <div className="min-h-0">
                 <QuizViewer
                   root={
                     (activeTsRoot as TreeSitterAstNode) ??
@@ -1121,6 +1164,7 @@ export const SandboxViewer = ({
 
           {/* Right Column - Source Code */}
           <div
+            ref={codePanelRef}
             className={`bg-cyan-50/80 flex-col min-h-0 ${showCodePanel ? "flex" : "hidden"} lg:flex ${codeOrderClass}`}
           >
             {/* Source Code Header */}
@@ -1136,10 +1180,35 @@ export const SandboxViewer = ({
               </span>
             </div>
 
+            {viewMode === "ast" &&
+              parseResult?.status === "success" &&
+              parseResult.parser === "tree-sitter" && (
+                <div className="lg:hidden border-b border-cyan-200/60 bg-cyan-50 px-4 py-3">
+                  <div className="flex flex-col gap-2">
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg bg-gradient-to-r from-teal-400 to-cyan-500 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:from-teal-500 hover:to-cyan-600"
+                      onClick={() => setViewMode("lesson")}
+                    >
+                      <GraduationCap className="h-4 w-4" />
+                      Teach Me
+                    </button>
+                    <button
+                      type="button"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
+                      onClick={() => setViewMode("quiz_setup")}
+                    >
+                      <HelpCircle className="h-4 w-4" />
+                      Quiz Me
+                    </button>
+                  </div>
+                </div>
+              )}
+
             {/* Source Code Content */}
             <div
               ref={codeScrollRef}
-              className={`flex-1 overflow-auto px-0 py-0 ${codeScrollMaxClass}`}
+              className={`${codeScrollClass} px-0 py-0 ${codeScrollMaxClass}`}
             >
               {/*
                 Use a normal div with explicit whitespace + monospace so the
