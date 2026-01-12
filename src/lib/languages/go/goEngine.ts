@@ -104,6 +104,13 @@ const headerAnswer = (node: TreeSitterAstNode, code?: string): string => {
   return raw.replace(/\{\s*$/, "").trimEnd();
 };
 
+const unwrapLiteralElement = (
+  node: TreeSitterAstNode | undefined
+): TreeSitterAstNode | undefined => {
+  if (!node || node.type !== "literal_element") return node;
+  return (node.namedChildren || [])[0] || node;
+};
+
 const displaySpanForNode = (node: TreeSitterAstNode) => {
   const span = headerSpanByAst(node);
   if (span.end <= span.start) {
@@ -1311,9 +1318,9 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
   const keyNodeByText = new Map<string, TreeSitterAstNode>();
   for (const elem of elements) {
     if (elem.type !== "keyed_element") continue;
-    const keyNode = getSectionFirstItem(elem, "key");
+    const keyNode = unwrapLiteralElement(getSectionFirstItem(elem, "key"));
     if (!keyNode) continue;
-    const valueNode = getSectionFirstItem(elem, "value");
+    const valueNode = unwrapLiteralElement(getSectionFirstItem(elem, "value"));
     const keyText = textForRange(keyNode.startIndex, keyNode.endIndex, code) || keyNode.type;
     if (!keyText) continue;
     keyed.push({ keyNode, valueNode, keyText });
@@ -1393,6 +1400,28 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
   for (const entry of keyed) {
     const valueNode = entry.valueNode;
     if (!valueNode) continue;
+    const keyRef: SourceRef = {
+      nodeType: entry.keyNode.type,
+      start: entry.keyNode.startIndex,
+      end: entry.keyNode.endIndex,
+      path: computeAstPath(root, entry.keyNode),
+    };
+    const valueRef: SourceRef = {
+      nodeType: valueNode.type,
+      start: valueNode.startIndex,
+      end: valueNode.endIndex,
+      path: computeAstPath(root, valueNode),
+    };
+    const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
+    qs.push({
+      kind: "composite.value",
+      stem: `What is the value for ${label.keySingular} ${entry.keyText}?`,
+      answerLabel: valueText,
+      options: buildDistractors(valueText),
+      sourceRefs: [keyRef, valueRef, sourceRef],
+      generatorRule: "composite.value",
+    });
+
     const valueQuestions = generateQuestionsV11(root, valueNode, profile, code);
     const bodyQuestions: Q11[] = [];
     if (valueNode.type === "func_literal") {
@@ -1400,32 +1429,25 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
       if (body) bodyQuestions.push(...collectQuestionsForBlock(root, body, profile, code));
     }
 
-    if (valueQuestions.length === 0 && bodyQuestions.length === 0) {
-      const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
-      qs.push({
-        kind: "composite.value",
-        stem: `What is the value for ${label.keySingular} ${entry.keyText}?`,
-        answerLabel: valueText,
-        options: buildDistractors(valueText),
-        sourceRefs: [
-          {
-            nodeType: valueNode.type,
-            start: valueNode.startIndex,
-            end: valueNode.endIndex,
-            path: computeAstPath(root, valueNode),
-          },
-          {
-            nodeType: entry.keyNode.type,
-            start: entry.keyNode.startIndex,
-            end: entry.keyNode.endIndex,
-            path: computeAstPath(root, entry.keyNode),
-          },
-          sourceRef,
-        ],
-        generatorRule: "composite.value",
-      });
-    } else {
-      qs.push(...valueQuestions, ...bodyQuestions);
+    if (valueQuestions.length > 0) {
+      qs.push(
+        ...valueQuestions.map((q) => ({
+          ...q,
+          stem: `For ${label.keySingular} ${entry.keyText}: ${q.stem}`,
+          sourceRefs: [keyRef, ...(q.sourceRefs || [])],
+          generatorRule: `composite.value.${q.generatorRule}`,
+        }))
+      );
+    }
+    if (bodyQuestions.length > 0) {
+      qs.push(
+        ...bodyQuestions.map((q) => ({
+          ...q,
+          stem: `For ${label.keySingular} ${entry.keyText}: ${q.stem}`,
+          sourceRefs: [keyRef, ...(q.sourceRefs || [])],
+          generatorRule: `composite.value.${q.generatorRule}`,
+        }))
+      );
     }
   }
 
@@ -2198,12 +2220,22 @@ const ruleExpressionStatement: Rule = ({ root, node, code, sourceRef, profile })
   return qs;
 };
 
+const ruleCallExpression: Rule = ({ root, node, code, sourceRef, profile }) => {
+  const qs = buildCallQuestions(node, code, sourceRef, profile, "What function is called?");
+  const composites = findCompositeLiteralNodes(node);
+  for (const lit of composites) {
+    qs.push(...generateQuestionsV11(root, lit, profile, code));
+  }
+  return qs;
+};
+
 const rules: Record<string, Rule[]> = {
   package_clause: [rulePackageClause],
   function_declaration: [headerRule, ruleFunctionDecl],
   method_declaration: [headerRule, ruleMethodDecl],
   func_literal: [ruleFunctionDecl],
   composite_literal: [ruleCompositeLiteral],
+  call_expression: [ruleCallExpression],
   type_declaration: [ruleTypeDeclaration],
   const_declaration: [ruleConstVarDecl],
   var_declaration: [ruleConstVarDecl],
