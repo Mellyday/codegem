@@ -371,11 +371,9 @@ export const SandboxViewer = ({
   const codeOrderClass = isQuizView
     ? "order-1 lg:order-2"
     : "order-2 lg:order-2";
-  const contentHeightClass = isQuizView ? "h-auto" : "h-full";
-  const contentOverflowClass = isQuizView ? "overflow-visible" : "overflow-hidden";
-  const codeScrollClass = isQuizView
-    ? "overflow-visible"
-    : "flex-1 min-h-0 overflow-auto";
+  const contentHeightClass = "h-full";
+  const contentOverflowClass = "overflow-hidden";
+  const codeScrollClass = "flex-1 min-h-0 overflow-auto";
   const codeScrollMaxClass = isQuizView
     ? "max-h-none"
     : "max-h-[calc(100vh-64px-120px)]";
@@ -783,9 +781,7 @@ export const SandboxViewer = ({
   return (
     <div
       className={
-        (isQuizView
-          ? "min-h-[calc(100vh-64px)] "
-          : "h-[calc(100vh-64px)] overflow-hidden ") +
+        "h-[calc(100vh-64px)] overflow-hidden " +
         "overflow-x-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60"
       }
     >
@@ -918,7 +914,7 @@ export const SandboxViewer = ({
         <div
           className={
             isQuizView
-              ? "flex-1 grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
+              ? "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
               : "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
           }
         >
@@ -1115,7 +1111,7 @@ export const SandboxViewer = ({
             )}
 
             {isQuizView && parseResult?.status === "success" && (
-              <div className="min-h-0">
+              <div className="flex-1 min-h-0 overflow-auto">
                 <QuizViewer
                   root={
                     (activeTsRoot as TreeSitterAstNode) ??
