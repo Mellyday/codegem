@@ -794,113 +794,115 @@ export const SandboxViewer = ({
         "overflow-x-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60"
       }
     >
-      {/* Header - matching project-navigator FileHeader style */}
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 lg:px-5 py-2 lg:py-3">
-        {/* Left side - File info */}
-        <div className="flex items-center gap-2 lg:gap-4 min-w-0">
-          {/* File icon - smaller on mobile */}
-          <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-10 lg:h-10 rounded-lg ring-1 ${fileInfo.iconContainerClass}`}>
-            {fileInfo.icon}
-          </div>
-
-          {/* File name and path */}
-          <div className="flex flex-col gap-0.5 min-w-0">
-            <div className="flex items-center gap-2">
-              <h1 className="text-sm lg:text-base font-semibold text-slate-800 truncate">{fileName}</h1>
-              <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-medium rounded-full ${fileInfo.badgeClass}`}>
-                {fileInfo.language}
-              </span>
+      {/* Header - matching project-navigator FileHeader style - hidden in quiz mode */}
+      {!isQuizView && (
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 bg-white px-3 lg:px-5 py-2 lg:py-3">
+          {/* Left side - File info */}
+          <div className="flex items-center gap-2 lg:gap-4 min-w-0">
+            {/* File icon - smaller on mobile */}
+            <div className={`flex-shrink-0 flex items-center justify-center w-8 h-8 lg:w-10 lg:h-10 rounded-lg ring-1 ${fileInfo.iconContainerClass}`}>
+              {fileInfo.icon}
             </div>
-            {/* Hide path on mobile */}
-            <div className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 font-mono">
-              <span className="opacity-60">repo</span>
-              <ChevronRight className="w-3 h-3 opacity-40" />
-              <span className="truncate max-w-md">{sandboxId}</span>
+
+            {/* File name and path */}
+            <div className="flex flex-col gap-0.5 min-w-0">
+              <div className="flex items-center gap-2">
+                <h1 className="text-sm lg:text-base font-semibold text-slate-800 truncate">{fileName}</h1>
+                <span className={`flex-shrink-0 px-2 py-0.5 text-xs font-medium rounded-full ${fileInfo.badgeClass}`}>
+                  {fileInfo.language}
+                </span>
+              </div>
+              {/* Hide path on mobile */}
+              <div className="hidden lg:flex items-center gap-1.5 text-sm text-slate-500 font-mono">
+                <span className="opacity-60">repo</span>
+                <ChevronRight className="w-3 h-3 opacity-40" />
+                <span className="truncate max-w-md">{sandboxId}</span>
+              </div>
             </div>
           </div>
-        </div>
 
-        {/* Right side - Actions */}
-        <div className="flex items-center gap-1 lg:gap-3">
-          {/* Line count - hide on mobile */}
-          <span className="hidden lg:inline text-sm text-slate-500">
-            {lineCount} lines
-          </span>
+          {/* Right side - Actions */}
+          <div className="flex items-center gap-1 lg:gap-3">
+            {/* Line count - hide on mobile */}
+            <span className="hidden lg:inline text-sm text-slate-500">
+              {lineCount} lines
+            </span>
 
-          <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              className="flex items-center gap-1.5 h-8 px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
-              onClick={() => {
-                if (state.status === "loaded") {
-                  navigator.clipboard.writeText(state.code);
-                }
-              }}
-            >
-              <Copy className="w-4 h-4" />
-              <span className="hidden sm:inline">Copy</span>
-            </button>
-
-            <button
-              type="button"
-              className="flex items-center gap-1.5 h-8 px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
-            >
-              <ExternalLink className="w-4 h-4" />
-              <span className="hidden sm:inline">Open</span>
-            </button>
-          </div>
-
-          {/* Mobile panel toggle - AST/Lesson only */}
-          {showMobilePanelToggle && (
-            <div className="flex lg:hidden items-center gap-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+            <div className="flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={() => setMobilePanel("content")}
-                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors ${mobilePanel === "content"
-                  ? "bg-white text-slate-800 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
-                  }`}
+                className="flex items-center gap-1.5 h-8 px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+                onClick={() => {
+                  if (state.status === "loaded") {
+                    navigator.clipboard.writeText(state.code);
+                  }
+                }}
               >
-                <PanelLeft className="w-3.5 h-3.5" />
-                {viewMode === "ast" ? "AST" : "Lesson"}
+                <Copy className="w-4 h-4" />
+                <span className="hidden sm:inline">Copy</span>
               </button>
+
               <button
                 type="button"
-                onClick={() => setMobilePanel("code")}
-                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors ${mobilePanel === "code"
-                  ? "bg-white text-slate-800 shadow-sm"
-                  : "text-slate-500 hover:text-slate-700"
-                  }`}
+                className="flex items-center gap-1.5 h-8 px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
               >
-                <PanelRight className="w-3.5 h-3.5" />
-                Code
+                <ExternalLink className="w-4 h-4" />
+                <span className="hidden sm:inline">Open</span>
               </button>
             </div>
-          )}
 
-          <div className="w-px h-6 bg-slate-200 hidden lg:block" />
+            {/* Mobile panel toggle - AST/Lesson only */}
+            {showMobilePanelToggle && (
+              <div className="flex lg:hidden items-center gap-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("content")}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors ${mobilePanel === "content"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                    }`}
+                >
+                  <PanelLeft className="w-3.5 h-3.5" />
+                  {viewMode === "ast" ? "AST" : "Lesson"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMobilePanel("code")}
+                  className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors ${mobilePanel === "code"
+                    ? "bg-white text-slate-800 shadow-sm"
+                    : "text-slate-500 hover:text-slate-700"
+                    }`}
+                >
+                  <PanelRight className="w-3.5 h-3.5" />
+                  Code
+                </button>
+              </div>
+            )}
 
-          {viewMode !== "ast" && (
-            <button
-              type="button"
-              onClick={() => setViewMode("ast")}
-              className="flex items-center gap-1.5 h-9 px-3 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+            <div className="w-px h-6 bg-slate-200 hidden lg:block" />
+
+            {viewMode !== "ast" && (
+              <button
+                type="button"
+                onClick={() => setViewMode("ast")}
+                className="flex items-center gap-1.5 h-9 px-3 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
+              >
+                <FileText className="h-4 w-4" />
+                Back to File
+              </button>
+            )}
+
+            {/* Back to folder - prominent button matching reference */}
+            <Link
+              href={parentFolderUrl}
+              className="flex items-center gap-2 h-9 px-3 text-sm font-medium border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-500 hover:text-white hover:border-blue-500 transition-all"
             >
-              <FileText className="h-4 w-4" />
-              Back to File
-            </button>
-          )}
-
-          {/* Back to folder - prominent button matching reference */}
-          <Link
-            href={parentFolderUrl}
-            className="flex items-center gap-2 h-9 px-3 text-sm font-medium border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-500 hover:text-white hover:border-blue-500 transition-all"
-          >
-            <FolderOpen className="w-4 h-4" />
-            Back to Folder
-          </Link>
+              <FolderOpen className="w-4 h-4" />
+              Back to Folder
+            </Link>
+          </div>
         </div>
-      </div>
+      )}
 
       {state.status === "loading" && (
         <div className="flex-1 flex items-center justify-center bg-white">
@@ -1107,7 +1109,7 @@ export const SandboxViewer = ({
                         </button>
                         <button
                           type="button"
-                          className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
+                          className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-violet-400 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-600 transition hover:bg-violet-100 hover:border-violet-500"
                           onClick={() => setViewMode("quiz_setup")}
                         >
                           <HelpCircle className="h-4 w-4" />
@@ -1147,6 +1149,7 @@ export const SandboxViewer = ({
                     setCurrentQuizId(quizId);
                     setCurrentSectionIndex(sectionIndex);
                   }}
+                  parentFolderUrl={parentFolderUrl}
                 />
               </div>
             )}
@@ -1178,10 +1181,12 @@ export const SandboxViewer = ({
             {/* Source Code Header */}
             <div className="flex items-center justify-between border-b border-cyan-200/60 bg-cyan-50 px-4 py-2.5">
               <div className="flex items-center gap-2">
-                <Code className="h-4 w-4 text-violet-500" />
-                <h2 className="text-sm font-semibold text-slate-700">
-                  Source Code
-                </h2>
+                <div>
+                  <h2 className="text-sm font-semibold text-slate-700">
+                    {fileName}
+                  </h2>
+                  <span className="text-xs text-slate-400">Source Code</span>
+                </div>
               </div>
               <span className="text-xs text-slate-400">
                 {codeSlice.lines.length} lines
@@ -1203,7 +1208,7 @@ export const SandboxViewer = ({
                     </button>
                     <button
                       type="button"
-                      className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-4 py-2.5 text-sm font-medium text-amber-600 transition hover:bg-amber-100 hover:border-amber-500"
+                      className="flex w-full items-center justify-center gap-2 rounded-lg border-2 border-violet-400 bg-violet-50 px-4 py-2.5 text-sm font-medium text-violet-600 transition hover:bg-violet-100 hover:border-violet-500"
                       onClick={() => setViewMode("quiz_setup")}
                     >
                       <HelpCircle className="h-4 w-4" />

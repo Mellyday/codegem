@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronsLeft, ChevronsRight } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, FileUp, FolderUp, Code } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
 import { getLanguageToolsForFileName } from "../lib/languages/registry";
@@ -31,6 +31,8 @@ export type QuizViewerProps = {
   sectionIndex?: number;
   // Callback to notify parent when quiz metadata changes (starting saved quiz)
   onQuizMetadataChange?: (quizId: string, sectionIndex: number) => void;
+  // Navigation URL for Back to Folder action
+  parentFolderUrl?: string;
 };
 
 type Question = {
@@ -418,6 +420,7 @@ export const QuizViewer = ({
   quizId,
   sectionIndex,
   onQuizMetadataChange,
+  parentFolderUrl,
 }: QuizViewerProps) => {
   const languageTools = useMemo(
     () => getLanguageToolsForFileName(fileName ?? fileKey?.path),
@@ -857,7 +860,7 @@ export const QuizViewer = ({
           </button>
           <button
             type="button"
-            className="rounded-lg bg-amber-500 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-600"
+            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700"
             onClick={() => {
               setSelectedCustom(undefined);
               setActiveQuizMeta({});
@@ -970,12 +973,12 @@ export const QuizViewer = ({
       });
       const isRight = isOrderedMulti
         ? selectedOrdered.length === correctLabels.length &&
-          selectedOrdered.every((v, idx) => v === correctLabels[idx])
+        selectedOrdered.every((v, idx) => v === correctLabels[idx])
         : selectedMulti.size === correctLabels.length &&
-          (() => {
-            for (const v of selectedMulti) if (!correctSet.has(v)) return false;
-            return true;
-          })();
+        (() => {
+          for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+          return true;
+        })();
       if (isRight) setScore((s) => s + 1);
       onRevealChange?.(revealAfterForQuestion(currentQ));
     };
@@ -1095,171 +1098,72 @@ export const QuizViewer = ({
 
 
     return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-800">
-              {quizSource === "saved" ? "Custom Quiz" : "AST Quiz"}
-            </h3>
-            {quizSource !== "saved" && currentQ.parentType && (
-              <p className="text-xs uppercase tracking-wide text-slate-500">
-                Parent: <span className="font-mono">{currentQ.parentType}</span>
+      <div className="flex flex-col gap-8 h-full">
+        {/* Header with Navigation Icons */}
+        <div className="flex items-start justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-lg bg-violet-500 flex items-center justify-center">
+              <Code className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">
+                {quizSource === "saved" ? "Custom Quiz" : "AST Quiz"}
+              </h1>
+              <p className="text-sm text-slate-500">
+                Q {current + 1} / {total}
               </p>
+            </div>
+          </div>
+          <div className="flex gap-1">
+            <button
+              type="button"
+              className="h-8 w-8 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors"
+              title="Back to File"
+              onClick={onReturnToAst}
+            >
+              <FileUp className="w-4 h-4" />
+            </button>
+            {parentFolderUrl && (
+              <a
+                href={parentFolderUrl}
+                className="h-8 w-8 flex items-center justify-center text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-md transition-colors"
+                title="Back to Folder"
+              >
+                <FolderUp className="w-4 h-4" />
+              </a>
             )}
           </div>
-          <div className="text-xs text-slate-500">
-            Q {current + 1} / {total} · Score {score}
-          </div>
         </div>
 
-        {/* Progress bar */}
-        <div className="h-1.5 w-full overflow-hidden rounded bg-slate-200">
-          <div
-            className="h-full bg-amber-500 transition-all"
-            style={{ width: `${total ? ((current + 1) / total) * 100 : 0}%` }}
-          />
-        </div>
-
-        {/* Step navigator: chips + slider + go-to */}
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-2 overflow-x-auto scrollbar-none py-1 -mx-2 px-2">
-              {stepNavItems.map((it, idx) =>
-                typeof it === "number" ? (
-                  <button
-                    key={`s-${idx}-${it}`}
-                    type="button"
-                    onClick={() => jumpTo(it)}
-                    className={
-                      it === current
-                        ? "min-w-9 px-2 py-1 rounded-md bg-amber-500 text-white text-xs font-medium shadow"
-                        : "min-w-9 px-2 py-1 rounded-md border border-slate-200 bg-white text-slate-700 text-xs shadow-sm hover:bg-slate-50"
-                    }
-                  >
-                    {it + 1}
-                  </button>
-                ) : (
-                  <span key={`e-${idx}`} className="px-1 text-slate-400">
-                    {it}
-                  </span>
-                )
-              )}
-            </div>
-            {/* Desktop/tablet slider */}
-            <div className="hidden sm:flex items-center gap-2">
-              <label
-                htmlFor="q-range"
-                className="text-xs text-slate-500 whitespace-nowrap"
-              >
-                Jump
-              </label>
-              <input
-                id="q-range"
-                type="range"
-                min={0}
-                max={Math.max(0, total - 1)}
-                value={current}
-                onChange={(e) => jumpTo(Number(e.target.value))}
-                className="h-1.5 w-40 cursor-pointer appearance-none rounded bg-slate-200 accent-amber-500"
-              />
-            </div>
+        {/* Progress Section */}
+        <div className="space-y-3">
+          <div className="flex justify-between items-baseline">
+            <span className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Progress</span>
+            <span className="text-sm text-slate-500">{total ? Math.round(((current + 1) / total) * 100) : 0}%</span>
           </div>
-          {/* Mobile slider shown on its own row - ensure always visible */}
-          <div className="flex items-center gap-2 sm:hidden px-2">
-            <label
-              htmlFor="q-range-mobile"
-              className="text-xs text-slate-500 whitespace-nowrap"
-            >
-              Jump
-            </label>
-            <input
-              id="q-range-mobile"
-              type="range"
-              min={0}
-              max={Math.max(0, total - 1)}
-              value={current}
-              onChange={(e) => jumpTo(Number(e.target.value))}
-              className="h-2 w-full cursor-pointer appearance-none rounded bg-slate-200"
-              style={{ touchAction: "pan-y" }}
+          <div className="w-full h-1 bg-slate-200 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300"
+              style={{ width: `${total ? ((current + 1) / total) * 100 : 0}%` }}
             />
           </div>
-          <div className="flex flex-wrap items-center gap-2 w-full">
-            <button
-              type="button"
-              className="flex items-center gap-2 rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
-              onClick={prev}
-              disabled={current <= 0}
-            >
-              <ChevronsLeft className="h-4 w-4" />
-              Prev
-            </button>
-
-            <div className="flex items-center gap-2">
-              <label htmlFor="q-input" className="text-xs text-slate-500">
-                Go to
-              </label>
-              <input
-                id="q-input"
-                type="number"
-                min={1}
-                max={Math.max(1, total)}
-                defaultValue={current + 1}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    const v = (e.target as HTMLInputElement).valueAsNumber;
-                    if (Number.isFinite(v)) jumpTo(v - 1);
-                  }
-                }}
-                className="w-20 rounded border border-slate-200 bg-white px-2 py-1 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-amber-500"
-              />
-              <button
-                type="button"
-                className="rounded-md border border-slate-200 bg-white px-2.5 py-1 text-sm text-slate-700 shadow-sm hover:bg-slate-50 shrink-0"
-                onClick={(e) => {
-                  const input =
-                    (e.currentTarget
-                      .previousElementSibling as HTMLInputElement) ?? null;
-                  if (input) {
-                    const v = input.valueAsNumber;
-                    if (Number.isFinite(v)) jumpTo(v - 1);
-                  }
-                }}
-              >
-                Go
-              </button>
-            </div>
-            {isMulti && !isAnswered && (
-              <button
-                type="button"
-                className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0"
-                onClick={handleSubmitMulti}
-              >
-                Check Answer
-              </button>
-            )}
-            <button
-              type="button"
-              className="flex items-center gap-2 rounded-md bg-amber-500 px-3 py-1.5 text-sm font-medium text-white shadow hover:bg-amber-600 disabled:opacity-50 shrink-0 w-full sm:w-auto sm:ml-auto justify-center"
-              onClick={next}
-              disabled={isMulti ? !isAnswered : !isAnswered}
-            >
-              {current + 1 >= total ? "Finish" : "Next"}
-              <ChevronsRight className="h-4 w-4" />
-            </button>
-          </div>
         </div>
 
-        <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm text-slate-800">{currentQ.stem}</p>
-          <p className="text-xs text-slate-500">
-            {isMulti
-              ? isOrderedMulti
-                ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
-                : "Select all that apply."
-              : "Choose the next part of the code."}
-          </p>
+        {/* Question Card - flex-1 to fill available space */}
+        <div className="space-y-6 flex-1">
+          <div className="space-y-3">
+            <h2 className="text-lg font-semibold text-slate-900">{currentQ.stem}</h2>
+            <p className="text-sm text-slate-600">
+              {isMulti
+                ? isOrderedMulti
+                  ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
+                  : "Select all that apply."
+                : "Choose the next part of the code."}
+            </p>
+          </div>
 
-          <ul className="mt-3 grid gap-2">
+          {/* Answer Options */}
+          <div className="space-y-2">
             {currentQ.options.map((opt, i) => {
               const isCorrect = isMulti
                 ? correctSet.has(opt)
@@ -1270,85 +1174,63 @@ export const QuizViewer = ({
                   : selectedMulti.has(opt)
                 : selected === opt;
               const orderIndex = isOrderedMulti ? selectedOrdered.indexOf(opt) : -1;
-              const base =
-                "w-full rounded-md border px-3 py-2 text-left text-sm shadow-sm";
-              const idle =
-                "border-slate-200 bg-white hover:bg-slate-50 text-slate-700";
-              const selectedCls =
-                "border-amber-300 bg-amber-50 text-slate-800";
-              const correctCls = "border-green-200 bg-green-50 text-green-700";
-              const wrongCls = "border-rose-200 bg-rose-50 text-rose-700";
-              const cls = !isAnswered
-                ? `${base} ${isSelected ? selectedCls : idle}`
-                : `${base} ${isSelected
-                  ? isCorrect
-                    ? correctCls
-                    : wrongCls
-                  : isCorrect
-                    ? correctCls
-                    : idle
-                }`;
 
               const optionId = `${current}-${i}`;
               const isExpanded = !!expandedOptions[optionId];
               const isLong = opt.length > 100;
 
               return (
-                <li key={optionId}>
-                  {/* Make the whole row a non-button clickable region */}
-                  <div className={`${cls}`}>
-                    <div
-                      role="button"
-                      tabIndex={0}
-                      className="w-full text-left"
-                      onClick={() => handleSelect(opt)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" || e.key === " ") {
-                          e.preventDefault();
-                          handleSelect(opt);
-                        }
+                <button
+                  key={optionId}
+                  type="button"
+                  onClick={() => handleSelect(opt)}
+                  disabled={isAnswered}
+                  className={`w-full p-3 rounded-lg text-left text-sm font-mono transition-all ${!isAnswered
+                    ? isSelected
+                      ? "bg-cyan-100 border-2 border-cyan-600 text-cyan-900 shadow-md"
+                      : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
+                    : isSelected
+                      ? isCorrect
+                        ? "bg-green-50 border-2 border-green-500 text-green-700"
+                        : "bg-rose-50 border-2 border-rose-500 text-rose-700"
+                      : isCorrect
+                        ? "bg-green-50 border border-green-200 text-green-700"
+                        : "bg-white border border-slate-200 text-slate-500"
+                    }`}
+                >
+                  {isOrderedMulti && orderIndex >= 0 && (
+                    <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-cyan-200 text-[11px] font-semibold text-cyan-900">
+                      {orderIndex + 1}
+                    </span>
+                  )}
+                  <span
+                    className={`whitespace-pre-wrap break-all ${isLong && !isExpanded ? "line-clamp-2" : ""}`}
+                    style={{ overflowWrap: "anywhere" }}
+                  >
+                    {opt}
+                  </span>
+                  {isLong && (
+                    <span
+                      className="ml-2 text-xs font-semibold text-cyan-600 hover:underline"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setExpandedOptions((prev) => ({
+                          ...prev,
+                          [optionId]: !prev[optionId],
+                        }));
                       }}
                     >
-                      {isOrderedMulti && orderIndex >= 0 && (
-                        <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-amber-200 text-[11px] font-semibold text-amber-900">
-                          {orderIndex + 1}
-                        </span>
-                      )}
-                      <span
-                        className={`font-mono whitespace-pre-wrap break-all sm:wrap-break-word ${isLong && !isExpanded ? "line-clamp-2" : ""
-                          }`}
-                        style={{ overflowWrap: "anywhere" }}
-                      >
-                        {opt}
-                      </span>
-                    </div>
-
-                    {/* Show More/Less outside the clickable area and stop events early */}
-                    {isLong && (
-                      <button
-                        type="button"
-                        className="mt-1 text-xs font-semibold text-amber-600 hover:underline"
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setExpandedOptions((prev) => ({
-                            ...prev,
-                            [optionId]: !prev[optionId],
-                          }));
-                        }}
-                      >
-                        {isExpanded ? "Show Less" : "Show More"}
-                      </button>
-                    )}
-                  </div>
-                </li>
+                      {isExpanded ? "Show Less" : "Show More"}
+                    </span>
+                  )}
+                </button>
               );
             })}
-          </ul>
+          </div>
 
           {isAnswered && (
             <div
-              className={`mt-3 rounded-md px-3 py-2 text-sm ${correct
+              className={`rounded-lg px-4 py-3 text-sm ${correct
                 ? "bg-green-50 text-green-700 border border-green-200"
                 : "bg-rose-50 text-rose-700 border border-rose-200"
                 }`}
@@ -1356,14 +1238,43 @@ export const QuizViewer = ({
               {correct
                 ? "Correct!"
                 : isMulti
-                  ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(
-                    ", "
-                  )}`
+                  ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(", ")}`
                   : `Incorrect — answer: ${currentQ.answerLabel}`}
             </div>
           )}
 
-          {/* Old inline breakdown/drill actions removed in favor of Mark flow */}
+          {/* Multi-select submit */}
+          {isMulti && !isAnswered && (
+            <button
+              type="button"
+              className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white shadow hover:bg-cyan-700"
+              onClick={handleSubmitMulti}
+            >
+              Check Answer
+            </button>
+          )}
+        </div>
+
+        {/* Navigation - fixed at bottom */}
+        <div className="flex gap-3">
+          <button
+            type="button"
+            onClick={prev}
+            disabled={current <= 0}
+            className="flex-1 flex items-center justify-center gap-2 rounded-lg border border-slate-300 bg-transparent px-4 py-2.5 text-sm font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <ChevronsLeft className="w-4 h-4" />
+            Prev
+          </button>
+          <button
+            type="button"
+            onClick={next}
+            disabled={isMulti ? !isAnswered : !isAnswered}
+            className="flex-1 flex items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white shadow hover:bg-cyan-700 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {current + 1 >= total ? "Finish" : "Next"}
+            <ChevronsRight className="w-4 h-4" />
+          </button>
         </div>
       </div>
     );
