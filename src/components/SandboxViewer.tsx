@@ -1,7 +1,7 @@
 "use client";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle, FileCode, FileJson, FileType, File } from "lucide-react";
+import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle, FileCode, FileJson, FileType, File, ChevronRight, Copy, ExternalLink } from "lucide-react";
 
 // Server now reads file and passes code; no client-side loader
 import { AstTree } from "./AstTree";
@@ -151,15 +151,95 @@ const CodeLine = memo(function CodeLine(props: {
 
 });
 
-const getFileIcon = (fileName: string) => {
-  if (fileName.endsWith(".go")) return <FileCode className="h-5 w-5 text-cyan-600" />;
-  if (fileName.endsWith(".ts") || fileName.endsWith(".tsx")) return <FileCode className="h-5 w-5 text-blue-600" />;
-  if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) return <FileCode className="h-5 w-5 text-yellow-500" />;
-  if (fileName.endsWith(".css")) return <FileCode className="h-5 w-5 text-sky-500" />;
-  if (fileName.endsWith(".json")) return <FileJson className="h-5 w-5 text-amber-600" />;
-  if (fileName.endsWith(".html")) return <FileCode className="h-5 w-5 text-orange-600" />;
-  if (fileName.endsWith(".md")) return <FileType className="h-5 w-5 text-slate-600" />;
-  return <File className="h-5 w-5 text-violet-500" />;
+// Go icon matching the project-navigator design
+const GoIcon = ({ className }: { className?: string }) => (
+  <svg
+    viewBox="0 0 32 32"
+    className={className}
+    fill="currentColor"
+  >
+    <path d="M5.9 9.2c-.1 0-.1-.1 0-.1l.2-.1c.1 0 .2-.1.3-.1h4.2c.1 0 .2.1.2.2 0 0-.1.1-.2.1l-.2.1c-.1 0-.2.1-.3.1H5.9zM4 10.4c-.1 0-.1-.1 0-.1l.2-.1c.1 0 .2-.1.3-.1h5.4c.1 0 .1.1.1.1 0 .1 0 .1-.1.1l-.2.1c-.1 0-.1.1-.2.1H4zM6.4 11.6c-.1 0-.1-.1-.1-.1 0-.1.1-.1.1-.1l.2-.1h3.2c.1 0 .1.1.1.1 0 .1 0 .1-.1.1l-.2.1H6.4z" />
+    <path d="M15.2 8.4c-2.6.7-4.4 2.1-5.8 4.2-.1.1-.1.2-.2.2-.1 0-.1 0-.1-.1.5-1.6 1.5-2.9 2.9-3.8 1.3-.9 2.8-1.3 4.4-1.2.1 0 .1.1.1.1-.3.2-.8.4-1.3.6z" />
+    <path d="M27.1 11.6c-.8-1.6-2.1-2.8-3.8-3.5-1.4-.6-2.9-.7-4.4-.5-.1 0-.1 0-.1-.1.6-.5 1.4-.8 2.2-1 2.2-.4 4.2.1 5.9 1.5.8.7 1.4 1.6 1.7 2.6 0 .1 0 .1-.1.1-.5-.3-1-.7-1.4-1.1z" />
+    <path d="M22.5 22.5c-1.9 1.2-4 1.6-6.2 1.2-2.1-.4-3.8-1.5-5.1-3.2-.1-.1-.1-.2 0-.2 1.6 1.3 3.4 2 5.5 2 1.9 0 3.6-.5 5.2-1.5.1-.1.2-.1.2 0 .1.1.5.6.5.7z" />
+    <ellipse cx="20.8" cy="14.8" rx="1.2" ry="1.4" />
+  </svg>
+);
+
+type FileInfo = {
+  icon: ReactNode;
+  language: string;
+  iconContainerClass: string; // full tailwind classes for the icon container
+  badgeClass: string; // full tailwind classes for the language badge
+};
+
+const getFileInfo = (fileName: string): FileInfo => {
+  if (fileName.endsWith(".go")) return {
+    icon: <GoIcon className="h-6 w-6 text-cyan-500" />,
+    language: "Go",
+    iconContainerClass: "bg-cyan-500/10 ring-cyan-500/20",
+    badgeClass: "bg-cyan-500/10 text-cyan-600"
+  };
+  if (fileName.endsWith(".ts") || fileName.endsWith(".tsx")) return {
+    icon: <FileCode className="h-6 w-6 text-blue-600" />,
+    language: "TypeScript",
+    iconContainerClass: "bg-blue-500/10 ring-blue-500/20",
+    badgeClass: "bg-blue-500/10 text-blue-600"
+  };
+  if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) return {
+    icon: <FileCode className="h-6 w-6 text-yellow-500" />,
+    language: "JavaScript",
+    iconContainerClass: "bg-yellow-500/10 ring-yellow-500/20",
+    badgeClass: "bg-yellow-500/10 text-yellow-600"
+  };
+  if (fileName.endsWith(".css")) return {
+    icon: <FileCode className="h-6 w-6 text-sky-500" />,
+    language: "CSS",
+    iconContainerClass: "bg-sky-500/10 ring-sky-500/20",
+    badgeClass: "bg-sky-500/10 text-sky-600"
+  };
+  if (fileName.endsWith(".json")) return {
+    icon: <FileJson className="h-6 w-6 text-amber-600" />,
+    language: "JSON",
+    iconContainerClass: "bg-amber-500/10 ring-amber-500/20",
+    badgeClass: "bg-amber-500/10 text-amber-600"
+  };
+  if (fileName.endsWith(".html")) return {
+    icon: <FileCode className="h-6 w-6 text-orange-600" />,
+    language: "HTML",
+    iconContainerClass: "bg-orange-500/10 ring-orange-500/20",
+    badgeClass: "bg-orange-500/10 text-orange-600"
+  };
+  if (fileName.endsWith(".md")) return {
+    icon: <FileType className="h-6 w-6 text-slate-600" />,
+    language: "Markdown",
+    iconContainerClass: "bg-slate-500/10 ring-slate-500/20",
+    badgeClass: "bg-slate-500/10 text-slate-600"
+  };
+  if (fileName.endsWith(".py")) return {
+    icon: <FileCode className="h-6 w-6 text-yellow-600" />,
+    language: "Python",
+    iconContainerClass: "bg-yellow-500/10 ring-yellow-500/20",
+    badgeClass: "bg-yellow-500/10 text-yellow-600"
+  };
+  if (fileName.endsWith(".rs")) return {
+    icon: <FileCode className="h-6 w-6 text-orange-700" />,
+    language: "Rust",
+    iconContainerClass: "bg-orange-500/10 ring-orange-500/20",
+    badgeClass: "bg-orange-500/10 text-orange-600"
+  };
+  if (fileName.endsWith(".java")) return {
+    icon: <FileCode className="h-6 w-6 text-red-600" />,
+    language: "Java",
+    iconContainerClass: "bg-red-500/10 ring-red-500/20",
+    badgeClass: "bg-red-500/10 text-red-600"
+  };
+  return {
+    icon: <File className="h-6 w-6 text-violet-500" />,
+    language: "File",
+    iconContainerClass: "bg-violet-500/10 ring-violet-500/20",
+    badgeClass: "bg-violet-500/10 text-violet-600"
+  };
 };
 
 export const SandboxViewer = ({
@@ -587,41 +667,90 @@ export const SandboxViewer = ({
     [parseResult, activeTsRoot, codeSlice.baseRow]
   );
 
+  // Get file info for display
+  const fileInfo = useMemo(() => getFileInfo(fileName), [fileName]);
+
+  // Compute line count from code
+  const lineCount = useMemo(() => {
+    if (state.status !== "loaded") return 0;
+    return state.code.split("\n").length;
+  }, [state]);
+
   return (
     <div className="h-[calc(100vh-64px)] overflow-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-violet-100/80 bg-slate-50/80 backdrop-blur-md px-5 py-3">
-        <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white ring-1 ring-slate-900/5 shadow-sm">
-            {getFileIcon(fileName)}
+      {/* Header - matching project-navigator FileHeader style */}
+      <div className="flex items-center justify-between border-b border-slate-200 bg-white px-5 py-3">
+        {/* Left side - File info */}
+        <div className="flex items-center gap-4">
+          {/* File icon with language-specific styling */}
+          <div className={`flex items-center justify-center w-10 h-10 rounded-lg ring-1 ${fileInfo.iconContainerClass}`}>
+            {fileInfo.icon}
           </div>
-          <div>
-            <h1 className="text-sm font-semibold text-slate-800">
-              {fileName || sandboxId}
-            </h1>
-            {fileName && (
-              <p className="font-mono text-xs text-slate-400">
-                {sandboxId}
-              </p>
-            )}
+
+          {/* File name and path */}
+          <div className="flex flex-col gap-0.5">
+            <div className="flex items-center gap-2">
+              <h1 className="text-base font-semibold text-slate-800">{fileName}</h1>
+              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${fileInfo.badgeClass}`}>
+                {fileInfo.language}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-sm text-slate-500 font-mono">
+              <span className="opacity-60">repo</span>
+              <ChevronRight className="w-3 h-3 opacity-40" />
+              <span className="truncate max-w-md">{sandboxId}</span>
+            </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* Right side - Actions */}
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-500">
+            {lineCount} lines
+          </span>
+
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              className="flex items-center gap-1.5 h-8 px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+              onClick={() => {
+                if (state.status === "loaded") {
+                  navigator.clipboard.writeText(state.code);
+                }
+              }}
+            >
+              <Copy className="w-4 h-4" />
+              <span className="hidden sm:inline">Copy</span>
+            </button>
+
+            <button
+              type="button"
+              className="flex items-center gap-1.5 h-8 px-2.5 text-sm font-medium text-slate-500 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+            >
+              <ExternalLink className="w-4 h-4" />
+              <span className="hidden sm:inline">Open</span>
+            </button>
+          </div>
+
+          <div className="w-px h-6 bg-slate-200" />
+
           {viewMode !== "ast" && (
             <button
               type="button"
               onClick={() => setViewMode("ast")}
-              className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+              className="flex items-center gap-1.5 h-9 px-3 text-sm font-medium text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition-colors"
             >
               <FileText className="h-4 w-4" />
               Back to File
             </button>
           )}
+
+          {/* Back to folder - prominent button matching reference */}
           <Link
             href={parentFolderUrl}
-            className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
+            className="flex items-center gap-2 h-9 px-3 text-sm font-medium border border-blue-200 text-blue-600 rounded-lg hover:bg-blue-500 hover:text-white hover:border-blue-500 transition-all"
           >
-            <FolderOpen className="h-4 w-4" />
+            <FolderOpen className="w-4 h-4" />
             Back to Folder
           </Link>
         </div>

@@ -37,13 +37,16 @@ export default function RootLayout({
         <body
           className={`${geistSans.variable} ${geistMono.variable} antialiased`}
         >
-          <header className="flex justify-between items-center px-6 py-3 h-14 bg-white/80 backdrop-blur border-b border-rose-100 sticky top-0 z-50">
+          <header className="flex items-center justify-between px-4 h-14 bg-slate-50 border-b border-slate-200">
+            {/* Navigation */}
             <Navbar />
+
+            {/* User section */}
             <div className="flex items-center gap-4">
               <SignedOut>
                 <SignInButton />
                 <SignUpButton>
-                  <button className="bg-rose-600 text-white rounded-lg font-medium text-sm h-9 px-4 cursor-pointer hover:bg-rose-700 transition">
+                  <button className="bg-blue-500 text-white rounded-lg font-medium text-sm h-9 px-4 cursor-pointer hover:bg-blue-600 transition">
                     Sign Up
                   </button>
                 </SignUpButton>
