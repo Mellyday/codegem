@@ -299,6 +299,57 @@ const buildMultiSelectOptionPool = (
   ]).slice(0, MAX);
 };
 
+const buildKeyGroupOptionPool = (
+  correct: string[],
+  allKeys: Set<string>,
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const normalizeKeyToken = (raw: string) =>
+    raw.trim().replace(/^["'`]|["'`]$/g, "");
+  const normalizedKeys = new Set(
+    Array.from(allKeys)
+      .map(normalizeKeyToken)
+      .filter(Boolean)
+  );
+  const candidates: string[] = [];
+  const seenNormalized = new Set<string>();
+  const pushCandidate = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 40) return;
+    const normalized = normalizeKeyToken(trimmed);
+    if (!normalized) return;
+    if (normalizedKeys.has(normalized)) return;
+    if (seenNormalized.has(normalized)) return;
+    seenNormalized.add(normalized);
+    candidates.push(trimmed);
+  };
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) pushCandidate(m[0]);
+    while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
+  } catch {}
+  let pool = Array.from(new Set<string>([...correct, ...candidates]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !pool.includes(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, MAX - correct.length)),
+  ]).slice(0, MAX);
+};
+
 const buildImportOptionPool = (
   correct: string[],
   code: string | undefined,
@@ -368,6 +419,21 @@ const splitCorrectIntoCards = (correct: string[]): string[][] => {
   }
 
   return shuffle(cards);
+};
+
+const findObjectLiteralNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [node];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (cur.type === "object") {
+      out.push(cur);
+      continue;
+    }
+    (cur.namedChildren || []).forEach((c) => stack.push(c));
+  }
+  return out;
 };
 
 const prefixText = (node: TreeSitterAstNode, code?: string): string => {
@@ -828,7 +894,7 @@ const ruleExportStatement: Rule = ({ root, node, code, sourceRef, profile }) => 
   return questions;
 };
 
-const ruleVariableDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
+const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile }) => {
   const declarators = getSectionItems(node, "declarators");
   if (declarators.length === 0) return [];
 
@@ -854,11 +920,11 @@ const ruleVariableDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
     );
   }
 
-  if (profile === "deep") {
-    for (const decl of declarators) {
-      const nameNode = getSectionFirstItem(decl, "name");
-      const valueNode = getSectionFirstItem(decl, "value");
-      if (!valueNode || !nameNode) continue;
+  for (const decl of declarators) {
+    const nameNode = getSectionFirstItem(decl, "name");
+    const valueNode = getSectionFirstItem(decl, "value");
+    if (!valueNode || !nameNode) continue;
+    if (profile === "deep") {
       const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
       const bindingList = collectBindingNames(nameNode, code);
       const isSimple = nameNode.type === "identifier" && bindingList.length === 1;
@@ -878,12 +944,18 @@ const ruleVariableDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
         qs.push(...buildArrowFunctionQuestions(valueNode, code, sourceRef, profile));
       }
     }
+
+    const objects = findObjectLiteralNodes(valueNode);
+    for (const obj of objects) {
+      qs.push(...generateQuestionsV11(root, obj, profile, code));
+    }
   }
 
   return qs;
 };
 
 const ruleAssignmentExpression = (
+  root: TreeSitterAstNode,
   node: TreeSitterAstNode,
   code: string | undefined,
   sourceRef: SourceRef,
@@ -935,6 +1007,11 @@ const ruleAssignmentExpression = (
 
   if (profile === "deep" && right.type === "arrow_function") {
     qs.push(...buildArrowFunctionQuestions(right, code, sourceRef, profile));
+  }
+
+  const objects = findObjectLiteralNodes(right);
+  for (const obj of objects) {
+    qs.push(...generateQuestionsV11(root, obj, profile, code));
   }
 
   return qs;
@@ -1559,7 +1636,7 @@ const ruleCatchClause: Rule = ({ node, code, sourceRef, profile }) => {
   ];
 };
 
-const ruleReturnStatement: Rule = ({ node, code, sourceRef }) => {
+const ruleReturnStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
   const value = (node.namedChildren || [])[0];
   if (!value) return [];
   const text = textForRange(value.startIndex, value.endIndex, code) || value.type;
@@ -1568,6 +1645,10 @@ const ruleReturnStatement: Rule = ({ node, code, sourceRef }) => {
   ];
   if (value.type === "jsx_element" || value.type === "jsx_self_closing_element") {
     qs.push(...buildJsxQuestions(value, code, sourceRef));
+  }
+  const objects = findObjectLiteralNodes(value);
+  for (const obj of objects) {
+    qs.push(...generateQuestionsV11(root, obj, profile, code));
   }
   return qs;
 };
@@ -1815,23 +1896,143 @@ const buildJsxQuestions = (
   return qs;
 };
 
-const ruleExpressionStatement: Rule = ({ node, code, sourceRef, profile }) => {
+const ruleExpressionStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
   const expr = getSectionFirstItem(node, "expr") || (node.namedChildren || [])[0];
   if (!expr) return [];
   if (expr.type === "assignment_expression") {
-    return ruleAssignmentExpression(expr, code, sourceRef, profile);
+    return ruleAssignmentExpression(root, expr, code, sourceRef, profile);
   }
   if (expr.type === "augmented_assignment_expression") {
     return ruleAugmentedAssignment(expr, code, sourceRef);
   }
   if (expr.type === "call_expression") {
-    return buildCallQuestions(expr, code, sourceRef, profile);
+    const qs = buildCallQuestions(expr, code, sourceRef, profile);
+    const objects = findObjectLiteralNodes(expr);
+    for (const obj of objects) {
+      qs.push(...generateQuestionsV11(root, obj, profile, code));
+    }
+    return qs;
   }
   if (expr.type === "jsx_element" || expr.type === "jsx_self_closing_element") {
     return buildJsxQuestions(expr, code, sourceRef);
   }
   return [];
 };
+
+const ruleObjectLiteral: Rule = ({ root, node, code, sourceRef, profile }) => {
+  const entries: Array<{
+    keyNode: TreeSitterAstNode;
+    valueNode: TreeSitterAstNode;
+    keyText: string;
+  }> = [];
+  const keys: string[] = [];
+  for (const child of node.namedChildren || []) {
+    if (child.type === "pair") {
+      const keyNode = childByField(child, "key") || child.namedChildren?.[0];
+      const valueNode = childByField(child, "value") || child.namedChildren?.[1];
+      if (!keyNode || !valueNode) continue;
+      const keyText = textForRange(keyNode.startIndex, keyNode.endIndex, code) || keyNode.type;
+      if (!keyText) continue;
+      keys.push(keyText);
+      entries.push({ keyNode, valueNode, keyText });
+      continue;
+    }
+    if (child.type === "shorthand_property_identifier") {
+      const keyText = textForRange(child.startIndex, child.endIndex, code) || child.type;
+      if (!keyText) continue;
+      keys.push(keyText);
+      entries.push({ keyNode: child, valueNode: child, keyText });
+      continue;
+    }
+    if (child.type === "method_definition") {
+      const nameNode = childByField(child, "name") || child.namedChildren?.[0];
+      if (!nameNode) continue;
+      const keyText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
+      if (!keyText) continue;
+      keys.push(keyText);
+      entries.push({ keyNode: nameNode, valueNode: child, keyText });
+    }
+  }
+
+  if (entries.length === 0) return [];
+
+  const qs: Q11[] = [];
+  const allKeysSet = new Set(keys);
+  const keyCards = splitCorrectIntoCards(keys);
+  for (const card of keyCards) {
+    const optionPool = buildKeyGroupOptionPool(
+      card,
+      allKeysSet,
+      code,
+      node.startIndex,
+      node.endIndex
+    );
+    qs.push({
+      kind: "object.keys",
+      stem: "Which keys are present in this object literal?",
+      answerLabel: "",
+      options: optionPool,
+      optionPool,
+      questionType: "multi",
+      multiCorrect: card,
+      multiSelectHint: card.length,
+      sourceRefs: [sourceRef],
+      generatorRule: "object.keys",
+    });
+  }
+
+  for (const entry of entries) {
+    const keyRef: SourceRef = {
+      nodeType: entry.keyNode.type,
+      start: entry.keyNode.startIndex,
+      end: entry.keyNode.endIndex,
+      path: computeAstPath(root, entry.keyNode),
+    };
+    const valueRef: SourceRef = {
+      nodeType: entry.valueNode.type,
+      start: entry.valueNode.startIndex,
+      end: entry.valueNode.endIndex,
+      path: computeAstPath(root, entry.valueNode),
+    };
+    const valueText =
+      textForRange(entry.valueNode.startIndex, entry.valueNode.endIndex, code) ||
+      entry.valueNode.type;
+    qs.push({
+      kind: "object.value",
+      stem: `What is the value for key ${entry.keyText}?`,
+      answerLabel: valueText,
+      options: [],
+      sourceRefs: [keyRef, valueRef, sourceRef],
+      generatorRule: "object.value",
+    });
+
+    const valueQuestions = generateQuestionsV11(root, entry.valueNode, profile, code);
+    if (valueQuestions.length > 0) {
+      qs.push(
+        ...valueQuestions.map((q) => ({
+          ...q,
+          stem: `For key ${entry.keyText}: ${q.stem}`,
+          sourceRefs: [keyRef, ...(q.sourceRefs || [])],
+          generatorRule: `object.value.${q.generatorRule}`,
+        }))
+      );
+    }
+  }
+
+  return qs;
+};
+
+const ruleCallExpression: Rule = ({ root, node, code, sourceRef, profile }) => {
+  const qs = buildCallQuestions(node, code, sourceRef, profile);
+  const objects = findObjectLiteralNodes(node);
+  for (const obj of objects) {
+    qs.push(...generateQuestionsV11(root, obj, profile, code));
+  }
+  return qs;
+};
+
+const ruleArrowFunction: Rule = ({ node, code, sourceRef, profile }) =>
+  buildArrowFunctionQuestions(node, code, sourceRef, profile);
 
 const decoratorQuestions = (
   decorators: TreeSitterAstNode[],
@@ -1875,6 +2076,9 @@ const rules: Record<string, Rule[]> = {
   variable_declaration: [ruleVariableDeclaration],
   function_declaration: [headerRule, ruleFunctionDeclaration],
   generator_function_declaration: [headerRule, ruleFunctionDeclaration],
+  function: [ruleFunctionDeclaration],
+  generator_function: [ruleFunctionDeclaration],
+  arrow_function: [ruleArrowFunction],
   class_declaration: [headerRule, ruleClassDeclaration],
   method_definition: [headerRule, ruleMethodDefinition],
   field_definition: [ruleFieldDefinition],
@@ -1897,6 +2101,8 @@ const rules: Record<string, Rule[]> = {
   break_statement: [ruleBreakContinue],
   continue_statement: [ruleBreakContinue],
   expression_statement: [ruleExpressionStatement],
+  object: [ruleObjectLiteral],
+  call_expression: [ruleCallExpression],
 };
 
 export function generateQuestionsV11(
@@ -2727,7 +2933,7 @@ export function buildCustomQuizPayload(params: {
       questionType: isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
-      optionPool: q.optionPool,
+      optionPool: q.optionPool ?? q.options,
       sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,

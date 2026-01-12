@@ -1216,7 +1216,7 @@ export function buildHeuristicQuiz(
                 questionType: "multi",
                 multiCorrect: q.multiCorrect,
                 multiSelectHint: q.multiSelectHint ?? q.multiCorrect.length,
-                optionPool: q.optionPool,
+                optionPool: q.optionPool ?? q.options,
                 // propagate reveal anchors when provided by rule
                 revealStart: q.revealStart,
                 revealEndBeforeChild: q.revealEndBeforeChild,

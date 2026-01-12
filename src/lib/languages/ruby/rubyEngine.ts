@@ -241,6 +241,97 @@ const buildMultiSelectOptionPool = (
   ]).slice(0, MAX);
 };
 
+const buildKeyGroupOptionPool = (
+  correct: string[],
+  allKeys: Set<string>,
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const normalizeKeyToken = (raw: string) =>
+    raw.trim().replace(/^["'`]|["'`]$/g, "");
+  const normalizedKeys = new Set(
+    Array.from(allKeys)
+      .map(normalizeKeyToken)
+      .filter(Boolean)
+  );
+  const candidates: string[] = [];
+  const seenNormalized = new Set<string>();
+  const pushCandidate = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 40) return;
+    const normalized = normalizeKeyToken(trimmed);
+    if (!normalized) return;
+    if (normalizedKeys.has(normalized)) return;
+    if (seenNormalized.has(normalized)) return;
+    seenNormalized.add(normalized);
+    candidates.push(trimmed);
+  };
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_?!]*/g;
+    const reStr = /(['"])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) pushCandidate(m[0]);
+    while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
+  } catch { }
+  let pool = Array.from(new Set<string>([...correct, ...candidates]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !pool.includes(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, MAX - correct.length)),
+  ]).slice(0, MAX);
+};
+
+const splitCorrectIntoCards = (correct: string[]): string[][] => {
+  const unique = [...new Set(correct)];
+  if (unique.length <= 6) return [unique];
+
+  const shuffled = shuffle(unique);
+  const numCards = Math.ceil(unique.length / 6);
+  const baseSize = Math.floor(unique.length / numCards);
+  const remainder = unique.length % numCards;
+
+  const cardIndices = [...Array(numCards).keys()];
+  const shuffledIndices = shuffle(cardIndices);
+  const extraSlots = new Set(shuffledIndices.slice(0, remainder));
+
+  const cards: string[][] = [];
+  let idx = 0;
+
+  for (let c = 0; c < numCards; c++) {
+    const size = baseSize + (extraSlots.has(c) ? 1 : 0);
+    cards.push(shuffled.slice(idx, idx + size));
+    idx += size;
+  }
+
+  return shuffle(cards);
+};
+
+const findHashLiteralNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (cur.type === "hash") {
+      out.push(cur);
+      continue;
+    }
+    (cur.namedChildren || []).forEach((c) => stack.push(c));
+  }
+  return out;
+};
+
 // ======================================================================
 // Ruby-specific extraction helpers
 // ======================================================================
@@ -818,6 +909,24 @@ const generateQuestionsForAnchor = ({
             "assignment.value"
           )
         );
+        const hashes = findHashLiteralNodes(value);
+        for (const hash of hashes) {
+          const hashRef: SourceRef = {
+            nodeType: hash.type,
+            start: hash.startIndex,
+            end: hash.endIndex,
+            path: computeAstPath(root, hash),
+          };
+          qs.push(
+            ...generateQuestionsForAnchor({
+              root,
+              node: hash,
+              code,
+              sourceRef: hashRef,
+              profile,
+            })
+          );
+        }
       }
       break;
     }
@@ -864,6 +973,118 @@ const generateQuestionsForAnchor = ({
             "multi_assignment.first_value"
           )
         );
+      }
+      for (const value of values) {
+        const hashes = findHashLiteralNodes(value);
+        for (const hash of hashes) {
+          const hashRef: SourceRef = {
+            nodeType: hash.type,
+            start: hash.startIndex,
+            end: hash.endIndex,
+            path: computeAstPath(root, hash),
+          };
+          qs.push(
+            ...generateQuestionsForAnchor({
+              root,
+              node: hash,
+              code,
+              sourceRef: hashRef,
+              profile,
+            })
+          );
+        }
+      }
+      break;
+    }
+
+    case "hash": {
+      const entries: Array<{
+        keyNode: TreeSitterAstNode;
+        valueNode: TreeSitterAstNode;
+        keyText: string;
+      }> = [];
+      const keys: string[] = [];
+      for (const child of node.namedChildren || []) {
+        if (child.type !== "pair") continue;
+        const keyNode = childByField(child, "key") || child.namedChildren?.[0];
+        let valueNode = childByField(child, "value") || child.namedChildren?.[1];
+        if (!keyNode) continue;
+        if (!valueNode) valueNode = keyNode;
+        const keyText = textForRange(keyNode.startIndex, keyNode.endIndex, code) || keyNode.type;
+        if (!keyText) continue;
+        keys.push(keyText);
+        entries.push({ keyNode, valueNode, keyText });
+      }
+
+      if (keys.length > 0) {
+        const uniqueKeys = Array.from(new Set(keys));
+        const allKeysSet = new Set(uniqueKeys);
+        const keyCards = splitCorrectIntoCards(uniqueKeys);
+        for (const card of keyCards) {
+          const optionPool = buildKeyGroupOptionPool(
+            card,
+            allKeysSet,
+            code,
+            node.startIndex,
+            node.endIndex
+          );
+          qs.push({
+            kind: "hash.keys",
+            stem: "Which keys are present in this hash?",
+            answerLabel: card[0] ?? "hash",
+            options: optionPool,
+            sourceRefs: [sourceRef],
+            generatorRule: "hash.keys",
+            questionType: "multi",
+            multiCorrect: card,
+            multiSelectHint: card.length,
+            optionPool,
+          });
+        }
+      }
+
+      for (const entry of entries) {
+        const keyRef: SourceRef = {
+          nodeType: entry.keyNode.type,
+          start: entry.keyNode.startIndex,
+          end: entry.keyNode.endIndex,
+          path: computeAstPath(root, entry.keyNode),
+        };
+        const valueRef: SourceRef = {
+          nodeType: entry.valueNode.type,
+          start: entry.valueNode.startIndex,
+          end: entry.valueNode.endIndex,
+          path: computeAstPath(root, entry.valueNode),
+        };
+        const valueText =
+          textForRange(entry.valueNode.startIndex, entry.valueNode.endIndex, code) ||
+          entry.valueNode.type;
+        qs.push({
+          kind: "hash.value",
+          stem: `What is the value for key ${entry.keyText}?`,
+          answerLabel: valueText,
+          options: [],
+          sourceRefs: [keyRef, valueRef, sourceRef],
+          generatorRule: "hash.value",
+        });
+
+        const valueQuestions = generateQuestionsForAnchor({
+          root,
+          node: entry.valueNode,
+          code,
+          sourceRef: valueRef,
+          profile,
+        });
+        if (valueQuestions.length > 0) {
+          qs.push(
+            ...valueQuestions.map((q) => ({
+              ...q,
+              stem: `For key ${entry.keyText}: ${q.stem}`,
+              sourceRefs: [keyRef, ...(q.sourceRefs || [])],
+              generatorRule: `hash.value.${q.generatorRule}`,
+            }))
+          );
+        }
       }
       break;
     }
@@ -1071,6 +1292,24 @@ const generateQuestionsForAnchor = ({
             `${node.type}.value`
           )
         );
+        const hashes = findHashLiteralNodes(value);
+        for (const hash of hashes) {
+          const hashRef: SourceRef = {
+            nodeType: hash.type,
+            start: hash.startIndex,
+            end: hash.endIndex,
+            path: computeAstPath(root, hash),
+          };
+          qs.push(
+            ...generateQuestionsForAnchor({
+              root,
+              node: hash,
+              code,
+              sourceRef: hashRef,
+              profile,
+            })
+          );
+        }
       }
       break;
     }
@@ -1150,46 +1389,66 @@ const generateQuestionsForAnchor = ({
             }
           }
         }
-        break;
-      }
-
-      const call = extractCallParts(node, code);
-      const calleeText =
-        call.receiverNode && call.nameNode && code
-          ? textForRange(call.receiverNode.startIndex, call.nameNode.endIndex, code) ||
-            call.name ||
-            "call"
-          : call.name || "call";
-      qs.push({
-        kind: "call.callee",
-        stem: "What method is called?",
-        answerLabel: calleeText,
-        options: shuffle([calleeText, ...buildDistractors(calleeText)]),
-        sourceRefs: [sourceRef],
-        generatorRule: "call.callee",
-      });
-      if (call.args.length > 0) {
-        const argTexts = call.args.map(
-          (a) => textForRange(a.startIndex, a.endIndex, code) || a.type
-        );
-        const optionPool = buildMultiSelectOptionPool(
-          argTexts,
-          code,
-          node.startIndex,
-          node.endIndex
-        );
+      } else {
+        const call = extractCallParts(node, code);
+        const calleeText =
+          call.receiverNode && call.nameNode && code
+            ? textForRange(call.receiverNode.startIndex, call.nameNode.endIndex, code) ||
+              call.name ||
+              "call"
+            : call.name || "call";
         qs.push({
-          kind: "call.args",
-          stem: "Select the arguments in order",
-          answerLabel: "",
-          options: optionPool,
-          optionPool,
-          questionType: "orderedMulti",
-          multiCorrect: argTexts,
-          multiSelectHint: argTexts.length,
+          kind: "call.callee",
+          stem: "What method is called?",
+          answerLabel: calleeText,
+          options: shuffle([calleeText, ...buildDistractors(calleeText)]),
           sourceRefs: [sourceRef],
-          generatorRule: "call.args",
+          generatorRule: "call.callee",
         });
+        if (call.args.length > 0) {
+          const argTexts = call.args.map(
+            (a) => textForRange(a.startIndex, a.endIndex, code) || a.type
+          );
+          const optionPool = buildMultiSelectOptionPool(
+            argTexts,
+            code,
+            node.startIndex,
+            node.endIndex
+          );
+          qs.push({
+            kind: "call.args",
+            stem: "Select the arguments in order",
+            answerLabel: "",
+            options: optionPool,
+            optionPool,
+            questionType: "orderedMulti",
+            multiCorrect: argTexts,
+            multiSelectHint: argTexts.length,
+            sourceRefs: [sourceRef],
+            generatorRule: "call.args",
+          });
+        }
+      }
+      const args = getSectionItems(node, "args");
+      for (const arg of args) {
+        const hashes = findHashLiteralNodes(arg);
+        for (const hash of hashes) {
+          const hashRef: SourceRef = {
+            nodeType: hash.type,
+            start: hash.startIndex,
+            end: hash.endIndex,
+            path: computeAstPath(root, hash),
+          };
+          qs.push(
+            ...generateQuestionsForAnchor({
+              root,
+              node: hash,
+              code,
+              sourceRef: hashRef,
+              profile,
+            })
+          );
+        }
       }
       break;
     }
@@ -1294,6 +1553,7 @@ const ANCHOR_NODE_TYPES = new Set<string>([
   "singleton_method_definition",
   "assignment",
   "multiple_assignment",
+  "hash",
   "if",
   "unless",
   "elsif",
@@ -2067,7 +2327,7 @@ export function buildCustomQuizPayload(params: {
       questionType: isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
-      optionPool: q.optionPool,
+      optionPool: q.optionPool ?? q.options,
       sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,

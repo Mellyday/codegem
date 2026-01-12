@@ -478,6 +478,57 @@ const buildMultiSelectOptionPool = (
   ]).slice(0, MAX);
 };
 
+const buildKeyGroupOptionPool = (
+  correct: string[],
+  allKeys: Set<string>,
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const normalizeKeyToken = (raw: string) =>
+    raw.trim().replace(/^["'`]|["'`]$/g, "");
+  const normalizedKeys = new Set(
+    Array.from(allKeys)
+      .map(normalizeKeyToken)
+      .filter(Boolean)
+  );
+  const candidates: string[] = [];
+  const seenNormalized = new Set<string>();
+  const pushCandidate = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 40) return;
+    const normalized = normalizeKeyToken(trimmed);
+    if (!normalized) return;
+    if (normalizedKeys.has(normalized)) return;
+    if (seenNormalized.has(normalized)) return;
+    seenNormalized.add(normalized);
+    candidates.push(trimmed);
+  };
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const reStr = /(['"])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) pushCandidate(m[0]);
+    while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
+  } catch { }
+  let pool = Array.from(new Set<string>([...correct, ...candidates]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !pool.includes(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, MAX - correct.length)),
+  ]).slice(0, MAX);
+};
+
 const buildModuleOptionPool = (
   correct: string,
   code: string | undefined,
@@ -1167,56 +1218,95 @@ const rules: Record<string, Rule[]> = {
     },
   ],
   dictionary: [
-    ({ node, code, sourceRef }) => {
-      const keyItems = getSectionItems(node, "keys");
+    ({ root, node, code, sourceRef, profile }) => {
+      const entries: Array<{
+        keyNode: TreeSitterAstNode;
+        valueNode: TreeSitterAstNode;
+        keyText: string;
+      }> = [];
       const keys: string[] = [];
-      for (const k of keyItems) {
-        keys.push(textForRange(k.startIndex, k.endIndex, code) || k.type);
+      for (const c of node.namedChildren || []) {
+        if (c.type !== "pair") continue;
+        const [keyNode, valueNode] = c.namedChildren || [];
+        if (!keyNode || !valueNode) continue;
+        const keyText = textForRange(keyNode.startIndex, keyNode.endIndex, code) || keyNode.type;
+        if (!keyText) continue;
+        keys.push(keyText);
+        entries.push({ keyNode, valueNode, keyText });
       }
-      const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
-      const spanEnd = node.endIndex + 200;
-      const idPool: string[] = [];
-      const strPool: string[] = [];
-      try {
-        const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
-        const reStr = /(['"])((?:\\.|(?!\1).)*)\1/g;
-        const snippet = (code || "").slice(spanStart, spanEnd);
-        let m: RegExpExecArray | null;
-        while ((m = reId.exec(snippet))) idPool.push(m[0]);
-        while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
-      } catch { }
-      let pool = Array.from(new Set<string>([...keys, ...idPool, ...strPool]));
-      if (pool.length < 10) {
-        const needed = 10 - pool.length;
-        const pad = shuffle(GENERIC_DISTRACTORS)
-          .filter((d) => !pool.includes(d))
-          .slice(0, needed);
-        pool.push(...pad);
-      }
-      const MAX = 10;
-      const extras = shuffle(pool.filter((p) => !keys.includes(p)));
-      const optionPool = shuffle([
-        ...keys,
-        ...extras.slice(0, Math.max(0, MAX - keys.length)),
-      ]).slice(0, MAX);
-      const keysSpan = getSectionSpan(node, "keys");
 
-      return [
-        {
-          kind: "dict-keys",
-          stem: `Which keys are present in this dict?`,
-          answerLabel: keys[0] ?? "dict",
-          options: optionPool,
-          sourceRefs: [sourceRef],
-          generatorRule: "dict.keys",
-          questionType: "multi",
-          multiCorrect: keys,
-          optionPool,
-          revealStart: node.startIndex,
-          revealEndBeforeChild: keysSpan?.start,
-          revealEndAfterChild: keysSpan?.end,
-        },
-      ];
+      const qs: Q11[] = [];
+      if (keys.length > 0) {
+        const spanStart = node.startIndex - 200 > 0 ? node.startIndex - 200 : 0;
+        const spanEnd = node.endIndex + 200;
+        const keysSpan = getSectionSpan(node, "keys");
+        const allKeysSet = new Set(keys);
+        const keyCards = splitCorrectIntoCards(keys);
+        for (const card of keyCards) {
+          const optionPool = buildKeyGroupOptionPool(
+            card,
+            allKeysSet,
+            code,
+            spanStart,
+            spanEnd
+          );
+          qs.push({
+            kind: "dict-keys",
+            stem: "Which keys are present in this dict?",
+            answerLabel: card[0] ?? "dict",
+            options: optionPool,
+            sourceRefs: [sourceRef],
+            generatorRule: "dict.keys",
+            questionType: "multi",
+            multiCorrect: card,
+            multiSelectHint: card.length,
+            optionPool,
+            revealStart: node.startIndex,
+            revealEndBeforeChild: keysSpan?.start,
+            revealEndAfterChild: keysSpan?.end,
+          });
+        }
+      }
+
+      for (const entry of entries) {
+        const keyRef: SourceRef = {
+          nodeType: entry.keyNode.type,
+          start: entry.keyNode.startIndex,
+          end: entry.keyNode.endIndex,
+          path: computeAstPath(root, entry.keyNode),
+        };
+        const valueRef: SourceRef = {
+          nodeType: entry.valueNode.type,
+          start: entry.valueNode.startIndex,
+          end: entry.valueNode.endIndex,
+          path: computeAstPath(root, entry.valueNode),
+        };
+        const valueText =
+          textForRange(entry.valueNode.startIndex, entry.valueNode.endIndex, code) ||
+          entry.valueNode.type;
+        qs.push({
+          kind: "dict.value",
+          stem: `What is the value for key ${entry.keyText}?`,
+          answerLabel: valueText,
+          options: [],
+          sourceRefs: [keyRef, valueRef, sourceRef],
+          generatorRule: "dict.value",
+        });
+
+        const valueQuestions = generateQuestionsV11(root, entry.valueNode, profile, code);
+        if (valueQuestions.length > 0) {
+          qs.push(
+            ...valueQuestions.map((q) => ({
+              ...q,
+              stem: `For key ${entry.keyText}: ${q.stem}`,
+              sourceRefs: [keyRef, ...(q.sourceRefs || [])],
+              generatorRule: `dict.value.${q.generatorRule}`,
+            }))
+          );
+        }
+      }
+
+      return qs;
     },
   ],
   call: [
@@ -4088,7 +4178,7 @@ export function buildCustomQuizPayload(params: {
       questionType: isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
-      optionPool: q.optionPool,
+      optionPool: q.optionPool ?? q.options,
       sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,

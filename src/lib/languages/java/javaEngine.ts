@@ -1967,7 +1967,7 @@ export function buildCustomQuizPayload(params: {
       questionType: isMulti ? "multi" : "single",
       multiCorrect: isMulti ? q.multiCorrect : undefined,
       multiSelectHint: q.multiSelectHint,
-      optionPool: q.optionPool,
+      optionPool: q.optionPool ?? q.options,
       sourceRef: fallbackSource,
       revealStart: revealSpan?.start ?? span.start,
       revealEndBeforeChild: revealSpan?.start ?? span.start,

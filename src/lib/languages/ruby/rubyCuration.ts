@@ -284,6 +284,23 @@ export const buildCuratedSections = (
       ];
     }
 
+    case "hash": {
+      const keys: TreeSitterAstNode[] = [];
+      const values: TreeSitterAstNode[] = [];
+      for (const child of node.namedChildren || []) {
+        if (child.type === "pair") {
+          const key = childByField(child, "key") || child.namedChildren?.[0];
+          const value = childByField(child, "value") || child.namedChildren?.[1];
+          if (key) keys.push(key);
+          if (value) values.push(value);
+        }
+      }
+      return [
+        { key: "keys", items: keys },
+        { key: "values", items: values },
+      ];
+    }
+
     case "if":
     case "unless":
     case "elsif":

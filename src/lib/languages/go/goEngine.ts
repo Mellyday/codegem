@@ -1417,7 +1417,7 @@ const ruleCompositeLiteral: Rule = ({ root, node, code, sourceRef, profile }) =>
       kind: "composite.value",
       stem: `What is the value for ${label.keySingular} ${entry.keyText}?`,
       answerLabel: valueText,
-      options: buildDistractors(valueText),
+      options: [],
       sourceRefs: [keyRef, valueRef, sourceRef],
       generatorRule: "composite.value",
     });
@@ -2975,7 +2975,7 @@ export function buildCustomQuizPayload(params: {
       questionType: isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
-      optionPool: q.optionPool,
+      optionPool: q.optionPool ?? q.options,
       sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,

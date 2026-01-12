@@ -1466,7 +1466,7 @@ export function buildCustomQuizPayload(params: {
       questionType: isMulti ? "multi" : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
-      optionPool: q.optionPool,
+      optionPool: q.optionPool ?? q.options,
       sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,

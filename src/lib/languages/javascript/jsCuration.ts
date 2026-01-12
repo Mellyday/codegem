@@ -223,6 +223,34 @@ export const buildCuratedSections = (
       ];
     }
 
+    case "object": {
+      const keys: TreeSitterAstNode[] = [];
+      const values: TreeSitterAstNode[] = [];
+      for (const child of node.namedChildren || []) {
+        if (child.type === "pair") {
+          const key = childByField(child, "key") || child.namedChildren?.[0];
+          const value = childByField(child, "value") || child.namedChildren?.[1];
+          if (key) keys.push(key);
+          if (value) values.push(value);
+          continue;
+        }
+        if (child.type === "shorthand_property_identifier") {
+          keys.push(child);
+          values.push(child);
+          continue;
+        }
+        if (child.type === "method_definition") {
+          const name = childByField(child, "name") || child.namedChildren?.[0];
+          if (name) keys.push(name);
+          values.push(child);
+        }
+      }
+      return [
+        { key: "keys", items: keys },
+        { key: "values", items: values },
+      ];
+    }
+
     case "object_pattern":
     case "array_pattern":
     case "assignment_pattern":
