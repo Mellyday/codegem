@@ -1,4 +1,5 @@
 import { Parser, Language, type Node as TreeSitterNode } from "web-tree-sitter";
+import { highlightQueryCandidates } from "./treeSitterHighlightQueries";
 
 const pythonWasmUrl = "/wasm/tree-sitter-python.wasm";
 const javascriptWasmUrl = "/wasm/tree-sitter-javascript.wasm";
@@ -30,6 +31,12 @@ type LanguageConfig = {
 type Position = {
   row: number;
   column: number;
+};
+
+type HighlightToken = {
+  startIndex: number;
+  endIndex: number;
+  scope: string;
 };
 
 export type TreeSitterAstNode = {
@@ -104,6 +111,71 @@ for (const config of supportedLanguages) {
     extensionToLanguage.set(ext, config);
   }
 }
+
+const highlightQueryCache = new Map<SupportedLanguageId, any | null>();
+
+const captureToScope = (captureName: string) => captureName.split(".")[0];
+
+const getHighlightQuery = (
+  languageId: SupportedLanguageId,
+  language: Language
+) => {
+  if (highlightQueryCache.has(languageId)) {
+    return highlightQueryCache.get(languageId) ?? null;
+  }
+
+  const candidates = highlightQueryCandidates[languageId] ?? [];
+  for (const queryText of candidates) {
+    try {
+      const query = language.query(queryText);
+      highlightQueryCache.set(languageId, query);
+      return query;
+    } catch (error) {
+      console.warn(
+        `Failed to compile highlight query for ${languageId}, trying fallback.`,
+        error
+      );
+    }
+  }
+
+  highlightQueryCache.set(languageId, null);
+  return null;
+};
+
+const computeHighlights = (
+  tree: { rootNode: TreeSitterNode },
+  language: Language,
+  languageId: SupportedLanguageId
+): HighlightToken[] => {
+  const query = getHighlightQuery(languageId, language);
+  if (!query) return [];
+
+  try {
+    const caps = query.captures(tree.rootNode);
+    const tokens = caps.map((c: any) => ({
+      startIndex: c.node.startIndex,
+      endIndex: c.node.endIndex,
+      scope: captureToScope(c.name),
+    }));
+
+    tokens.sort(
+      (a, b) => a.startIndex - b.startIndex || a.endIndex - b.endIndex
+    );
+
+    const out: HighlightToken[] = [];
+    let lastEnd = -1;
+    for (const t of tokens) {
+      if (t.endIndex <= t.startIndex) continue;
+      if (t.startIndex < lastEnd) continue;
+      out.push(t);
+      lastEnd = t.endIndex;
+    }
+    return out;
+  } catch (error) {
+    console.warn(`Failed to capture highlights for ${languageId}.`, error);
+    return [];
+  }
+};
 
 let initPromise: Promise<void> | undefined;
 
@@ -200,6 +272,7 @@ export type TreeSitterParseSuccess = {
   parser: "tree-sitter";
   languageId: SupportedLanguageId;
   languageName: string;
+  highlights: HighlightToken[];
 };
 
 export const canParseWithTreeSitter = (extension: string) =>
@@ -241,6 +314,10 @@ export const parseWithTreeSitter = async (
     );
 
     const ast = serialiseNode(tree.rootNode);
+    const highlights =
+      code.length > 300_000
+        ? []
+        : computeHighlights(tree, language, config.id);
     console.log(`AST serialized, tree deleted`);
     tree.delete();
 
@@ -249,6 +326,7 @@ export const parseWithTreeSitter = async (
       parser: "tree-sitter",
       languageId: config.id,
       languageName: config.displayName,
+      highlights,
     };
   } catch (error) {
     console.error(`Error during Tree-sitter parsing:`, error);

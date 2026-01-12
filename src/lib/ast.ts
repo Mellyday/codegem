@@ -1,11 +1,18 @@
 import { canParseWithTreeSitter } from "./astSupport";
 import type { TreeSitterAstNode } from "./treeSitter";
 
+export type HighlightToken = {
+  startIndex: number;
+  endIndex: number;
+  scope: string;
+};
+
 type TreeSitterSuccess = {
   status: "success";
   parser: "tree-sitter";
   language: string;
   ast: TreeSitterAstNode;
+  highlights: HighlightToken[];
 };
 
 type ParseUnsupported = {
@@ -92,6 +99,7 @@ export const parseCodeToAst = async (
       parser: "tree-sitter",
       language: result.languageName,
       ast: result.ast,
+      highlights: result.highlights ?? [],
     };
   } catch (error) {
     console.error(`Tree-sitter parse failed for .${extension} file:`, error);

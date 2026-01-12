@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { FileText, FolderOpen } from "lucide-react";
 
@@ -22,6 +22,133 @@ type LoadingState =
   | { status: "loading" }
   | { status: "loaded"; code: string }
   | { status: "error"; message: string };
+
+type LineSpan = { start: number; end: number; className: string };
+type LineHL = undefined | { start: number; end: number; selected: boolean };
+
+const scopeClass = (scope: string) => {
+  switch (scope) {
+    case "comment":
+      return "text-slate-500 italic";
+    case "string":
+      return "text-emerald-700";
+    case "keyword":
+      return "text-fuchsia-700 font-semibold";
+    case "function":
+      return "text-cyan-700";
+    case "type":
+      return "text-indigo-700";
+    case "number":
+      return "text-amber-700";
+    default:
+      return "text-slate-700";
+  }
+};
+
+const nodeCoversRow = (node: TreeSitterAstNode, row: number): boolean =>
+  row >= node.startPosition.row && row <= node.endPosition.row;
+
+const findSmallestCoveringNode = (
+  node: TreeSitterAstNode,
+  row: number
+): TreeSitterAstNode | undefined => {
+  if (!nodeCoversRow(node, row)) return undefined;
+  for (const child of node.namedChildren || []) {
+    const found = findSmallestCoveringNode(child, row);
+    if (found) return found;
+  }
+  return node;
+};
+
+const CodeLine = memo(function CodeLine(props: {
+  line: string;
+  lineIndex: number;
+  lineNo: number;
+  lineDigits: number;
+  spans: LineSpan[];
+  hl: LineHL;
+  onLineClick: (lineIndex: number) => void;
+}) {
+  const { line, lineIndex, lineNo, lineDigits, spans, hl, onLineClick } = props;
+
+  const pieces: {
+    text: string;
+    className?: string;
+    hl?: boolean;
+    selected?: boolean;
+  }[] = [];
+  const push = (
+    text: string,
+    className?: string,
+    hlFlag?: boolean,
+    sel?: boolean
+  ) => {
+    if (text.length) pieces.push({ text, className, hl: hlFlag, selected: sel });
+  };
+
+  const cuts = new Set<number>([0, line.length]);
+  for (const s of spans) {
+    cuts.add(s.start);
+    cuts.add(s.end);
+  }
+  if (hl) {
+    cuts.add(hl.start);
+    cuts.add(hl.end);
+  }
+  const boundaries = Array.from(cuts).sort((a, b) => a - b);
+
+  let spanIdx = 0;
+  for (let k = 0; k < boundaries.length - 1; k++) {
+    const a = boundaries[k];
+    const b = boundaries[k + 1];
+    if (b <= a) continue;
+
+    while (spanIdx < spans.length && spans[spanIdx].end <= a) spanIdx++;
+    const span =
+      spanIdx < spans.length &&
+      spans[spanIdx].start <= a &&
+      spans[spanIdx].end >= b
+        ? spans[spanIdx]
+        : undefined;
+
+    const inHL = hl ? a < hl.end && b > hl.start : false;
+    const text = line.slice(a, b);
+
+    push(text, span?.className, inHL, hl?.selected);
+  }
+
+  return (
+    <div className="flex items-start cursor-pointer" onClick={() => onLineClick(lineIndex)}>
+      <span
+        className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
+        style={{ width: `${lineDigits}ch` }}
+      >
+        {lineNo}
+      </span>
+      <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
+        {pieces.length
+          ? pieces.map((p, idx) => (
+            <span
+              key={idx}
+              className={[
+                p.className ?? "",
+                p.hl
+                  ? p.selected
+                    ? "bg-amber-200/80 rounded"
+                    : "bg-amber-100 rounded"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
+              {p.text}
+            </span>
+          ))
+          : line || " "}
+      </code>
+    </div>
+  );
+});
 
 export const SandboxViewer = ({
   sandboxId,
@@ -241,23 +368,6 @@ export const SandboxViewer = ({
     }
   }, [viewMode, revealEndIndex]);
 
-  // Helper: check if a Tree-sitter node covers a given row
-  const nodeCoversRow = (node: TreeSitterAstNode, row: number): boolean =>
-    row >= node.startPosition.row && row <= node.endPosition.row;
-
-  // Helper: find the smallest Tree-sitter node that covers a given row
-  const findSmallestCoveringNode = (
-    node: TreeSitterAstNode,
-    row: number
-  ): TreeSitterAstNode | undefined => {
-    if (!nodeCoversRow(node, row)) return undefined;
-    for (const child of node.namedChildren || []) {
-      const found = findSmallestCoveringNode(child, row);
-      if (found) return found;
-    }
-    return node;
-  };
-
   // Active Tree-sitter root: either zoomed root or top-level AST (Tree-sitter only)
   const activeTsRoot: TreeSitterAstNode | undefined = useMemo(() => {
     if (zoomRootTs) return zoomRootTs;
@@ -276,7 +386,7 @@ export const SandboxViewer = ({
   // and when in quiz mode, further clip to the currently revealed prefix.
   const codeSlice = useMemo(() => {
     if (state.status !== "loaded") {
-      return { lines: [] as string[], baseRow: 0 };
+      return { lines: [] as string[], baseRow: 0, sliceStart: 0, sliceEnd: 0 };
     }
 
     // Determine slice bounds (zoomed or full file)
@@ -307,7 +417,12 @@ export const SandboxViewer = ({
       visible = chars.join("");
     }
 
-    return { lines: visible.split("\n"), baseRow };
+    return {
+      lines: visible.split("\n"),
+      baseRow,
+      sliceStart,
+      sliceEnd: sliceStart + visible.length,
+    };
   }, [
     state.status,
     state.status === "loaded" ? state.code : undefined,
@@ -324,27 +439,141 @@ export const SandboxViewer = ({
     return digits;
   }, [codeSlice.lines.length]);
 
+  const sliceStartIndex = codeSlice.sliceStart ?? 0;
+
   // Character-range helpers (slice-relative) for precise highlighting
   const selectedCharRange = useMemo(() => {
     if (!selectedTsNode) return undefined;
-    // If not zoomed, the slice starts at 0. If zoomed, it starts at the root's index.
-    const sliceStartIndex = zoomRootTs?.startIndex ?? 0;
-
     const start = selectedTsNode.startIndex - sliceStartIndex;
     const end = selectedTsNode.endIndex - sliceStartIndex;
 
     return { start, end };
-  }, [selectedTsNode, zoomRootTs]);
+  }, [selectedTsNode, sliceStartIndex]);
 
   const hoveredCharRange = useMemo(() => {
     if (!hoveredTsNode) return undefined;
-    const sliceStartIndex = zoomRootTs?.startIndex ?? 0;
-
     const start = hoveredTsNode.startIndex - sliceStartIndex;
     const end = hoveredTsNode.endIndex - sliceStartIndex;
 
     return { start, end };
-  }, [hoveredTsNode, zoomRootTs]);
+  }, [hoveredTsNode, sliceStartIndex]);
+
+  const codeLength = state.status === "loaded" ? state.code.length : 0;
+
+  const sliceTokens = useMemo(() => {
+    if (parseResult?.status !== "success" || parseResult.parser !== "tree-sitter") {
+      return [];
+    }
+
+    if (codeLength > 300_000) return [];
+
+    const sliceEndIndex = codeSlice.sliceEnd;
+    const raw = parseResult.highlights ?? [];
+    if (raw.length > 200_000) return [];
+    const filtered: { start: number; end: number; className: string }[] = [];
+
+    for (const t of raw) {
+      if (t.startIndex >= sliceEndIndex) break;
+      const s = Math.max(t.startIndex, sliceStartIndex);
+      const e = Math.min(t.endIndex, sliceEndIndex);
+      if (e > s) {
+        filtered.push({
+          start: s - sliceStartIndex,
+          end: e - sliceStartIndex,
+          className: scopeClass(t.scope),
+        });
+      }
+    }
+
+    return filtered;
+  }, [parseResult, sliceStartIndex, codeSlice.sliceEnd, codeLength]);
+
+  const lineSyntaxSpans = useMemo(() => {
+    const spans: LineSpan[][] = Array.from(
+      { length: codeSlice.lines.length },
+      () => []
+    );
+    if (!sliceTokens.length) return spans;
+
+    let tokenIdx = 0;
+    let offset = 0;
+
+    for (let i = 0; i < codeSlice.lines.length; i++) {
+      const line = codeSlice.lines[i];
+      const lineStart = offset;
+      const lineEnd = lineStart + line.length;
+
+      while (tokenIdx < sliceTokens.length && sliceTokens[tokenIdx].end <= lineStart) {
+        tokenIdx++;
+      }
+
+      let j = tokenIdx;
+      while (j < sliceTokens.length && sliceTokens[j].start < lineEnd) {
+        const t = sliceTokens[j];
+        const s = Math.max(t.start, lineStart) - lineStart;
+        const e = Math.min(t.end, lineEnd) - lineStart;
+        if (e > s) spans[i].push({ start: s, end: e, className: t.className });
+
+        if (t.end <= lineEnd) j++;
+        else break;
+      }
+
+      tokenIdx = j;
+      offset += line.length + 1;
+    }
+
+    return spans;
+  }, [codeSlice.lines, sliceTokens]);
+
+  const activeRange = selectedCharRange ?? hoveredCharRange;
+
+  const lineStarts = useMemo(() => {
+    const starts: number[] = [];
+    let off = 0;
+    for (const line of codeSlice.lines) {
+      starts.push(off);
+      off += line.length + 1;
+    }
+    return starts;
+  }, [codeSlice.lines]);
+
+  const lineHL = useMemo(() => {
+    const out: LineHL[] = Array(codeSlice.lines.length).fill(undefined);
+    if (!activeRange) return out;
+
+    const sel = !!selectedCharRange;
+    for (let i = 0; i < codeSlice.lines.length; i++) {
+      const start = lineStarts[i];
+      const end = start + codeSlice.lines[i].length;
+      if (end < activeRange.start || start > activeRange.end) continue;
+
+      const s = Math.max(activeRange.start, start) - start;
+      const e = Math.min(activeRange.end, end) - start;
+      if (e > s) out[i] = { start: s, end: e, selected: sel };
+    }
+    return out;
+  }, [
+    activeRange?.start,
+    activeRange?.end,
+    selectedCharRange ? 1 : 0,
+    codeSlice.lines,
+    lineStarts,
+  ]);
+
+  const handleLineClick = useCallback(
+    (lineIndex: number) => {
+      if (
+        parseResult?.status === "success" &&
+        parseResult.parser === "tree-sitter"
+      ) {
+        const root = activeTsRoot ?? (parseResult.ast as TreeSitterAstNode);
+        const absoluteRow = lineIndex + codeSlice.baseRow;
+        const found = findSmallestCoveringNode(root, absoluteRow);
+        if (found) setSelectedTsNode(found);
+      }
+    },
+    [parseResult, activeTsRoot, codeSlice.baseRow]
+  );
 
   return (
     <div className="h-[calc(100vh-64px)] overflow-hidden bg-gradient-to-br from-pink-100 via-purple-50 to-teal-100">
@@ -682,136 +911,18 @@ export const SandboxViewer = ({
                 especially on mobile Safari.
               */}
                   <div className="text-xs leading-relaxed font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
-                    {(() => {
-                      let charIndex = 0; // slice-relative character index
-                      const activeRange = selectedCharRange ?? hoveredCharRange;
-
-                      return codeSlice.lines.map((line: string, i: number) => {
-                        const lineStart = charIndex;
-                        const lineEnd = lineStart + line.length;
-                        charIndex += line.length + 1; // +1 for the newline character
-
-                        const getHighlightClasses = (isFullLine: boolean) => {
-                          if (!activeRange) return "";
-                          const isSelected = !!selectedCharRange;
-                          if (isFullLine) {
-                            return isSelected ? "bg-amber-100/70" : "bg-amber-50";
-                          }
-                          return isSelected
-                            ? "bg-amber-200/80 rounded"
-                            : "bg-amber-100 rounded";
-                        };
-
-                        const handleLineClick = () => {
-                          if (
-                            parseResult?.status === "success" &&
-                            parseResult.parser === "tree-sitter"
-                          ) {
-                            const root =
-                              activeTsRoot ??
-                              (parseResult.ast as TreeSitterAstNode);
-                            const absoluteRow = i + codeSlice.baseRow;
-                            const found = findSmallestCoveringNode(
-                              root,
-                              absoluteRow
-                            );
-                            if (found) setSelectedTsNode(found);
-                          }
-                        };
-
-                        // Case 1: No active highlight on this line
-                        if (
-                          !activeRange ||
-                          lineEnd < activeRange.start ||
-                          lineStart > activeRange.end
-                        ) {
-                          return (
-                            <div
-                              key={i}
-                              className="flex items-start cursor-pointer"
-                              onClick={handleLineClick}
-                            >
-                              <span
-                                className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
-                                style={{ width: `${lineDigits}ch` }}
-                              >
-                                {i + 1}
-                              </span>
-                              <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
-                                {line || " "}
-                              </code>
-                            </div>
-                          );
-                        }
-
-                        // Case 2: The entire line is inside the highlight
-                        if (
-                          lineStart >= activeRange.start &&
-                          lineEnd <= activeRange.end
-                        ) {
-                          return (
-                            <div
-                              key={i}
-                              className={`flex items-start cursor-pointer -mx-2 px-2 rounded ${getHighlightClasses(
-                                true
-                              )}`}
-                              onClick={handleLineClick}
-                            >
-                              <span
-                                className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
-                                style={{ width: `${lineDigits}ch` }}
-                              >
-                                {i + 1}
-                              </span>
-                              <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
-                                {line || " "}
-                              </code>
-                            </div>
-                          );
-                        }
-
-                        // Case 3: Partial highlight
-                        const startHighlight = Math.max(
-                          lineStart,
-                          activeRange.start
-                        );
-                        const endHighlight = Math.min(lineEnd, activeRange.end);
-                        const startIndexInLine = startHighlight - lineStart;
-                        const endIndexInLine = endHighlight - lineStart;
-
-                        const before = line.substring(0, startIndexInLine);
-                        const highlighted = line.substring(
-                          startIndexInLine,
-                          endIndexInLine
-                        );
-                        const after = line.substring(endIndexInLine);
-
-                        return (
-                          <div
-                            key={i}
-                            className="flex items-start cursor-pointer hover:bg-slate-100/80 -mx-2 px-2 rounded"
-                            onClick={handleLineClick}
-                          >
-                            <span
-                              className="mr-4 shrink-0 select-none text-right text-slate-400 tabular-nums"
-                              style={{ width: `${lineDigits}ch` }}
-                            >
-                              {i + 1}
-                            </span>
-                            <code className="flex-1 whitespace-pre-wrap break-words [overflow-wrap:anywhere] text-slate-700">
-                              {before && <span>{before}</span>}
-                              {highlighted && (
-                                <span className={getHighlightClasses(false)}>
-                                  {highlighted}
-                                </span>
-                              )}
-                              {after && <span>{after}</span>}
-                              {!before && !highlighted && !after && " "}
-                            </code>
-                          </div>
-                        );
-                      });
-                    })()}
+                    {codeSlice.lines.map((line: string, i: number) => (
+                      <CodeLine
+                        key={i}
+                        line={line || " "}
+                        lineIndex={i}
+                        lineNo={i + 1}
+                        lineDigits={lineDigits}
+                        spans={lineSyntaxSpans[i] ?? []}
+                        hl={lineHL[i]}
+                        onLineClick={handleLineClick}
+                      />
+                    ))}
                   </div>
                 </div>
               </div>
