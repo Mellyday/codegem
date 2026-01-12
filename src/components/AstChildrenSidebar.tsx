@@ -1,5 +1,6 @@
 import type { TreeSitterAstNode } from "../lib/treeSitter";
-import { getLanguageToolsForFileName } from "../lib/languages/registry";
+import { getLanguageToolsForFileName, getLanguageIdFromFileName } from "../lib/languages/registry";
+import { getNodeDisplayName } from "../lib/astDisplayNames";
 import { useState, memo } from "react";
 import { ChevronRight, MessageSquare, Type, Terminal, Code } from "lucide-react";
 
@@ -66,6 +67,7 @@ type TreeNodeProps = {
   code?: string;
   buildCuratedSections: (node: TreeSitterAstNode) => Array<{ key: string; items: TreeSitterAstNode[] }>;
   isYieldFrom: (node: TreeSitterAstNode, code?: string) => boolean;
+  languageId?: string;
 };
 
 const TreeNode = memo(function TreeNode({
@@ -78,6 +80,7 @@ const TreeNode = memo(function TreeNode({
   code,
   buildCuratedSections,
   isYieldFrom,
+  languageId,
 }: TreeNodeProps) {
   const [isExpanded, setIsExpanded] = useState(true);
   const isSelected = nodesEqual(selectedNode, node);
@@ -123,9 +126,9 @@ const TreeNode = memo(function TreeNode({
         {/* Node icon */}
         {getNodeIcon(node.type)}
 
-        {/* Node type name */}
-        <span className={`font-mono text-sm ${getNodeTextColor(node.type)}`}>
-          {node.type}
+        {/* Node type display name */}
+        <span className={`text-sm ${getNodeTextColor(node.type)}`}>
+          {getNodeDisplayName(languageId, node.type)}
         </span>
 
         {/* Yield-from hint */}
@@ -162,6 +165,7 @@ const TreeNode = memo(function TreeNode({
                   code={code}
                   buildCuratedSections={buildCuratedSections}
                   isYieldFrom={isYieldFrom}
+                  languageId={languageId}
                 />
               ))}
             </div>
@@ -185,6 +189,7 @@ export const AstChildrenSidebar = ({
   const { curation } = getLanguageToolsForFileName(fileName);
   const buildCuratedSectionsShared = curation.buildCuratedSections;
   const isYieldFrom = curation.isYieldFrom || (() => false);
+  const languageId = getLanguageIdFromFileName(fileName);
 
   // Typically the root is a `module` node; render it and its top-level children.
   const topLevel = ast.namedChildren || [];
@@ -214,6 +219,7 @@ export const AstChildrenSidebar = ({
           code={code}
           buildCuratedSections={buildCuratedSectionsShared}
           isYieldFrom={isYieldFrom}
+          languageId={languageId}
         />
       ))}
     </aside>

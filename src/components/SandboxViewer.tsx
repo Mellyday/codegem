@@ -28,6 +28,8 @@ import { parseCodeToAst, type ParseResult } from "../lib/ast";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { QuizViewer } from "./QuizViewer";
 import { LessonViewer } from "./LessonViewer";
+import { getNodeDisplayName } from "../lib/astDisplayNames";
+import { getLanguageIdFromFileName } from "../lib/languages/registry";
 
 type SandboxViewerProps = {
   sandboxId: string;
@@ -998,7 +1000,7 @@ export const SandboxViewer = ({
                                     setHoveredTsNode(undefined)
                                   }
                                 >
-                                  {zoomRootTs.type}
+                                  {getNodeDisplayName(getLanguageIdFromFileName(fileName), zoomRootTs.type)}
                                 </span>
                               </>
                             ) : (
