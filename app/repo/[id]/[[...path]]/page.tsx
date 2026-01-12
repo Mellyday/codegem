@@ -32,7 +32,7 @@ export default async function RepoBrowsePage({
   const listing = await listPathChildren({ kind: "repo", id, prefix });
 
   return (
-    <main className="min-h-screen bg-rose-50 text-slate-900">
+    <main className="min-h-screen bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60 text-slate-900">
       <section className="mx-auto max-w-4xl px-6 py-8">
         <Breadcrumb kind="repo" id={id} prefix={listing.prefix} />
         <ExplorerActions kind="repo" id={id} prefix={listing.prefix} />
@@ -67,7 +67,7 @@ function Breadcrumb({
     })),
   ];
   return (
-    <nav className="text-sm text-rose-600">
+    <nav className="text-sm text-cyan-600">
       <Link href="/" className="hover:underline">Home</Link>
       <span className="mx-2">/</span>
       {crumbs.map((c, i) => (

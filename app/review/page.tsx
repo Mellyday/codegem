@@ -99,7 +99,7 @@ function FileTreeItem({
                 <span className="flex-1 truncate font-mono text-sm text-slate-700">
                     {fileName}
                 </span>
-                <span className="rounded bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700">
+                <span className="rounded bg-cyan-100 px-2 py-0.5 text-xs font-medium text-cyan-700">
                     {detail.loc} LOC
                 </span>
                 {detail.segments.some((s) => s.isGold) && (
@@ -174,14 +174,14 @@ function RepoSection({
                 onClick={() => setExpanded(!expanded)}
                 className="flex w-full items-center gap-3 p-4 text-left transition-colors hover:bg-slate-50"
             >
-                <Folder className="h-5 w-5 text-rose-500" />
+                <Folder className="h-5 w-5 text-cyan-500" />
                 <div className="flex-1">
                     <div className="font-semibold text-slate-900">{detail.repoName}</div>
                     <div className="text-xs text-slate-500">
                         {detail.kind === "repo" ? "Repository" : "Project"} • {Object.keys(detail.files).length} files
                     </div>
                 </div>
-                <span className="rounded-lg bg-rose-100 px-3 py-1 text-sm font-medium text-rose-700">
+                <span className="rounded-lg bg-cyan-100 px-3 py-1 text-sm font-medium text-cyan-700">
                     {detail.totalLoc} LOC
                 </span>
             </button>
@@ -273,13 +273,13 @@ export default function ReviewPage() {
     const isToday = date === formatLocalDate(new Date());
 
     return (
-        <main className="min-h-screen bg-rose-50 text-slate-900">
+        <main className="min-h-screen bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60 text-slate-900">
             <section className="mx-auto flex max-w-4xl flex-col gap-6 px-6 py-8">
                 {/* Header */}
                 <header className="flex items-center justify-between">
                     <div>
-                        <h1 className="text-2xl font-bold text-rose-700">Daily Review</h1>
-                        <p className="text-sm text-rose-500">{formatDate(date)}</p>
+                        <h1 className="text-2xl font-bold text-cyan-700">Daily Review</h1>
+                        <p className="text-sm text-cyan-600/80">{formatDate(date)}</p>
                     </div>
                     <div className="flex items-center gap-2">
                         <button
@@ -303,7 +303,7 @@ export default function ReviewPage() {
                 {/* Loading / Error states */}
                 {loading && (
                     <div className="flex items-center justify-center py-12">
-                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-rose-200 border-t-rose-500" />
+                        <div className="h-8 w-8 animate-spin rounded-full border-4 border-cyan-200 border-t-cyan-500" />
                     </div>
                 )}
 
@@ -334,7 +334,7 @@ export default function ReviewPage() {
                                         value={data.summary.totalLoc}
                                         subValue={`${data.summary.totalSegments} segments`}
                                         icon={Star}
-                                        colorClass="border-rose-200 bg-rose-100 text-rose-800"
+                                        colorClass="border-cyan-200 bg-cyan-100 text-cyan-800"
                                     />
                                     <StatCard
                                         label="First Time"

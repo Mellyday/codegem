@@ -89,7 +89,7 @@ export function ExplorerActions({
           type="button"
           onClick={createFolder}
           disabled={busy}
-          className="rounded-md bg-rose-600 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-rose-700 disabled:opacity-50"
+          className="rounded-md bg-cyan-600 px-3 py-1.5 text-xs font-medium text-white shadow hover:bg-cyan-700 disabled:opacity-50"
         >
           New Folder
         </button>

@@ -54,7 +54,7 @@ export function FileListing({ kind, id, prefix, dirs, files, showDelete, DeleteB
     const baseHref = `/${kind}/${encodeURIComponent(id)}`;
 
     return (
-        <ul className="mt-4 divide-y divide-rose-100 rounded-lg border border-rose-200 bg-white">
+        <ul className="mt-4 divide-y divide-cyan-100 rounded-lg border border-cyan-200 bg-white">
             {/* Directories */}
             {dirs.map((d) => {
                 const dirPath = [prefix, d].filter(Boolean).join("/");
@@ -62,7 +62,7 @@ export function FileListing({ kind, id, prefix, dirs, files, showDelete, DeleteB
                     <li key={`dir:${d}`} className="flex items-center justify-between px-4 py-3">
                         <Link
                             href={`${baseHref}/${dirPath.split("/").map(encodeURIComponent).join("/")}`}
-                            className="font-medium text-rose-700 hover:underline"
+                            className="font-medium text-cyan-700 hover:underline"
                         >
                             {d}/
                         </Link>
@@ -73,7 +73,7 @@ export function FileListing({ kind, id, prefix, dirs, files, showDelete, DeleteB
                             {loadingStats && (
                                 <span className="h-3 w-3 animate-pulse rounded-full bg-slate-200" />
                             )}
-                            <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">Folder</span>
+                            <span className="text-[0.65rem] uppercase tracking-wide text-cyan-500">Folder</span>
                             {showDelete && DeleteButton && (
                                 <DeleteButton kind={kind} id={id} path={dirPath} isDir label="×" />
                             )}
@@ -98,7 +98,7 @@ export function FileListing({ kind, id, prefix, dirs, files, showDelete, DeleteB
                             path={f.path}
                             stats={stats.files[f.path]}
                         />
-                        <span className="text-[0.65rem] uppercase tracking-wide text-rose-400">File</span>
+                        <span className="text-[0.65rem] uppercase tracking-wide text-cyan-500">File</span>
                         {showDelete && DeleteButton && (
                             <DeleteButton kind={kind} id={id} path={f.path} label="×" />
                         )}
@@ -108,7 +108,7 @@ export function FileListing({ kind, id, prefix, dirs, files, showDelete, DeleteB
 
             {/* Empty state */}
             {dirs.length === 0 && files.length === 0 && (
-                <li className="px-4 py-6 text-sm italic text-rose-400">Empty</li>
+                <li className="px-4 py-6 text-sm italic text-cyan-400">Empty</li>
             )}
         </ul>
     );

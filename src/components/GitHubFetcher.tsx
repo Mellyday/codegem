@@ -220,8 +220,8 @@ export default function GitHubFetcher() {
         : 0;
 
     return (
-        <div className="rounded-xl border border-rose-200 bg-white/80 p-6 shadow-sm backdrop-blur">
-            <h2 className="mb-4 text-lg font-semibold text-rose-700">Import GitHub Repository</h2>
+        <div className="rounded-xl border border-cyan-200 bg-white/80 p-6 shadow-sm backdrop-blur">
+            <h2 className="mb-4 text-lg font-semibold text-cyan-700">Import GitHub Repository</h2>
 
             {/* URL Input */}
             <div className="flex gap-3">
@@ -234,15 +234,15 @@ export default function GitHubFetcher() {
                     }}
                     placeholder="https://github.com/owner/repo"
                     disabled={status === "fetching"}
-                    className="flex-1 rounded-lg border border-rose-200 bg-white px-4 py-2.5 text-sm 
-            placeholder:text-rose-300 focus:border-rose-400 focus:outline-none focus:ring-2 
-            focus:ring-rose-100 disabled:bg-rose-50 disabled:text-rose-400"
+                    className="flex-1 rounded-lg border border-cyan-200 bg-white px-4 py-2.5 text-sm 
+            placeholder:text-cyan-400 focus:border-cyan-400 focus:outline-none focus:ring-2 
+            focus:ring-cyan-100 disabled:bg-cyan-50 disabled:text-cyan-400"
                 />
                 {status === "fetching" ? (
                     <button
                         onClick={handleCancel}
-                        className="rounded-lg bg-rose-100 px-5 py-2.5 text-sm font-medium text-rose-600 
-              transition hover:bg-rose-200"
+                        className="rounded-lg bg-cyan-100 px-5 py-2.5 text-sm font-medium text-cyan-600 
+              transition hover:bg-cyan-200"
                     >
                         Cancel
                     </button>
@@ -250,8 +250,8 @@ export default function GitHubFetcher() {
                     <button
                         onClick={handleFetch}
                         disabled={!isValidUrl}
-                        className="rounded-lg bg-rose-600 px-5 py-2.5 text-sm font-medium text-white 
-              transition hover:bg-rose-700 disabled:cursor-not-allowed disabled:bg-rose-300"
+                        className="rounded-lg bg-cyan-600 px-5 py-2.5 text-sm font-medium text-white 
+              transition hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-cyan-300"
                     >
                         Fetch
                     </button>
@@ -260,7 +260,7 @@ export default function GitHubFetcher() {
 
             {/* Validation hint */}
             {url && !isValidUrl && (
-                <p className="mt-2 text-xs text-rose-500">
+                <p className="mt-2 text-xs text-cyan-500">
                     Enter a valid GitHub URL (e.g., https://github.com/owner/repo)
                 </p>
             )}
@@ -276,9 +276,9 @@ export default function GitHubFetcher() {
             {currentProgress && status === "fetching" && (
                 <div className="mt-4 space-y-3">
                     <div className="flex items-center justify-between text-sm">
-                        <span className="text-rose-600">{currentProgress.phase}</span>
+                        <span className="text-cyan-600">{currentProgress.phase}</span>
                         {currentProgress.total && (
-                            <span className="text-rose-500">
+                            <span className="text-cyan-500">
                                 {currentProgress.index ?? 0}/{currentProgress.total} ({progressPercent}%)
                             </span>
                         )}
@@ -286,9 +286,9 @@ export default function GitHubFetcher() {
 
                     {/* Progress bar */}
                     {currentProgress.total && (
-                        <div className="h-2 overflow-hidden rounded-full bg-rose-100">
+                        <div className="h-2 overflow-hidden rounded-full bg-cyan-100">
                             <div
-                                className="h-full bg-gradient-to-r from-rose-400 to-rose-600 transition-all duration-300"
+                                className="h-full bg-gradient-to-r from-cyan-400 to-cyan-600 transition-all duration-300"
                                 style={{ width: `${progressPercent}%` }}
                             />
                         </div>
@@ -296,8 +296,8 @@ export default function GitHubFetcher() {
 
                     {/* Current file */}
                     {currentProgress.currentFile && (
-                        <div className="rounded-lg bg-rose-50 p-3">
-                            <p className="truncate text-xs text-rose-500">
+                        <div className="rounded-lg bg-cyan-50 p-3">
+                            <p className="truncate text-xs text-cyan-500">
                                 <span className="font-medium">Processing:</span> {currentProgress.currentFile}
                             </p>
                         </div>
@@ -318,7 +318,7 @@ export default function GitHubFetcher() {
                         <div className="space-y-1 font-mono text-xs text-slate-300">
                             {currentProgress.events.slice(-5).map((event, i) => (
                                 <div key={i} className="truncate">
-                                    <span className="text-rose-400">[{event.type}]</span>{" "}
+                                    <span className="text-cyan-400">[{event.type}]</span>{" "}
                                     {'file' in event && event.file}
                                     {'message' in event && event.message}
                                     {event.type === 'start' && `${event.owner}/${event.name}`}

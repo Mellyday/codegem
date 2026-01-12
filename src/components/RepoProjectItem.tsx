@@ -46,24 +46,24 @@ export function RepoProjectItem({ id, label, kind }: RepoOrProjectItemProps) {
         <li className="relative">
             {/* Normal view */}
             {deleteStep === 0 && (
-                <div className="flex items-center justify-between rounded-lg border border-rose-200 bg-white/70 transition hover:border-rose-300 hover:bg-white">
+                <div className="flex items-center justify-between rounded-lg border border-cyan-200 bg-white/70 transition hover:border-cyan-300 hover:bg-white">
                     <Link
                         href={baseHref}
-                        className="flex-1 px-4 py-3 text-sm font-medium hover:text-rose-700"
+                        className="flex-1 px-4 py-3 text-sm font-medium hover:text-cyan-700"
                     >
                         {label}
                     </Link>
                     <div className="flex items-center gap-2 pr-2">
                         <Link
                             href={baseHref}
-                            className="text-[0.65rem] uppercase tracking-wide text-rose-400 px-2 py-1 rounded hover:bg-rose-100 hover:text-rose-600"
+                            className="text-[0.65rem] uppercase tracking-wide text-cyan-500 px-2 py-1 rounded hover:bg-cyan-100 hover:text-cyan-600"
                         >
                             Browse
                         </Link>
                         <button
                             type="button"
                             onClick={() => setDeleteStep(1)}
-                            className="p-1.5 rounded text-slate-400 hover:text-rose-500 hover:bg-rose-50 transition"
+                            className="p-1.5 rounded text-slate-400 hover:text-red-500 hover:bg-red-50 transition"
                             title={`Delete ${kind}`}
                         >
                             <Trash2 className="h-3.5 w-3.5" />
@@ -74,8 +74,8 @@ export function RepoProjectItem({ id, label, kind }: RepoOrProjectItemProps) {
 
             {/* First confirmation */}
             {deleteStep === 1 && (
-                <div className="flex items-center justify-between rounded-lg border border-rose-300 bg-rose-50 px-4 py-3">
-                    <span className="text-sm font-medium text-rose-700">
+                <div className="flex items-center justify-between rounded-lg border border-cyan-300 bg-cyan-50 px-4 py-3">
+                    <span className="text-sm font-medium text-cyan-700">
                         Delete &quot;{label}&quot;?
                     </span>
                     <div className="flex items-center gap-2">
@@ -89,7 +89,7 @@ export function RepoProjectItem({ id, label, kind }: RepoOrProjectItemProps) {
                         <button
                             type="button"
                             onClick={() => setDeleteStep(2)}
-                            className="px-3 py-1.5 text-xs font-medium text-white bg-rose-500 rounded-md hover:bg-rose-600 transition"
+                            className="px-3 py-1.5 text-xs font-medium text-white bg-red-500 rounded-md hover:bg-red-600 transition"
                         >
                             Yes, Delete
                         </button>
@@ -99,8 +99,8 @@ export function RepoProjectItem({ id, label, kind }: RepoOrProjectItemProps) {
 
             {/* Second confirmation (final) */}
             {deleteStep === 2 && (
-                <div className="flex items-center justify-between rounded-lg border-2 border-rose-500 bg-rose-100 px-4 py-3">
-                    <span className="text-sm font-medium text-rose-800">
+                <div className="flex items-center justify-between rounded-lg border-2 border-red-500 bg-red-100 px-4 py-3">
+                    <span className="text-sm font-medium text-red-800">
                         ⚠️ This cannot be undone!
                     </span>
                     <div className="flex items-center gap-2">
@@ -116,7 +116,7 @@ export function RepoProjectItem({ id, label, kind }: RepoOrProjectItemProps) {
                             type="button"
                             onClick={handleDelete}
                             disabled={isDeleting}
-                            className="px-3 py-1.5 text-xs font-medium text-white bg-rose-600 rounded-md hover:bg-rose-700 transition disabled:opacity-50 flex items-center gap-1"
+                            className="px-3 py-1.5 text-xs font-medium text-white bg-red-600 rounded-md hover:bg-red-700 transition disabled:opacity-50 flex items-center gap-1"
                         >
                             <Trash2 className="h-3 w-3" />
                             {isDeleting ? "Deleting..." : "Delete Forever"}

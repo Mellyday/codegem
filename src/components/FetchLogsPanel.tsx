@@ -140,13 +140,13 @@ function LogItem({
     }[log.status];
 
     return (
-        <div className="rounded-lg border border-rose-100 bg-white transition hover:border-rose-200">
+        <div className="rounded-lg border border-cyan-100 bg-white transition hover:border-cyan-200">
             <div className="flex items-center gap-3 p-3">
                 <input
                     type="checkbox"
                     checked={selected}
                     onChange={(e) => onSelect(e.target.checked)}
-                    className="h-4 w-4 rounded border-rose-300 text-rose-600 focus:ring-rose-500"
+                    className="h-4 w-4 rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500"
                 />
 
                 <button
@@ -217,7 +217,7 @@ function LogItem({
 
             {/* Expanded details */}
             {expanded && (
-                <div className="border-t border-rose-100 bg-slate-50 p-3">
+                <div className="border-t border-cyan-100 bg-slate-50 p-3">
                     {/* File Type Summary */}
                     {log.fileTypeSummary && Object.keys(log.fileTypeSummary).length > 0 && (
                         <FileTypeSummaryDisplay summary={log.fileTypeSummary} />
@@ -298,8 +298,8 @@ export default function FetchLogsPanel() {
     // Loading state
     if (isLoading) {
         return (
-            <div className="rounded-xl border border-rose-200 bg-white/80 p-6 text-center shadow-sm backdrop-blur">
-                <div className="flex items-center justify-center gap-2 text-sm text-rose-400">
+            <div className="rounded-xl border border-cyan-200 bg-white/80 p-6 text-center shadow-sm backdrop-blur">
+                <div className="flex items-center justify-center gap-2 text-sm text-cyan-400">
                     <svg className="h-4 w-4 animate-spin" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
@@ -312,8 +312,8 @@ export default function FetchLogsPanel() {
 
     if (logs.length === 0) {
         return (
-            <div className="rounded-xl border border-rose-200 bg-white/80 p-6 text-center shadow-sm backdrop-blur">
-                <p className="text-sm text-rose-400">No fetch logs yet</p>
+            <div className="rounded-xl border border-cyan-200 bg-white/80 p-6 text-center shadow-sm backdrop-blur">
+                <p className="text-sm text-cyan-400">No fetch logs yet</p>
             </div>
         );
     }
@@ -322,9 +322,9 @@ export default function FetchLogsPanel() {
     const someSelected = selectedIds.size > 0;
 
     return (
-        <div className="rounded-xl border border-rose-200 bg-white/80 p-6 shadow-sm backdrop-blur">
+        <div className="rounded-xl border border-cyan-200 bg-white/80 p-6 shadow-sm backdrop-blur">
             <div className="mb-4 flex items-center justify-between">
-                <h2 className="text-lg font-semibold text-rose-700">Fetch History</h2>
+                <h2 className="text-lg font-semibold text-cyan-700">Fetch History</h2>
 
                 <div className="flex items-center gap-2">
                     {someSelected && (
@@ -338,8 +338,8 @@ export default function FetchLogsPanel() {
                     )}
                     <button
                         onClick={handleClearAll}
-                        className="rounded bg-rose-100 px-3 py-1.5 text-xs font-medium text-rose-600 
-              transition hover:bg-rose-200"
+                        className="rounded bg-cyan-100 px-3 py-1.5 text-xs font-medium text-cyan-600 
+              transition hover:bg-cyan-200"
                     >
                         Clear All
                     </button>
@@ -352,7 +352,7 @@ export default function FetchLogsPanel() {
                     type="checkbox"
                     checked={allSelected}
                     onChange={(e) => handleSelectAll(e.target.checked)}
-                    className="h-4 w-4 rounded border-rose-300 text-rose-600 focus:ring-rose-500"
+                    className="h-4 w-4 rounded border-cyan-300 text-cyan-600 focus:ring-cyan-500"
                 />
                 <span className="text-xs text-slate-500">Select all</span>
             </div>
