@@ -6,6 +6,7 @@ import {
   extractDeclaredNames,
   extractDeclaredTypeText,
   extractInitializerText,
+  findInitializerNode,
   findParameterList,
   getDeclaratorsForDeclaration,
   getSectionFirstItem,
@@ -159,6 +160,17 @@ export const computeAstPath = (
   return path;
 };
 
+const shuffle = <T>(arr: T[]): T[] => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+  }
+  return a;
+};
+
 const GENERIC_IDENTIFIERS = [
   "i",
   "j",
@@ -178,6 +190,83 @@ const GENERIC_IDENTIFIERS = [
   "temp",
   "flag",
 ];
+
+const splitCorrectIntoCards = (correct: string[]): string[][] => {
+  const unique = [...new Set(correct)];
+  if (unique.length <= 6) return [unique];
+
+  const shuffled = shuffle(unique);
+  const numCards = Math.ceil(unique.length / 6);
+  const baseSize = Math.floor(unique.length / numCards);
+  const remainder = unique.length % numCards;
+
+  const cardIndices = [...Array(numCards).keys()];
+  const shuffledIndices = shuffle(cardIndices);
+  const extraSlots = new Set(shuffledIndices.slice(0, remainder));
+
+  const cards: string[][] = [];
+  let idx = 0;
+
+  for (let c = 0; c < numCards; c++) {
+    const size = baseSize + (extraSlots.has(c) ? 1 : 0);
+    cards.push(shuffled.slice(idx, idx + size));
+    idx += size;
+  }
+
+  return shuffle(cards);
+};
+
+const buildKeyGroupOptionPool = (
+  correct: string[],
+  allKeys: Set<string>,
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const normalizeKeyToken = (raw: string) =>
+    raw.trim().replace(/^["'`]|["'`]$/g, "");
+  const normalizedKeys = new Set(
+    Array.from(allKeys)
+      .map(normalizeKeyToken)
+      .filter(Boolean)
+  );
+  const candidates: string[] = [];
+  const seenNormalized = new Set<string>();
+  const pushCandidate = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 40) return;
+    const normalized = normalizeKeyToken(trimmed);
+    if (!normalized) return;
+    if (normalizedKeys.has(normalized)) return;
+    if (seenNormalized.has(normalized)) return;
+    seenNormalized.add(normalized);
+    candidates.push(trimmed);
+  };
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) pushCandidate(m[0]);
+    while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
+  } catch { }
+
+  let pool = Array.from(new Set<string>([...correct, ...candidates]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_IDENTIFIERS)
+      .filter((d) => !pool.includes(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, MAX - correct.length)),
+  ]).slice(0, MAX);
+};
 
 const INCLUDE_DISTRACTORS = [
   "stdio.h",
@@ -320,6 +409,23 @@ const extractEnumEnumerators = (node: TreeSitterAstNode, code?: string) => {
     }
   }
   return { names: Array.from(new Set(names)), values };
+};
+
+const findInitializerListNodes = (
+  node: TreeSitterAstNode
+): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [node];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (cur.type === "initializer_list") {
+      out.push(cur);
+      continue;
+    }
+    (cur.namedChildren || []).forEach((c) => stack.push(c));
+  }
+  return out;
 };
 
 // ============================================================================
@@ -544,9 +650,9 @@ const generateQuestionsForAnchor = (
         );
       }
 
-      if (profile === "deep") {
-        const declarators = getDeclaratorsForDeclaration(node);
-        for (const decl of declarators) {
+      const declarators = getDeclaratorsForDeclaration(node);
+      for (const decl of declarators) {
+        if (profile === "deep") {
           const name = extractDeclaratorName(decl, code);
           const init = extractInitializerText(decl, code);
           if (name && init) {
@@ -560,6 +666,15 @@ const generateQuestionsForAnchor = (
                 answerLabel: init,
                 generatorRule: "decl.init",
               })
+            );
+          }
+        }
+        const initNode = findInitializerNode(decl);
+        if (initNode) {
+          const initLists = findInitializerListNodes(initNode);
+          for (const list of initLists) {
+            questions.push(
+              ...generateQuestionsForAnchor(root, list, profile, code)
             );
           }
         }
@@ -623,6 +738,78 @@ const generateQuestionsForAnchor = (
           }
         }
       }
+      return questions;
+    }
+
+    case "initializer_list": {
+      const entries: Array<{
+        keyNode: TreeSitterAstNode;
+        valueNode: TreeSitterAstNode;
+        keyText: string;
+      }> = [];
+      for (const child of node.namedChildren || []) {
+        const designator =
+          childByField(child, "designator") ||
+          childByField(child, "designators") ||
+          (child.namedChildren || []).find((c) => c.type.includes("designator"));
+        if (!designator) continue;
+        const valueNode =
+          childByField(child, "value") ||
+          childByField(child, "initializer") ||
+          (child.namedChildren || [])[child.namedChildren.length - 1];
+        if (!valueNode || valueNode === designator) continue;
+        const keyText =
+          textForRangeSafe(designator.startIndex, designator.endIndex, code)?.trim() ||
+          designator.type;
+        if (!keyText) continue;
+        entries.push({ keyNode: designator, valueNode, keyText });
+      }
+
+      if (entries.length === 0) return questions;
+      const keys = entries.map((e) => e.keyText).filter(Boolean);
+      if (keys.length === 0) return questions;
+      const uniqueKeys = Array.from(new Set(keys));
+      const allKeysSet = new Set(uniqueKeys);
+      const keyCards = splitCorrectIntoCards(uniqueKeys);
+      const listRef = sourceRefForNode(root, node, code);
+
+      for (const card of keyCards) {
+        const optionPool = buildKeyGroupOptionPool(
+          card,
+          allKeysSet,
+          code,
+          node.startIndex,
+          node.endIndex
+        );
+        questions.push({
+          kind: "initializer.keys",
+          stem: "Which designated keys are present in this initializer?",
+          answerLabel: "",
+          options: [],
+          sourceRefs: [listRef],
+          generatorRule: "initializer.keys",
+          questionType: "multi",
+          multiCorrect: card,
+          optionPool,
+          multiSelectHint: card.length,
+        });
+      }
+
+      for (const entry of entries) {
+        const valueText = textForNode(entry.valueNode, code).trim();
+        if (!valueText) continue;
+        const keyRef = sourceRefForNode(root, entry.keyNode, code);
+        const valueRef = sourceRefForNode(root, entry.valueNode, code);
+        questions.push({
+          kind: "initializer.value",
+          stem: `What is the value for ${entry.keyText}?`,
+          answerLabel: valueText,
+          options: [],
+          sourceRefs: [keyRef, valueRef, listRef],
+          generatorRule: "initializer.value",
+        });
+      }
+
       return questions;
     }
 
@@ -848,6 +1035,18 @@ const generateQuestionsForAnchor = (
               generatorRule: "assign.right",
             })
           );
+        }
+      }
+      if (expr.type === "assignment_expression") {
+        const right =
+          childByField(expr, "right") || (expr.namedChildren || [])[1];
+        if (right) {
+          const initLists = findInitializerListNodes(right);
+          for (const list of initLists) {
+            questions.push(
+              ...generateQuestionsForAnchor(root, list, profile, code)
+            );
+          }
         }
       }
       return questions;

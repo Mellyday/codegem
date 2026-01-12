@@ -200,6 +200,94 @@ const MODIFIER_KEYWORDS = [
   "default",
 ];
 
+const shuffle = <T>(arr: T[]): T[] => {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    const t = a[i];
+    a[i] = a[j];
+    a[j] = t;
+  }
+  return a;
+};
+
+const splitCorrectIntoCards = (correct: string[]): string[][] => {
+  const unique = [...new Set(correct)];
+  if (unique.length <= 6) return [unique];
+
+  const shuffled = shuffle(unique);
+  const numCards = Math.ceil(unique.length / 6);
+  const baseSize = Math.floor(unique.length / numCards);
+  const remainder = unique.length % numCards;
+
+  const cardIndices = [...Array(numCards).keys()];
+  const shuffledIndices = shuffle(cardIndices);
+  const extraSlots = new Set(shuffledIndices.slice(0, remainder));
+
+  const cards: string[][] = [];
+  let idx = 0;
+
+  for (let c = 0; c < numCards; c++) {
+    const size = baseSize + (extraSlots.has(c) ? 1 : 0);
+    cards.push(shuffled.slice(idx, idx + size));
+    idx += size;
+  }
+
+  return shuffle(cards);
+};
+
+const buildKeyGroupOptionPool = (
+  correct: string[],
+  allKeys: Set<string>,
+  code: string,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  const normalizeKeyToken = (raw: string) =>
+    raw.trim().replace(/^["'`]|["'`]$/g, "");
+  const normalizedKeys = new Set(
+    Array.from(allKeys)
+      .map(normalizeKeyToken)
+      .filter(Boolean)
+  );
+  const candidates: string[] = [];
+  const seenNormalized = new Set<string>();
+  const pushCandidate = (raw: string) => {
+    const trimmed = raw.trim();
+    if (!trimmed) return;
+    if (trimmed.length > 40) return;
+    const normalized = normalizeKeyToken(trimmed);
+    if (!normalized) return;
+    if (normalizedKeys.has(normalized)) return;
+    if (seenNormalized.has(normalized)) return;
+    seenNormalized.add(normalized);
+    candidates.push(trimmed);
+  };
+  try {
+    const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
+    const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+    const snippet = (code || "").slice(spanStart, spanEnd);
+    let m: RegExpExecArray | null;
+    while ((m = reId.exec(snippet))) pushCandidate(m[0]);
+    while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
+  } catch {}
+
+  let pool = Array.from(new Set<string>([...correct, ...candidates]));
+  if (pool.length < 10) {
+    const needed = 10 - pool.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !pool.includes(d))
+      .slice(0, needed);
+    pool.push(...pad);
+  }
+  const MAX = 10;
+  const extras = shuffle(pool.filter((p) => !correct.includes(p)));
+  return shuffle([
+    ...correct,
+    ...extras.slice(0, Math.max(0, MAX - correct.length)),
+  ]).slice(0, MAX);
+};
+
 // ============================================================================
 // AST utilities
 // ============================================================================
@@ -326,6 +414,84 @@ const isVarArgParam = (param: TreeSitterAstNode, code: string) => {
 const extractAnnotations = (node: TreeSitterAstNode, code: string) => {
   const annotations = getSectionItems(node, "annotations");
   return textForNodes(annotations, code);
+};
+
+const collectAnnotationNodes = (node: TreeSitterAstNode) => {
+  const modifiers = firstChildOfType(node, "modifiers");
+  if (!modifiers) return [];
+  const out: TreeSitterAstNode[] = [];
+  const stack = (modifiers.namedChildren || []).slice();
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (cur.type === "annotation" || cur.type === "marker_annotation") {
+      out.push(cur);
+    }
+    if (cur.namedChildren && cur.namedChildren.length) {
+      stack.push(...cur.namedChildren);
+    }
+  }
+  return out;
+};
+
+const annotationLabel = (node: TreeSitterAstNode, code: string) => {
+  const nameNode =
+    childByField(node, "name") ||
+    firstChildOfType(node, "scoped_identifier") ||
+    firstChildOfType(node, "identifier");
+  const nameText = nameNode ? textForNode(nameNode, code).trim() : "";
+  return nameText ? `@${nameText}` : "this annotation";
+};
+
+const extractAnnotationValueEntries = (
+  node: TreeSitterAstNode,
+  code: string
+) => {
+  const entries: Array<{
+    keyNode: TreeSitterAstNode;
+    valueNode: TreeSitterAstNode;
+    keyText: string;
+  }> = [];
+  const stack = (node.namedChildren || []).slice();
+  const pairs: TreeSitterAstNode[] = [];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (cur.type === "element_value_pair") {
+      pairs.push(cur);
+      continue;
+    }
+    if (cur.namedChildren && cur.namedChildren.length) {
+      stack.push(...cur.namedChildren);
+    }
+  }
+
+  for (const pair of pairs) {
+    const keyNode =
+      childByField(pair, "name") ||
+      childByField(pair, "key") ||
+      firstChildOfType(pair, "identifier") ||
+      firstChildOfType(pair, "scoped_identifier");
+    const valueNode =
+      childByField(pair, "value") ||
+      (pair.namedChildren || []).find((c) => c !== keyNode);
+    if (!keyNode || !valueNode) continue;
+    const keyText = textForNode(keyNode, code).trim();
+    if (!keyText) continue;
+    entries.push({ keyNode, valueNode, keyText });
+  }
+
+  if (entries.length > 0) return entries;
+
+  const implicitValue =
+    childByField(node, "value") ||
+    firstChildOfType(node, "element_value") ||
+    firstChildOfType(node, "element_value_array_initializer");
+  if (implicitValue) {
+    entries.push({ keyNode: node, valueNode: implicitValue, keyText: "value" });
+  }
+
+  return entries;
 };
 
 const extractThrows = (node: TreeSitterAstNode, code: string) => {
@@ -593,6 +759,60 @@ const addMultiQuestion = (
   );
 };
 
+const addAnnotationValueQuestions = (
+  questions: QuizQuestion[],
+  anchor: TreeSitterAstNode,
+  root: TreeSitterAstNode,
+  code: string
+) => {
+  const annotations = collectAnnotationNodes(anchor);
+  if (annotations.length === 0) return;
+  for (const annotation of annotations) {
+    const entries = extractAnnotationValueEntries(annotation, code);
+    if (entries.length === 0) continue;
+    const label = annotationLabel(annotation, code);
+    const keys = entries.map((e) => e.keyText).filter(Boolean);
+    const uniqueKeys = Array.from(new Set(keys));
+    if (uniqueKeys.length > 0) {
+      const allKeysSet = new Set(uniqueKeys);
+      const keyCards = splitCorrectIntoCards(uniqueKeys);
+      for (const card of keyCards) {
+        const optionPool = buildKeyGroupOptionPool(
+          card,
+          allKeysSet,
+          code,
+          annotation.startIndex,
+          annotation.endIndex
+        );
+        addMultiQuestion(questions, {
+          kind: "annotation.keys",
+          stem: `Which keys are present in ${label}?`,
+          answers: card,
+          node: annotation,
+          generatorRule: "annotation.keys",
+          root,
+          code,
+          optionPool,
+        });
+      }
+    }
+
+    for (const entry of entries) {
+      const valueText = textForNode(entry.valueNode, code).trim();
+      if (!valueText) continue;
+      addSingleQuestion(questions, {
+        kind: "annotation.value",
+        stem: `What is the value for ${entry.keyText} in ${label}?`,
+        answer: valueText,
+        node: entry.valueNode,
+        generatorRule: "annotation.value",
+        root,
+        code,
+      });
+    }
+  }
+};
+
 type ImportInfo = {
   display: string;
   isStatic: boolean;
@@ -777,6 +997,7 @@ const generateQuestionsForAnchor = (
         code,
         optionPool: annotations.length ? annotations : GENERIC_DISTRACTORS,
       });
+      addAnnotationValueQuestions(questions, anchor, root, code);
 
       if (anchor.type === "enum_declaration") {
         const enumBody = childByField(anchor, "body") || firstChildOfType(anchor, "enum_body");
@@ -899,6 +1120,7 @@ const generateQuestionsForAnchor = (
         code,
         optionPool: annotations.length ? annotations : GENERIC_DISTRACTORS,
       });
+      addAnnotationValueQuestions(questions, anchor, root, code);
 
       if (isDeep) {
         const typeParams = childByField(anchor, "type_parameters");
@@ -999,6 +1221,7 @@ const generateQuestionsForAnchor = (
         code,
         optionPool: GENERIC_DISTRACTORS,
       });
+      addAnnotationValueQuestions(questions, anchor, root, code);
       break;
     }
 
@@ -1015,6 +1238,7 @@ const generateQuestionsForAnchor = (
         code,
         optionPool: GENERIC_DISTRACTORS,
       });
+      addAnnotationValueQuestions(questions, anchor, root, code);
 
       const typeNode = childByField(anchor, "type");
       const typeText = typeNode ? textForNode(typeNode, code).trim() : "";
