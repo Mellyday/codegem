@@ -159,7 +159,8 @@ const computeHighlights = (
     }));
 
     tokens.sort(
-      (a, b) => a.startIndex - b.startIndex || a.endIndex - b.endIndex
+      (a: HighlightToken, b: HighlightToken) =>
+        a.startIndex - b.startIndex || a.endIndex - b.endIndex
     );
 
     const out: HighlightToken[] = [];
@@ -287,8 +288,7 @@ export const parseWithTreeSitter = async (
 
   if (!config) {
     throw new Error(
-      `Tree-sitter parser is not configured for .${
-        extension || "unknown"
+      `Tree-sitter parser is not configured for .${extension || "unknown"
       } files`
     );
   }
