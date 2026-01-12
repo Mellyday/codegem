@@ -1149,6 +1149,47 @@ export const QuizViewer = ({
           </div>
         </div>
 
+        {/* Step Navigator - chips + desktop slider */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-1.5 overflow-x-auto scrollbar-none py-1 -mx-1 px-1">
+            {stepNavItems.map((it, idx) =>
+              typeof it === "number" ? (
+                <button
+                  key={`s-${idx}-${it}`}
+                  type="button"
+                  onClick={() => jumpTo(it)}
+                  className={
+                    it === current
+                      ? "min-w-8 h-7 px-2 rounded-md bg-cyan-600 text-white text-xs font-medium shadow-sm"
+                      : "min-w-8 h-7 px-2 rounded-md border border-slate-200 bg-white text-slate-600 text-xs hover:bg-slate-50"
+                  }
+                >
+                  {it + 1}
+                </button>
+              ) : (
+                <span key={`e-${idx}`} className="px-0.5 text-slate-400 text-xs">
+                  {it}
+                </span>
+              )
+            )}
+          </div>
+          {/* Desktop slider */}
+          <div className="hidden sm:flex items-center gap-2 shrink-0">
+            <label htmlFor="q-range" className="text-xs text-slate-400">
+              Jump
+            </label>
+            <input
+              id="q-range"
+              type="range"
+              min={0}
+              max={Math.max(0, total - 1)}
+              value={current}
+              onChange={(e) => jumpTo(Number(e.target.value))}
+              className="h-1 w-28 cursor-pointer appearance-none rounded bg-slate-200 accent-cyan-600"
+            />
+          </div>
+        </div>
+
         {/* Question Card - flex-1 to fill available space */}
         <div className="space-y-6 flex-1">
           <div className="space-y-3">
@@ -1275,6 +1316,22 @@ export const QuizViewer = ({
             {current + 1 >= total ? "Finish" : "Next"}
             <ChevronsRight className="w-4 h-4" />
           </button>
+        </div>
+
+        {/* Mobile slider - at bottom, away from answer options */}
+        <div className="flex sm:hidden items-center gap-3 pt-2 border-t border-slate-100">
+          <span className="text-xs text-slate-400 shrink-0">Jump to Q</span>
+          <input
+            id="q-range-mobile"
+            type="range"
+            min={0}
+            max={Math.max(0, total - 1)}
+            value={current}
+            onChange={(e) => jumpTo(Number(e.target.value))}
+            className="h-1.5 flex-1 cursor-pointer appearance-none rounded bg-slate-200 accent-cyan-600"
+            style={{ touchAction: "pan-y" }}
+          />
+          <span className="text-xs text-slate-500 font-medium w-8 text-right">{current + 1}</span>
         </div>
       </div>
     );
