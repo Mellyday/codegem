@@ -292,6 +292,24 @@ If it’s a call:
 - `What function is called?`
 - deep: argument #1/#2 (limit)
 
+### 7.9 Designated initializers (`initializer_list`)
+C designated initializers (e.g., `{.x = 1, .y = 2}` or `{[0] = 1, [1] = 2}`) generate questions about their structure.
+
+Always:
+- Multi-select: `Which designators are present in this initializer?`
+  - Extracts field designators (`.field`) and array designators (`[index]`)
+  - For initializers with >6 designators, split into multiple cards (3-6 correct per card)
+  - Option pool drawn from surrounding code + generic identifiers
+
+Deep:
+- Per designator-value pair: `What is the value for <designator>?`
+  - Recursively generates questions for nested initializer lists
+  - Nested questions prefixed with `For <designator>: <original stem>`
+
+Initializer lists are detected and processed in:
+- Variable declarations with struct/array initializers
+- Compound literals (`(struct Point){.x = 1, .y = 2}`)
+
 ---
 
 ## 8) Shallow vs Deep Summary

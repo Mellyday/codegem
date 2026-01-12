@@ -118,6 +118,7 @@ Top-level and nested:
 - `module` (module definition)
 - method defs (`method`, `singleton_method`)
 - assignments (`assignment`, `multiple_assignment`)
+- `hash` (hash literal)
 - control flow (`if`, `unless`, `case`, `when`, loops, begin/rescue/ensure)
 - `return`, `break`, `next` (names vary; alias)
 - expression statements (especially `call` and `block` calls)
@@ -348,6 +349,24 @@ Deep:
 If an expression statement is a call:
 - `What method is called?`
 - deep: first argument (limit)
+
+### 7.9 Hash literals (`hash`)
+Hash literals are now anchor nodes themselves and generate questions about their contents.
+
+Always:
+- Multi-select: `Which keys are present in this hash?`
+  - For hashes with >6 keys, split into multiple cards (3-6 correct per card)
+  - Option pool drawn from surrounding code + generic distractors
+
+Deep:
+- Per key-value pair: `What is the value for key <key>?`
+  - Recursively generates questions for nested values (calls, other hashes, etc.)
+  - Nested questions prefixed with `For key <key>: <original stem>`
+
+Hash literals are also detected and processed when they appear as:
+- Assignment RHS values
+- Method call arguments
+- Return values
 
 ---
 

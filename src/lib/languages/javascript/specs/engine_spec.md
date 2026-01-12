@@ -786,6 +786,26 @@ Deep:
   - string literal values: `What is the value of prop <name>?`
   - jsx_expression values: `What expression is passed to prop <name>?`
 
+### 7.16 Object literals (`object`)
+Object literals generate questions about their key-value structure.
+
+Always:
+- Multi-select: `Which keys are present in this object?`
+  - For objects with >6 keys, split into multiple cards (3-6 correct per card)
+  - Option pool drawn from surrounding code + generic distractors
+  - Handles shorthand properties, computed properties, and spread elements
+
+Deep:
+- Per key-value pair: `What is the value for key <key>?`
+  - Recursively generates questions for nested values
+  - Nested questions prefixed with `For key <key>: <original stem>`
+
+Object literals are detected and processed when they appear as:
+- Variable initializers (`const obj = { ... }`)
+- Assignment RHS values
+- Function call arguments
+- Return statement values
+
 ---
 
 ## 8) Deep vs Shallow Summary

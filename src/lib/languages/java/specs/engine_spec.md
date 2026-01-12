@@ -487,6 +487,25 @@ If an `expression_statement` is:
   - `What method is called?`
   - deep: argument #1/#2 (limit to N=2)
 
+### 7.9 Annotation element-value pairs
+For annotations with element-value pairs (e.g., `@Table(name = "users", schema = "public")`):
+
+Always:
+- Multi-select: `Which keys are present in <@AnnotationName>?`
+  - Extracts keys from `element_value_pair` nodes
+  - For annotations with >6 keys, split into multiple cards (3-6 correct per card)
+  - Handles implicit `value` key for single-element annotations
+
+Deep:
+- Per element-value pair: `What is the value for <key> in <@AnnotationName>?`
+  - Answers with the element value expression text
+
+Annotation questions are generated for:
+- Class annotations
+- Method annotations
+- Field annotations
+- Constructor annotations
+
 ---
 
 ## 8) Shallow vs Deep Summary
