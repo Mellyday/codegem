@@ -1,7 +1,7 @@
 "use client";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle } from "lucide-react";
+import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle, FileCode, FileJson, FileType, File } from "lucide-react";
 
 // Server now reads file and passes code; no client-side loader
 import { AstTree } from "./AstTree";
@@ -148,7 +148,19 @@ const CodeLine = memo(function CodeLine(props: {
       </code>
     </div>
   );
+
 });
+
+const getFileIcon = (fileName: string) => {
+  if (fileName.endsWith(".go")) return <FileCode className="h-5 w-5 text-cyan-600" />;
+  if (fileName.endsWith(".ts") || fileName.endsWith(".tsx")) return <FileCode className="h-5 w-5 text-blue-600" />;
+  if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) return <FileCode className="h-5 w-5 text-yellow-500" />;
+  if (fileName.endsWith(".css")) return <FileCode className="h-5 w-5 text-sky-500" />;
+  if (fileName.endsWith(".json")) return <FileJson className="h-5 w-5 text-amber-600" />;
+  if (fileName.endsWith(".html")) return <FileCode className="h-5 w-5 text-orange-600" />;
+  if (fileName.endsWith(".md")) return <FileType className="h-5 w-5 text-slate-600" />;
+  return <File className="h-5 w-5 text-violet-500" />;
+};
 
 export const SandboxViewer = ({
   sandboxId,
@@ -578,10 +590,10 @@ export const SandboxViewer = ({
   return (
     <div className="h-[calc(100vh-64px)] overflow-hidden bg-gradient-to-b from-cyan-50 via-teal-50/80 to-emerald-50/60">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-violet-100/80 bg-white px-5 py-3">
+      <div className="flex items-center justify-between border-b border-violet-100/80 bg-slate-50/80 backdrop-blur-md px-5 py-3">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-purple-600 shadow-sm">
-            <FileText className="h-4 w-4 text-white" />
+          <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-white ring-1 ring-slate-900/5 shadow-sm">
+            {getFileIcon(fileName)}
           </div>
           <div>
             <h1 className="text-sm font-semibold text-slate-800">
@@ -599,7 +611,7 @@ export const SandboxViewer = ({
             <button
               type="button"
               onClick={() => setViewMode("ast")}
-              className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50"
+              className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
             >
               <FileText className="h-4 w-4" />
               Back to File
@@ -607,7 +619,7 @@ export const SandboxViewer = ({
           )}
           <Link
             href={parentFolderUrl}
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-sm font-medium text-slate-600 shadow-sm transition hover:bg-slate-50"
+            className="flex items-center gap-1.5 rounded-lg bg-slate-100 px-3 py-1.5 text-sm font-medium text-slate-700 transition hover:bg-slate-200"
           >
             <FolderOpen className="h-4 w-4" />
             Back to Folder
