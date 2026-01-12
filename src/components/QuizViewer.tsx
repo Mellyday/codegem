@@ -1,5 +1,5 @@
 import { Suspense } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronsLeft, ChevronsRight } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
@@ -17,6 +17,8 @@ export type QuizViewerProps = {
   // File context to load saved custom quizzes
   fileKey?: { kind: "repo" | "project"; id: string; path: string };
   fileName?: string;
+  // Session-scoped storage key for in-progress quiz persistence
+  progressStorageKey?: string;
   mode: QuizMode;
   onStart: () => void;
   onCancel: () => void;
@@ -67,6 +69,22 @@ type Question = {
   revealStart?: number;
   revealEndBeforeChild?: number;
   revealEndAfterChild?: number;
+};
+
+type QuizSource = "ast" | "saved";
+
+type PersistedQuestion = Omit<Question, "node" | "parentNode">;
+
+type PersistedQuizProgressV1 = {
+  version: 1;
+  quizSource: QuizSource;
+  activeQuizMeta?: { quizId?: string; sectionIndex?: number };
+  questions: PersistedQuestion[];
+  current: number;
+  answers: Array<string | string[] | null>;
+  answeredFlags: boolean[];
+  score: number;
+  updatedAt: number;
 };
 
 
@@ -390,6 +408,7 @@ export const QuizViewer = ({
   code,
   fileKey,
   fileName,
+  progressStorageKey,
   mode,
   onStart,
   onCancel,
@@ -416,6 +435,7 @@ export const QuizViewer = ({
   const [selectedCustom, setSelectedCustom] = useState<
     SavedCustomQuizV11 | undefined
   >(undefined);
+  const [quizSource, setQuizSource] = useState<QuizSource>("ast");
 
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([]);
@@ -437,6 +457,99 @@ export const QuizViewer = ({
     quizId?: string;
     sectionIndex?: number;
   }>({});
+
+  const didInitializeRef = useRef(false);
+
+  const clearProgress = () => {
+    if (!progressStorageKey) return;
+    try {
+      sessionStorage.removeItem(progressStorageKey);
+    } catch {
+      // ignore
+    }
+  };
+
+  const persistNow = (payload: PersistedQuizProgressV1) => {
+    if (!progressStorageKey) return;
+    try {
+      sessionStorage.setItem(progressStorageKey, JSON.stringify(payload));
+    } catch {
+      // ignore persist errors (storage full/private mode)
+    }
+  };
+
+  useEffect(() => {
+    if (mode !== "active") {
+      didInitializeRef.current = false;
+    }
+  }, [mode]);
+
+  // Restore in-progress quiz state on refresh (session-scoped).
+  useEffect(() => {
+    if (mode !== "active") return;
+    if (!progressStorageKey) return;
+    if (didInitializeRef.current) return;
+
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem(progressStorageKey);
+    } catch {
+      raw = null;
+    }
+    if (!raw) return;
+
+    let data: PersistedQuizProgressV1 | undefined;
+    try {
+      data = JSON.parse(raw) as PersistedQuizProgressV1;
+    } catch {
+      return;
+    }
+    if (!data || data.version !== 1) return;
+    if (!Array.isArray(data.questions) || data.questions.length === 0) return;
+    if (!Array.isArray(data.answers) || !Array.isArray(data.answeredFlags)) return;
+
+    didInitializeRef.current = true;
+
+    const qs = data.questions as unknown as Question[];
+    const total = qs.length;
+    const clampedCurrent = Math.min(
+      Math.max(0, Math.floor(Number(data.current ?? 0))),
+      Math.max(0, total - 1)
+    );
+    const answersRestored = (data.answers ?? []).slice(0, total).map((a) => {
+      if (a === null) return undefined;
+      return a;
+    }) as Array<string | string[] | undefined>;
+    const answeredFlagsRestored = (data.answeredFlags ?? [])
+      .slice(0, total)
+      .map((v) => !!v);
+
+    setQuizSource(data.quizSource === "saved" ? "saved" : "ast");
+    setActiveQuizMeta(data.activeQuizMeta ?? {});
+    setQuestions(qs);
+    setCurrent(clampedCurrent);
+    setAnswers(answersRestored);
+    setAnsweredFlags(answeredFlagsRestored);
+    setScore(Number.isFinite(data.score) ? data.score : 0);
+    setExpandedOptions({});
+
+    const curAns = answersRestored[clampedCurrent];
+    if (Array.isArray(curAns)) {
+      setSelected(undefined);
+      setSelectedMulti(new Set(curAns));
+      setSelectedOrdered(curAns);
+    } else {
+      setSelected(curAns as string | undefined);
+      setSelectedMulti(new Set());
+      setSelectedOrdered([]);
+    }
+
+    const meta = data.activeQuizMeta;
+    if (meta?.quizId && typeof meta.sectionIndex === "number") {
+      onQuizMetadataChange?.(meta.quizId, meta.sectionIndex);
+    }
+    onRevealChange?.(revealBeforeForQuestion(qs[clampedCurrent]));
+  }, [mode, progressStorageKey, onQuizMetadataChange, onRevealChange]);
 
   // Save a generated heuristic quiz to the database via /api/quizzes
   const saveHeuristicQuiz = async (
@@ -554,6 +667,8 @@ export const QuizViewer = ({
 
   useEffect(() => {
     if (mode === "active") {
+      if (didInitializeRef.current) return;
+      didInitializeRef.current = true;
       const qs = selectedCustom
         ? generateQuestionsFromCustom(selectedCustom, code, root)
         : generateQuestions(root, code, { source: "base" }, shouldSkipNode);
@@ -566,9 +681,24 @@ export const QuizViewer = ({
       setAnswers(new Array(qs.length).fill(undefined));
       setAnsweredFlags(new Array(qs.length).fill(false));
       setExpandedOptions({});
+      setQuizSource(selectedCustom ? "saved" : "ast");
       // Initial reveal window for the first question (AST, heuristic, or custom).
       const initialReveal = qs.length > 0 ? revealBeforeForQuestion(qs[0]) : undefined;
       onRevealChange?.(initialReveal);
+
+      // Persist immediately so a fast refresh doesn't drop the run.
+      const persistableQuestions = qs.map(({ node, parentNode, ...rest }) => rest);
+      persistNow({
+        version: 1,
+        quizSource: selectedCustom ? "saved" : "ast",
+        activeQuizMeta,
+        questions: persistableQuestions,
+        current: 0,
+        answers: new Array(qs.length).fill(null),
+        answeredFlags: new Array(qs.length).fill(false),
+        score: 0,
+        updatedAt: Date.now(),
+      });
     }
   }, [mode, root, code, selectedCustom, shouldSkipNode]);
 
@@ -578,6 +708,40 @@ export const QuizViewer = ({
       onRevealChange?.(undefined);
     }
   }, [mode, onRevealChange]);
+
+  // Persist progress while the quiz is active.
+  useEffect(() => {
+    if (mode !== "active") return;
+    if (!progressStorageKey) return;
+    if (!questions.length) return;
+
+    const handle = window.setTimeout(() => {
+      const persistableQuestions = questions.map(({ node, parentNode, ...rest }) => rest);
+      persistNow({
+        version: 1,
+        quizSource,
+        activeQuizMeta,
+        questions: persistableQuestions,
+        current,
+        answers: answers.map((a) => (typeof a === "undefined" ? null : a)),
+        answeredFlags,
+        score,
+        updatedAt: Date.now(),
+      });
+    }, 150);
+
+    return () => window.clearTimeout(handle);
+  }, [
+    mode,
+    progressStorageKey,
+    quizSource,
+    activeQuizMeta,
+    questions,
+    current,
+    answers,
+    answeredFlags,
+    score,
+  ]);
 
   const total = questions.length;
   const currentQ = questions[current];
@@ -672,8 +836,10 @@ export const QuizViewer = ({
                 // panel is isolated; only it remounts on refresh/errors
                 setSelectedCustom(q as any);
                 setActiveQuizMeta({ quizId: qId, sectionIndex: secIdx });
+                setQuizSource("saved");
                 // Notify parent of quiz metadata for medal tracking
                 onQuizMetadataChange?.(qId, secIdx);
+                clearProgress();
                 onStart();
               }}
             />
@@ -695,6 +861,8 @@ export const QuizViewer = ({
             onClick={() => {
               setSelectedCustom(undefined);
               setActiveQuizMeta({});
+              setQuizSource("ast");
+              clearProgress();
               onStart();
             }}
           >
@@ -704,7 +872,6 @@ export const QuizViewer = ({
       </div>
     );
   };
-
   const renderActive = () => {
     if (!currentQ) {
       return (
@@ -846,6 +1013,7 @@ export const QuizViewer = ({
           }
         } else {
         }
+        clearProgress();
         onComplete();
       } else {
         const nextIdx = current + 1;
@@ -874,9 +1042,11 @@ export const QuizViewer = ({
         if (Array.isArray(ans)) {
           setSelected(undefined);
           setSelectedMulti(new Set(ans));
+          setSelectedOrdered(ans);
         } else {
           setSelected(ans as string | undefined);
           setSelectedMulti(new Set());
+          setSelectedOrdered([]);
         }
         const q = questions[idx];
         onRevealChange?.(revealBeforeForQuestion(q));
@@ -894,9 +1064,11 @@ export const QuizViewer = ({
       if (Array.isArray(ans)) {
         setSelected(undefined);
         setSelectedMulti(new Set(ans));
+        setSelectedOrdered(ans);
       } else {
         setSelected(ans as string | undefined);
         setSelectedMulti(new Set());
+        setSelectedOrdered([]);
       }
       const q = questions[clamped];
       onRevealChange?.(revealBeforeForQuestion(q));
@@ -927,9 +1099,9 @@ export const QuizViewer = ({
         <div className="flex items-center justify-between">
           <div>
             <h3 className="text-lg font-semibold text-slate-800">
-              {selectedCustom ? "Custom Quiz" : "AST Quiz"}
+              {quizSource === "saved" ? "Custom Quiz" : "AST Quiz"}
             </h3>
-            {!selectedCustom && currentQ.parentType && (
+            {quizSource !== "saved" && currentQ.parentType && (
               <p className="text-xs uppercase tracking-wide text-slate-500">
                 Parent: <span className="font-mono">{currentQ.parentType}</span>
               </p>
@@ -1196,7 +1368,6 @@ export const QuizViewer = ({
       </div>
     );
   };
-
   // Helper to locate the AST node for a given question
   function nodeFromQuestion(
     q: Question,

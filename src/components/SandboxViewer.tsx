@@ -334,6 +334,10 @@ export const SandboxViewer = ({
     () => (fileName ? `sandbox-viewer:${sandboxId}:${fileName}` : undefined),
     [sandboxId, fileName]
   );
+  const quizStorageKey = useMemo(
+    () => (fileName ? `sandbox-quiz:${sandboxId}:${fileName}` : undefined),
+    [sandboxId, fileName]
+  );
   // Unified reveal state used by both Quiz and Lesson: absolute end index in file
   const [revealEndIndex, setRevealEndIndex] = useState<number | undefined>(
     undefined
@@ -480,7 +484,12 @@ export const SandboxViewer = ({
             "lesson",
           ].includes(data.viewMode)
         ) {
-          setViewMode(data.viewMode as typeof viewMode);
+          if (data.viewMode === "quiz_active" && quizStorageKey) {
+            const hasProgress = !!sessionStorage.getItem(quizStorageKey);
+            setViewMode((hasProgress ? "quiz_active" : "quiz_setup") as typeof viewMode);
+          } else {
+            setViewMode(data.viewMode as typeof viewMode);
+          }
         }
         if (
           data &&
@@ -1120,6 +1129,7 @@ export const SandboxViewer = ({
                   code={state.code}
                   fileKey={fileKey}
                   fileName={fileName}
+                  progressStorageKey={quizStorageKey}
                   mode={
                     viewMode.replace("quiz_", "") as
                     | "setup"
