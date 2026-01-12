@@ -118,9 +118,9 @@ const CodeLine = memo(function CodeLine(props: {
   }
 
   return (
-    <div className="flex items-start cursor-pointer hover:bg-cyan-100/50 transition-colors px-4 py-0.5" onClick={() => onLineClick(lineIndex)}>
+    <div className="flex items-start cursor-pointer hover:bg-cyan-100/50 transition-colors px-4" onClick={() => onLineClick(lineIndex)}>
       <span
-        className="shrink-0 select-none text-right pr-4 text-cyan-600/60 tabular-nums"
+        className="shrink-0 select-none text-right pr-4 text-cyan-600/60 tabular-nums whitespace-nowrap"
         style={{ width: `${lineDigits + 2}ch` }}
       >
         {lineNo}
@@ -637,7 +637,7 @@ export const SandboxViewer = ({
           className={
             viewMode === "quiz_setup"
               ? "flex-1"
-              : "flex-1 grid grid-cols-1 lg:grid-cols-[minmax(280px,360px)_1fr]"
+              : "flex-1 grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
           }
         >
           {/* Main Content - AST / Quiz / Lesson */}
@@ -810,7 +810,7 @@ export const SandboxViewer = ({
                 {/* Action Buttons */}
                 {parseResult?.status === "success" &&
                   parseResult.parser === "tree-sitter" && (
-                    <div className="border-t border-slate-200/60 p-3">
+                    <div className="border-t border-slate-200/60 p-3 mt-auto">
                       <div className="flex flex-col gap-2">
                         <button
                           type="button"
@@ -913,7 +913,7 @@ export const SandboxViewer = ({
                 This fixes jagged line numbers and collapsed indentation,
                 especially on mobile Safari.
               */}
-                <div className="text-xs leading-relaxed font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
+                <div className="text-xs leading-snug font-mono whitespace-pre-wrap break-words [overflow-wrap:anywhere] tabular-nums [tab-size:4]">
                   {codeSlice.lines.map((line: string, i: number) => (
                     <CodeLine
                       key={i}

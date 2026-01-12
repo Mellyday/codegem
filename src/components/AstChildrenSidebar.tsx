@@ -91,12 +91,12 @@ const TreeNode = memo(function TreeNode({
       {/* Node row */}
       <div
         className={`flex items-center gap-1.5 py-1 px-1 rounded cursor-pointer transition-colors ${isSelected
-            ? "bg-violet-100"
-            : isHovered
-              ? "bg-violet-50"
-              : "hover:bg-slate-50"
+          ? "bg-violet-100"
+          : isHovered
+            ? "bg-violet-50"
+            : "hover:bg-slate-50"
           }`}
-        style={{ paddingLeft: `${depth * 16 + 4}px` }}
+        style={{ paddingLeft: `${depth * 12 + 4}px` }}
         onClick={() => onSelectNode?.(node)}
         onMouseEnter={() => onHoverNode?.(node)}
         onMouseLeave={() => onHoverNode?.(undefined)}
@@ -143,8 +143,8 @@ const TreeNode = memo(function TreeNode({
             <div key={section.key}>
               {/* Section label */}
               <div
-                className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider py-1"
-                style={{ paddingLeft: `${(depth + 1) * 16 + 24}px` }}
+                className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider py-0.5"
+                style={{ paddingLeft: `${(depth + 1) * 12 + 20}px` }}
               >
                 {section.key}
               </div>
@@ -154,7 +154,7 @@ const TreeNode = memo(function TreeNode({
                 <TreeNode
                   key={nodeKey(item)}
                   node={item}
-                  depth={depth + 2}
+                  depth={depth + 1}
                   selectedNode={selectedNode}
                   hoveredNode={hoveredNode}
                   onSelectNode={onSelectNode}
