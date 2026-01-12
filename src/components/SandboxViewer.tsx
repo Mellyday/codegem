@@ -778,13 +778,15 @@ export const SandboxViewer = ({
           className={
             viewMode === "quiz_setup"
               ? "flex-1"
-              : "flex-1 grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
+              : viewMode === "quiz_active" || viewMode === "quiz_complete"
+                ? "flex-1 grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
+                : "flex-1 grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
           }
         >
           {/* Main Content - AST / Quiz / Lesson */}
           <div
             className={
-              "bg-white flex flex-col " +
+              "bg-white flex flex-col min-h-full " +
               (viewMode === "quiz_setup" ||
                 viewMode === "quiz_active" ||
                 viewMode === "quiz_complete"
