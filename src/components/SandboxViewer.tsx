@@ -1,7 +1,25 @@
 "use client";
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
-import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle, FileCode, FileJson, FileType, File, ChevronRight, Copy, ExternalLink } from "lucide-react";
+import { FileText, FolderOpen, TreeDeciduous, Code, GraduationCap, HelpCircle, ChevronRight, Copy, ExternalLink, PanelLeft, PanelRight } from "lucide-react";
+import {
+  GoIcon,
+  PythonIcon,
+  RubyIcon,
+  JavaIcon,
+  JavaScriptIcon,
+  TypeScriptIcon,
+  CIcon,
+  CppIcon,
+  KotlinIcon,
+  PHPIcon,
+  RustIcon,
+  HTMLIcon,
+  CSSIcon,
+  JSONIcon,
+  MarkdownIcon,
+  GenericFileIcon,
+} from "./icons/LanguageIcons";
 
 // Server now reads file and passes code; no client-side loader
 import { AstTree } from "./AstTree";
@@ -151,20 +169,7 @@ const CodeLine = memo(function CodeLine(props: {
 
 });
 
-// Go icon matching the project-navigator design
-const GoIcon = ({ className }: { className?: string }) => (
-  <svg
-    viewBox="0 0 32 32"
-    className={className}
-    fill="currentColor"
-  >
-    <path d="M5.9 9.2c-.1 0-.1-.1 0-.1l.2-.1c.1 0 .2-.1.3-.1h4.2c.1 0 .2.1.2.2 0 0-.1.1-.2.1l-.2.1c-.1 0-.2.1-.3.1H5.9zM4 10.4c-.1 0-.1-.1 0-.1l.2-.1c.1 0 .2-.1.3-.1h5.4c.1 0 .1.1.1.1 0 .1 0 .1-.1.1l-.2.1c-.1 0-.1.1-.2.1H4zM6.4 11.6c-.1 0-.1-.1-.1-.1 0-.1.1-.1.1-.1l.2-.1h3.2c.1 0 .1.1.1.1 0 .1 0 .1-.1.1l-.2.1H6.4z" />
-    <path d="M15.2 8.4c-2.6.7-4.4 2.1-5.8 4.2-.1.1-.1.2-.2.2-.1 0-.1 0-.1-.1.5-1.6 1.5-2.9 2.9-3.8 1.3-.9 2.8-1.3 4.4-1.2.1 0 .1.1.1.1-.3.2-.8.4-1.3.6z" />
-    <path d="M27.1 11.6c-.8-1.6-2.1-2.8-3.8-3.5-1.4-.6-2.9-.7-4.4-.5-.1 0-.1 0-.1-.1.6-.5 1.4-.8 2.2-1 2.2-.4 4.2.1 5.9 1.5.8.7 1.4 1.6 1.7 2.6 0 .1 0 .1-.1.1-.5-.3-1-.7-1.4-1.1z" />
-    <path d="M22.5 22.5c-1.9 1.2-4 1.6-6.2 1.2-2.1-.4-3.8-1.5-5.1-3.2-.1-.1-.1-.2 0-.2 1.6 1.3 3.4 2 5.5 2 1.9 0 3.6-.5 5.2-1.5.1-.1.2-.1.2 0 .1.1.5.6.5.7z" />
-    <ellipse cx="20.8" cy="14.8" rx="1.2" ry="1.4" />
-  </svg>
-);
+
 
 type FileInfo = {
   icon: ReactNode;
@@ -174,73 +179,120 @@ type FileInfo = {
 };
 
 const getFileInfo = (fileName: string): FileInfo => {
+  // Go - Cyan "GO" text
   if (fileName.endsWith(".go")) return {
-    icon: <GoIcon className="h-6 w-6 text-cyan-500" />,
+    icon: <GoIcon className="h-8 w-8" />,
     language: "Go",
-    iconContainerClass: "bg-cyan-500/10 ring-cyan-500/20",
+    iconContainerClass: "bg-transparent",
     badgeClass: "bg-cyan-500/10 text-cyan-600"
   };
+  // TypeScript - Blue "TS" shield
   if (fileName.endsWith(".ts") || fileName.endsWith(".tsx")) return {
-    icon: <FileCode className="h-6 w-6 text-blue-600" />,
+    icon: <TypeScriptIcon className="h-8 w-8" />,
     language: "TypeScript",
-    iconContainerClass: "bg-blue-500/10 ring-blue-500/20",
+    iconContainerClass: "bg-transparent",
     badgeClass: "bg-blue-500/10 text-blue-600"
   };
-  if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) return {
-    icon: <FileCode className="h-6 w-6 text-yellow-500" />,
+  // JavaScript - Yellow "JS" shield
+  if (fileName.endsWith(".js") || fileName.endsWith(".jsx") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) return {
+    icon: <JavaScriptIcon className="h-8 w-8" />,
     language: "JavaScript",
-    iconContainerClass: "bg-yellow-500/10 ring-yellow-500/20",
-    badgeClass: "bg-yellow-500/10 text-yellow-600"
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-yellow-500/10 text-yellow-700"
   };
-  if (fileName.endsWith(".css")) return {
-    icon: <FileCode className="h-6 w-6 text-sky-500" />,
-    language: "CSS",
-    iconContainerClass: "bg-sky-500/10 ring-sky-500/20",
-    badgeClass: "bg-sky-500/10 text-sky-600"
-  };
-  if (fileName.endsWith(".json")) return {
-    icon: <FileJson className="h-6 w-6 text-amber-600" />,
-    language: "JSON",
-    iconContainerClass: "bg-amber-500/10 ring-amber-500/20",
-    badgeClass: "bg-amber-500/10 text-amber-600"
-  };
-  if (fileName.endsWith(".html")) return {
-    icon: <FileCode className="h-6 w-6 text-orange-600" />,
-    language: "HTML",
-    iconContainerClass: "bg-orange-500/10 ring-orange-500/20",
-    badgeClass: "bg-orange-500/10 text-orange-600"
-  };
-  if (fileName.endsWith(".md")) return {
-    icon: <FileType className="h-6 w-6 text-slate-600" />,
-    language: "Markdown",
-    iconContainerClass: "bg-slate-500/10 ring-slate-500/20",
-    badgeClass: "bg-slate-500/10 text-slate-600"
-  };
+  // Python - Blue/Yellow snakes
   if (fileName.endsWith(".py")) return {
-    icon: <FileCode className="h-6 w-6 text-yellow-600" />,
+    icon: <PythonIcon className="h-8 w-8" />,
     language: "Python",
-    iconContainerClass: "bg-yellow-500/10 ring-yellow-500/20",
-    badgeClass: "bg-yellow-500/10 text-yellow-600"
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-blue-500/10 text-blue-600"
   };
-  if (fileName.endsWith(".rs")) return {
-    icon: <FileCode className="h-6 w-6 text-orange-700" />,
-    language: "Rust",
-    iconContainerClass: "bg-orange-500/10 ring-orange-500/20",
-    badgeClass: "bg-orange-500/10 text-orange-600"
-  };
-  if (fileName.endsWith(".java")) return {
-    icon: <FileCode className="h-6 w-6 text-red-600" />,
-    language: "Java",
-    iconContainerClass: "bg-red-500/10 ring-red-500/20",
+  // Ruby - Red gemstone
+  if (fileName.endsWith(".rb")) return {
+    icon: <RubyIcon className="h-8 w-8" />,
+    language: "Ruby",
+    iconContainerClass: "bg-transparent",
     badgeClass: "bg-red-500/10 text-red-600"
   };
+  // Java - Coffee cup
+  if (fileName.endsWith(".java")) return {
+    icon: <JavaIcon className="h-8 w-8" />,
+    language: "Java",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-orange-500/10 text-orange-600"
+  };
+  // Kotlin - Geometric gradient
+  if (fileName.endsWith(".kt") || fileName.endsWith(".kts")) return {
+    icon: <KotlinIcon className="h-8 w-8" />,
+    language: "Kotlin",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-purple-500/10 text-purple-600"
+  };
+  // C++ - Dark blue with plus signs
+  if (fileName.endsWith(".cpp") || fileName.endsWith(".cc") || fileName.endsWith(".cxx") || fileName.endsWith(".hpp")) return {
+    icon: <CppIcon className="h-8 w-8" />,
+    language: "C++",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-blue-600/10 text-blue-700"
+  };
+  // C - Blue tile with "C"
+  if (fileName.endsWith(".c") || fileName.endsWith(".h")) return {
+    icon: <CIcon className="h-8 w-8" />,
+    language: "C",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-blue-500/10 text-blue-600"
+  };
+  // PHP - Indigo oval
+  if (fileName.endsWith(".php")) return {
+    icon: <PHPIcon className="h-8 w-8" />,
+    language: "PHP",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-indigo-500/10 text-indigo-600"
+  };
+  // Rust - Orange gear with R
+  if (fileName.endsWith(".rs")) return {
+    icon: <RustIcon className="h-8 w-8" />,
+    language: "Rust",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-orange-500/10 text-orange-700"
+  };
+  // HTML - Orange shield
+  if (fileName.endsWith(".html") || fileName.endsWith(".htm")) return {
+    icon: <HTMLIcon className="h-8 w-8" />,
+    language: "HTML",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-orange-500/10 text-orange-600"
+  };
+  // CSS - Blue/purple shield
+  if (fileName.endsWith(".css") || fileName.endsWith(".scss") || fileName.endsWith(".sass")) return {
+    icon: <CSSIcon className="h-8 w-8" />,
+    language: "CSS",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-blue-500/10 text-blue-600"
+  };
+  // JSON - Dark braces
+  if (fileName.endsWith(".json")) return {
+    icon: <JSONIcon className="h-8 w-8" />,
+    language: "JSON",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-slate-500/10 text-slate-600"
+  };
+  // Markdown - Blue with M
+  if (fileName.endsWith(".md") || fileName.endsWith(".mdx")) return {
+    icon: <MarkdownIcon className="h-8 w-8" />,
+    language: "Markdown",
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-blue-500/10 text-blue-600"
+  };
+  // Default - Generic file icon
   return {
-    icon: <File className="h-6 w-6 text-violet-500" />,
+    icon: <GenericFileIcon className="h-8 w-8" />,
     language: "File",
-    iconContainerClass: "bg-violet-500/10 ring-violet-500/20",
-    badgeClass: "bg-violet-500/10 text-violet-600"
+    iconContainerClass: "bg-transparent",
+    badgeClass: "bg-slate-500/10 text-slate-600"
   };
 };
+
 
 export const SandboxViewer = ({
   sandboxId,
@@ -299,6 +351,9 @@ export const SandboxViewer = ({
   // Quiz metadata for medal tracking
   const [currentQuizId, setCurrentQuizId] = useState<string | undefined>(undefined);
   const [currentSectionIndex, setCurrentSectionIndex] = useState<number>(0);
+
+  // Mobile panel toggle: which panel to show on small screens
+  const [mobilePanel, setMobilePanel] = useState<"content" | "code">("content");
 
   // Compute parent folder URL based on fileKey
   const parentFolderUrl = useMemo(() => {
@@ -732,7 +787,35 @@ export const SandboxViewer = ({
             </button>
           </div>
 
-          <div className="w-px h-6 bg-slate-200" />
+          {/* Mobile panel toggle - only visible on small screens */}
+          {viewMode !== "quiz_setup" && (
+            <div className="flex lg:hidden items-center gap-1 border border-slate-200 rounded-lg p-0.5 bg-slate-50">
+              <button
+                type="button"
+                onClick={() => setMobilePanel("content")}
+                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors ${mobilePanel === "content"
+                  ? "bg-white text-slate-800 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+                  }`}
+              >
+                <PanelLeft className="w-3.5 h-3.5" />
+                {viewMode === "ast" ? "AST" : "Quiz"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setMobilePanel("code")}
+                className={`flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors ${mobilePanel === "code"
+                  ? "bg-white text-slate-800 shadow-sm"
+                  : "text-slate-500 hover:text-slate-700"
+                  }`}
+              >
+                <PanelRight className="w-3.5 h-3.5" />
+                Code
+              </button>
+            </div>
+          )}
+
+          <div className="w-px h-6 bg-slate-200 hidden lg:block" />
 
           {viewMode !== "ast" && (
             <button
@@ -786,13 +869,15 @@ export const SandboxViewer = ({
           {/* Main Content - AST / Quiz / Lesson */}
           <div
             className={
-              "bg-white flex flex-col h-full overflow-auto " +
+              "bg-white flex-col h-full overflow-auto " +
               (viewMode === "quiz_setup" ||
                 viewMode === "quiz_active" ||
                 viewMode === "quiz_complete"
                 ? "p-6 "
                 : "") +
-              (viewMode === "quiz_setup" ? "" : "order-2 lg:order-1")
+              (viewMode === "quiz_setup"
+                ? "flex "
+                : (mobilePanel === "content" ? "flex " : "hidden ") + "lg:flex lg:order-1")
             }
           >
             {viewMode === "ast" && (
@@ -1030,7 +1115,7 @@ export const SandboxViewer = ({
 
           {/* Right Column - Source Code (hidden in quiz_setup mode) */}
           {viewMode !== "quiz_setup" && (
-            <div className="order-1 lg:order-2 bg-cyan-50/80 flex flex-col">
+            <div className={`bg-cyan-50/80 flex-col ${mobilePanel === "code" ? "flex" : "hidden"} lg:flex lg:order-2`}>
               {/* Source Code Header */}
               <div className="flex items-center justify-between border-b border-cyan-200/60 bg-cyan-50 px-4 py-2.5">
                 <div className="flex items-center gap-2">
