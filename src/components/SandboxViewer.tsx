@@ -366,9 +366,10 @@ export const SandboxViewer = ({
     viewMode === "quiz_setup" ||
     viewMode === "quiz_active" ||
     viewMode === "quiz_complete";
+  const isQuizActive = viewMode === "quiz_active";
   const showMobilePanelToggle = viewMode === "ast" || viewMode === "lesson";
   const showContentPanel = isQuizView || mobilePanel === "content";
-  const showCodePanel = isQuizView || mobilePanel === "code";
+  const showCodePanel = isQuizActive || (!isQuizView && mobilePanel === "code");
   const contentOrderClass = isQuizView
     ? "order-2 lg:order-1"
     : "order-1 lg:order-1";
@@ -925,7 +926,9 @@ export const SandboxViewer = ({
         <div
           className={
             isQuizView
-              ? "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
+              ? showCodePanel
+                ? "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[1fr_minmax(800px,1000px)]"
+                : "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1"
               : "flex-1 h-[calc(100vh-64px-57px)] grid grid-cols-1 lg:grid-cols-[minmax(320px,420px)_1fr]"
           }
         >
@@ -1176,7 +1179,7 @@ export const SandboxViewer = ({
           {/* Right Column - Source Code */}
           <div
             ref={codePanelRef}
-            className={`bg-cyan-50/80 flex-col min-h-0 ${showCodePanel ? "flex" : "hidden"} lg:flex ${codeOrderClass}`}
+            className={`bg-cyan-50/80 flex-col min-h-0 ${showCodePanel ? "flex" : "hidden"} ${codeOrderClass}`}
           >
             {/* Source Code Header */}
             <div className="flex items-center justify-between border-b border-cyan-200/60 bg-cyan-50 px-4 py-2.5">
