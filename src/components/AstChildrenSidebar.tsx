@@ -1,5 +1,7 @@
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { getLanguageToolsForFileName } from "../lib/languages/registry";
+import { useState, memo } from "react";
+import { ChevronRight, MessageSquare, Type, Terminal, Code } from "lucide-react";
 
 type AstChildrenSidebarProps = {
   ast: TreeSitterAstNode;
@@ -15,58 +17,6 @@ type AstChildrenSidebarProps = {
   fileName?: string;
 };
 
-// Get highlight color based on node type (exact, intentional matches)
-const getNodeHighlight = (type: string): string => {
-  // Green for import statements
-  if (type.startsWith("import"))
-    return "bg-emerald-50/80 border-emerald-300/60";
-  // Purple for classes
-  if (type === "class_definition")
-    return "bg-purple-50/80 border-purple-300/60";
-  // Blue for functions
-  if (type === "function_definition" || type === "function_declaration")
-    return "bg-blue-50/80 border-blue-300/60";
-  // Comments
-  if (type === "comment") return "bg-slate-50/80 border-slate-300/60";
-  // Default
-  return "bg-white/80 border-slate-200/60";
-};
-
-const getNodeBadgeColor = (type: string): string => {
-  // Green for import statements
-  if (type.startsWith("import"))
-    return "bg-emerald-100 text-emerald-700 border-emerald-300";
-  // Purple for classes
-  if (type === "class_definition")
-    return "bg-purple-100 text-purple-700 border-purple-300";
-  // Blue for functions
-  if (type === "function_definition" || type === "function_declaration")
-    return "bg-blue-100 text-blue-700 border-blue-300";
-  // Comments
-  if (type === "comment")
-    return "bg-slate-100 text-slate-600 border-slate-300";
-  // Package clause
-  if (type === "package_clause")
-    return "bg-amber-100 text-amber-700 border-amber-300";
-  // Default
-  return "bg-teal-50 text-teal-700 border-teal-200";
-};
-
-const NodeType = ({ type }: { type: string }) => (
-  <span
-    className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-xs font-medium shadow-sm ${getNodeBadgeColor(
-      type
-    )}`}
-  >
-    <span className="text-[10px] opacity-60">&lt;/&gt;</span>
-    {type}
-  </span>
-);
-
-// Yield helpers now imported from lib/pyCuration
-
-// Curated logic now lives in src/lib/pyCuration
-
 // Stable node identity comparison to avoid reference-based flicker
 const nodesEqual = (a?: TreeSitterAstNode, b?: TreeSitterAstNode) =>
   !!a &&
@@ -79,50 +29,148 @@ const nodesEqual = (a?: TreeSitterAstNode, b?: TreeSitterAstNode) =>
 const nodeKey = (n: TreeSitterAstNode) =>
   `${n.type}:${n.startIndex}:${n.endIndex}`;
 
-// FIX: Extracted ItemRowProps to resolve potential TS inference issues with inline props.
-type ItemRowProps = {
-  item: TreeSitterAstNode;
-  rightLabel?: string;
+// Get icon for node type
+const getNodeIcon = (type: string) => {
+  // Comments
+  if (type === "comment") {
+    return <MessageSquare className="h-3.5 w-3.5 text-violet-400" />;
+  }
+  // Identifiers
+  if (type === "identifier" || type === "package_identifier" || type.endsWith("_identifier")) {
+    return <Type className="h-3.5 w-3.5 text-violet-500 font-bold" />;
+  }
+  // Import specs / parameter lists
+  if (type === "import_spec" || type === "parameter_list" || type.startsWith("parameter")) {
+    return <Terminal className="h-3.5 w-3.5 text-violet-500" />;
+  }
+  // Default code icon
+  return <Code className="h-3.5 w-3.5 text-violet-500" />;
+};
+
+// Get text color based on node type
+const getNodeTextColor = (type: string): string => {
+  if (type === "comment") return "text-slate-500";
+  if (type === "identifier" || type.endsWith("_identifier")) return "text-slate-600";
+  if (type.includes("import")) return "text-emerald-600";
+  if (type.includes("function") || type.includes("class")) return "text-blue-600";
+  return "text-violet-600";
+};
+
+type TreeNodeProps = {
+  node: TreeSitterAstNode;
+  depth: number;
   selectedNode?: TreeSitterAstNode;
   hoveredNode?: TreeSitterAstNode;
   onSelectNode?: (node: TreeSitterAstNode) => void;
   onHoverNode?: (node?: TreeSitterAstNode) => void;
+  code?: string;
+  buildCuratedSections: (node: TreeSitterAstNode) => Array<{ key: string; items: TreeSitterAstNode[] }>;
+  isYieldFrom: (node: TreeSitterAstNode, code?: string) => boolean;
 };
 
-// Compact row for a child item with an optional group label
-const ItemRow = ({
-  item,
-  rightLabel,
+const TreeNode = memo(function TreeNode({
+  node,
+  depth,
   selectedNode,
   hoveredNode,
   onSelectNode,
   onHoverNode,
-}: ItemRowProps) => {
-  const isSelected = nodesEqual(selectedNode, item);
-  const isHovered = nodesEqual(hoveredNode, item);
+  code,
+  buildCuratedSections,
+  isYieldFrom,
+}: TreeNodeProps) {
+  const [isExpanded, setIsExpanded] = useState(true);
+  const isSelected = nodesEqual(selectedNode, node);
+  const isHovered = nodesEqual(hoveredNode, node);
+
+  const sections = buildCuratedSections(node).filter((s) => s.items.length > 0);
+  const hasChildren = sections.length > 0;
+
   return (
-    <li
-      className={
-        "flex items-center gap-2 rounded-lg px-2 py-1.5 pl-4 cursor-pointer transition-all duration-150 " +
-        (isSelected
-          ? "ring-2 ring-teal-400 bg-teal-100/70 shadow-sm"
-          : isHovered
-            ? "bg-teal-50/80"
-            : "hover:bg-slate-50/80")
-      }
-      onClick={() => onSelectNode?.(item)}
-      onMouseEnter={() => onHoverNode?.(item)}
-      onMouseLeave={() => onHoverNode?.(undefined)}
-    >
-      <NodeType type={item.type} />
-      {rightLabel && (
-        <span className="ml-auto text-[10px] font-medium text-slate-500 uppercase tracking-wide">
-          {rightLabel}
+    <div className="select-none">
+      {/* Node row */}
+      <div
+        className={`flex items-center gap-1.5 py-1 px-1 rounded cursor-pointer transition-colors ${isSelected
+            ? "bg-violet-100"
+            : isHovered
+              ? "bg-violet-50"
+              : "hover:bg-slate-50"
+          }`}
+        style={{ paddingLeft: `${depth * 16 + 4}px` }}
+        onClick={() => onSelectNode?.(node)}
+        onMouseEnter={() => onHoverNode?.(node)}
+        onMouseLeave={() => onHoverNode?.(undefined)}
+      >
+        {/* Expand/collapse chevron */}
+        {hasChildren ? (
+          <button
+            type="button"
+            className="p-0.5 hover:bg-violet-100 rounded transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              setIsExpanded(!isExpanded);
+            }}
+          >
+            <ChevronRight
+              className={`h-3.5 w-3.5 text-violet-400 transition-transform ${isExpanded ? "rotate-90" : ""
+                }`}
+            />
+          </button>
+        ) : (
+          <span className="w-4" />
+        )}
+
+        {/* Node icon */}
+        {getNodeIcon(node.type)}
+
+        {/* Node type name */}
+        <span className={`font-mono text-sm ${getNodeTextColor(node.type)}`}>
+          {node.type}
         </span>
+
+        {/* Yield-from hint */}
+        {isYieldFrom(node, code) && (
+          <span className="ml-1 text-[10px] font-medium text-slate-400 uppercase">
+            from
+          </span>
+        )}
+      </div>
+
+      {/* Children */}
+      {hasChildren && isExpanded && (
+        <div>
+          {sections.map((section, sectionIdx) => (
+            <div key={section.key}>
+              {/* Section label */}
+              <div
+                className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider py-1"
+                style={{ paddingLeft: `${(depth + 1) * 16 + 24}px` }}
+              >
+                {section.key}
+              </div>
+
+              {/* Section items */}
+              {section.items.map((item, itemIdx) => (
+                <TreeNode
+                  key={nodeKey(item)}
+                  node={item}
+                  depth={depth + 2}
+                  selectedNode={selectedNode}
+                  hoveredNode={hoveredNode}
+                  onSelectNode={onSelectNode}
+                  onHoverNode={onHoverNode}
+                  code={code}
+                  buildCuratedSections={buildCuratedSections}
+                  isYieldFrom={isYieldFrom}
+                />
+              ))}
+            </div>
+          ))}
+        </div>
       )}
-    </li>
+    </div>
   );
-};
+});
 
 export const AstChildrenSidebar = ({
   ast,
@@ -137,214 +185,37 @@ export const AstChildrenSidebar = ({
   const { curation } = getLanguageToolsForFileName(fileName);
   const buildCuratedSectionsShared = curation.buildCuratedSections;
   const isYieldFrom = curation.isYieldFrom || (() => false);
+
   // Typically the root is a `module` node; render it and its top-level children.
   const topLevel = ast.namedChildren || [];
 
+  if (topLevel.length === 0) {
+    return (
+      <aside className="py-2">
+        <p className="text-sm italic text-slate-400 px-2">No children</p>
+      </aside>
+    );
+  }
+
+  // When flattenRoot, skip the root and render children directly
+  const nodesToRender = flattenRoot ? topLevel : [ast];
+
   return (
-    <aside className="space-y-2">
-      {flattenRoot ? (
-        // Start one level lower: render only the root's children
-        topLevel.length === 0 ? (
-          <div className="rounded-xl border border-slate-200/60 bg-white/60 px-4 py-4 shadow-sm backdrop-blur-sm">
-            <p className="text-sm italic text-slate-400">No children</p>
-          </div>
-        ) : (
-          <ul className="space-y-2">
-            {topLevel.map((node, i) => {
-              const sections = buildCuratedSectionsShared(node)
-                // Hide empty sections entirely (e.g. empty decorator_list)
-                .filter((s) => s.items.length > 0);
-
-              // Inline hint sections: only show label once, no rows (e.g., body -> block)
-              const inlineHints = sections.filter(
-                (s) =>
-                  s.key === "body" || s.items.every((it) => it.type === "block")
-              );
-
-              // Groups we actually list rows for
-              const flatGroups = sections.filter(
-                (s) => !inlineHints.includes(s)
-              );
-              const isSelected = nodesEqual(selectedNode, node);
-              const isHovered = nodesEqual(hoveredNode, node);
-              return (
-                <li
-                  key={nodeKey(node)}
-                  className={
-                    `rounded-xl border shadow-sm backdrop-blur-sm transition-all duration-150 ${getNodeHighlight(
-                      node.type
-                    )} ` +
-                    (isSelected
-                      ? "ring-2 ring-teal-400 shadow-md"
-                      : isHovered
-                        ? "ring-1 ring-teal-300/50"
-                        : "")
-                  }
-                >
-                  <div
-                    className="flex items-center gap-2 px-3 py-2.5"
-                    onMouseEnter={() => onHoverNode?.(node)}
-                    onMouseLeave={() => onHoverNode?.(undefined)}
-                  >
-                    <button
-                      type="button"
-                      className="inline-flex items-center"
-                      onClick={(e) => {
-                        e.preventDefault();
-                        onSelectNode?.(node);
-                      }}
-                    >
-                      <NodeType type={node.type} />
-                    </button>
-                    {/* Yield-from hint on header */}
-                    {isYieldFrom(node, code) && (
-                      <span className="ml-auto text-[10px] font-medium text-slate-500 uppercase tracking-wide">
-                        from
-                      </span>
-                    )}
-                  </div>
-                  {flatGroups.length > 0 && (
-                    <ul className="space-y-1 border-l-2 border-teal-200/50 bg-white/40 mx-3 mb-3 px-3 py-2 rounded-lg">
-                      {flatGroups.map((group, gIdx) =>
-                        group.items.map((item, idx) => {
-                          const labelBase =
-                            idx === 0
-                              ? gIdx === 0 && inlineHints.length > 0
-                                ? inlineHints.map((s) => s.key).join(" · ")
-                                : group.key
-                              : undefined;
-                          const label =
-                            labelBase &&
-                              group.key === "value" &&
-                              isYieldFrom(node, code)
-                              ? `${labelBase} · from`
-                              : labelBase;
-                          return (
-                            <ItemRow
-                              key={`${nodeKey(item)}:${gIdx}:${idx}`}
-                              item={item}
-                              rightLabel={label}
-                              selectedNode={selectedNode}
-                              hoveredNode={hoveredNode}
-                              onSelectNode={onSelectNode}
-                              onHoverNode={onHoverNode}
-                            />
-                          );
-                        })
-                      )}
-                    </ul>
-                  )}
-                </li>
-              );
-            })}
-          </ul>
-        )
-      ) : (
-        // Render the root wrapper and its children
-        <div className="rounded-xl border border-slate-200/60 bg-white/60 shadow-sm backdrop-blur-sm">
-          <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-200/40">
-            <span className="font-mono text-sm font-semibold text-slate-700">
-              {ast.type}
-            </span>
-            <span className="ml-auto rounded-full bg-teal-100 px-2 py-0.5 text-xs font-medium text-teal-700">
-              {topLevel.length} children
-            </span>
-          </div>
-          {topLevel.length === 0 ? (
-            <div className="px-4 py-4">
-              <p className="text-sm italic text-slate-400">No children</p>
-            </div>
-          ) : (
-            <ul className="space-y-2 p-3">
-              {topLevel.map((node, i) => {
-                const sections = buildCuratedSectionsShared(node).filter(
-                  (s) => s.items.length > 0
-                );
-
-                const inlineHints = sections.filter(
-                  (s) =>
-                    s.key === "body" ||
-                    s.items.every((it) => it.type === "block")
-                );
-                const flatGroups = sections.filter(
-                  (s) => !inlineHints.includes(s)
-                );
-                const isSelected = nodesEqual(selectedNode, node);
-                const isHovered = nodesEqual(hoveredNode, node);
-                return (
-                  <li
-                    key={nodeKey(node)}
-                    className={
-                      `rounded-xl border shadow-sm backdrop-blur-sm transition-all duration-150 ${getNodeHighlight(
-                        node.type
-                      )} ` +
-                      (isSelected
-                        ? "ring-2 ring-teal-400 shadow-md"
-                        : isHovered
-                          ? "ring-1 ring-teal-300/50"
-                          : "")
-                    }
-                  >
-                    <div
-                      className="flex items-center gap-2 px-3 py-2.5"
-                      onMouseEnter={() => onHoverNode?.(node)}
-                      onMouseLeave={() => onHoverNode?.(undefined)}
-                    >
-                      <button
-                        type="button"
-                        className="inline-flex items-center"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          onSelectNode?.(node);
-                        }}
-                      >
-                        <NodeType type={node.type} />
-                      </button>
-                      {/* Yield-from hint on header */}
-                      {isYieldFrom(node, code) && (
-                        <span className="ml-auto text-[10px] font-medium text-slate-500 uppercase tracking-wide">
-                          from
-                        </span>
-                      )}
-                    </div>
-                    {flatGroups.length > 0 && (
-                      <ul className="space-y-1 border-l-2 border-teal-200/50 bg-white/40 mx-3 mb-3 px-3 py-2 rounded-lg">
-                        {flatGroups.map((group, gIdx) =>
-                          group.items.map((item, idx) => {
-                            const labelBase =
-                              idx === 0
-                                ? gIdx === 0 && inlineHints.length > 0
-                                  ? inlineHints.map((s) => s.key).join(" · ")
-                                  : group.key
-                                : undefined;
-                            const label =
-                              labelBase &&
-                                group.key === "value" &&
-                                isYieldFrom(node, code)
-                                ? `${labelBase} · from`
-                                : labelBase;
-                            return (
-                              <ItemRow
-                                key={`${nodeKey(item)}:${gIdx}:${idx}`}
-                                item={item}
-                                rightLabel={label}
-                                selectedNode={selectedNode}
-                                hoveredNode={hoveredNode}
-                                onSelectNode={onSelectNode}
-                                onHoverNode={onHoverNode}
-                              />
-                            );
-                          })
-                        )}
-                      </ul>
-                    )}
-                  </li>
-                );
-              })}
-            </ul>
-          )}
-        </div>
-      )}
+    <aside className="py-1">
+      {nodesToRender.map((node) => (
+        <TreeNode
+          key={nodeKey(node)}
+          node={node}
+          depth={0}
+          selectedNode={selectedNode}
+          hoveredNode={hoveredNode}
+          onSelectNode={onSelectNode}
+          onHoverNode={onHoverNode}
+          code={code}
+          buildCuratedSections={buildCuratedSectionsShared}
+          isYieldFrom={isYieldFrom}
+        />
+      ))}
     </aside>
   );
 };
