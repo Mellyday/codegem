@@ -493,6 +493,30 @@ When a statement is a lone call (often used for side effects):
 - Deep:
   - Simple calls: callee question + ordered multi-select for arguments
   - Chained calls/properties: step-by-step base/field/method, with ordered args per call
+  - Composite literals in call arguments: recursively process any embedded composite literals
+
+### 7.14 Composite literals (`composite_literal`)
+Go composite literals (struct, map, array/slice literals) generate questions about their key-value structure.
+
+Always:
+- Multi-select: `Which <fields/keys/indices> are set in this <struct/map/array>?`
+  - For structs: asks about field names
+  - For maps: asks about map keys
+  - For arrays with keyed elements: asks about indices
+  - For literals with >6 keys, split into multiple cards (3-6 correct per card)
+  - Option pool drawn from surrounding code + generic identifiers
+
+Deep:
+- Per keyed element: `What is the value for <field/key> <X>?`
+  - Always generated for each keyed element
+  - Recursively generates questions for nested composite literals and func literals
+  - Nested questions prefixed with `For <field/key> X: <original stem>`
+
+Composite literals are detected and processed when they appear as:
+- Variable initializers (`var x = MyStruct{...}`)
+- Short variable declarations (`x := MyStruct{...}`)
+- Function call arguments
+- Return statement values
 
 ---
 
