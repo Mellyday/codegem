@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 // In development, use project root
 const getDbPath = (): string => {
     const dataDir = process.env.NODE_ENV === "production"
-        ? "/app/data"
+        ? "/codegem/data"
         : path.join(process.cwd(), "data");
 
     // Ensure data directory exists
