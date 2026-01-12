@@ -50,53 +50,27 @@ type Question = {
   numToSelect?: number;
   // Optional snippet text to show (used by custom quizzes)
   snippetText?: string;
-  // Optional metadata for AST-sourced questions
-  parentType?: string;
-  childType?: string;
-  index?: number;
   // Optional v1.1 metadata
   kind?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   sourceRefs?: SourceRef[];
-  // AST linkage for inline breakdown
-  parentNode?: TreeSitterAstNode;
-  node?: TreeSitterAstNode;
-  // Track origin for save filtering
-  source?: "base" | "expanded";
-  // Whether we can break this into smaller questions
-  isDigable?: boolean;
   // For controlling how much of the parent's code to reveal while this question is active
-  // Absolute indices within the source file. Only set for AST-sourced questions
+  // Absolute indices within the source file.
   revealStart?: number;
   revealEndBeforeChild?: number;
   revealEndAfterChild?: number;
 };
 
-type QuizSource = "ast" | "saved";
-
-type PersistedQuestion = Omit<Question, "node" | "parentNode">;
-
 type PersistedQuizProgressV1 = {
   version: 1;
-  quizSource: QuizSource;
   activeQuizMeta?: { quizId?: string; sectionIndex?: number };
-  questions: PersistedQuestion[];
+  questions: Question[];
   current: number;
   answers: Array<string | string[] | null>;
   answeredFlags: boolean[];
   score: number;
   updatedAt: number;
-};
-
-
-const generateDistractors = (correct: string): string[] => {
-  const out = new Set<string>();
-  while (out.size < 3) {
-    const d = randomString(correct.length);
-    if (d !== correct) out.add(d);
-  }
-  return Array.from(out);
 };
 
 const normalizePool = (pool: string[] | undefined, correct: Set<string>) => {
@@ -185,59 +159,6 @@ const buildMultiChoiceOptions = (
   return options;
 };
 
-const textForNode = (
-  node: TreeSitterAstNode,
-  code?: string
-): string | undefined => {
-  if (node.text && node.text.length > 0) return node.text;
-  if (code) {
-    return code.substring(node.startIndex, node.endIndex);
-  }
-  return undefined;
-};
-
-const generateQuestions = (
-  node: TreeSitterAstNode,
-  code?: string,
-  opts?: { source?: "base" | "expanded" },
-  shouldSkipNode?: (node: TreeSitterAstNode, parent?: TreeSitterAstNode) => boolean
-): Question[] => {
-  const questions: Question[] = [];
-  const skipNode = shouldSkipNode || (() => false);
-  const children = (node.namedChildren || []).filter(
-    (c) => c.type !== "comment" && !skipNode(c, node)
-  );
-  children.forEach((child, idx) => {
-    const childType = child.type;
-    // Prefer the actual source text where available (identifier, parameters, etc.)
-    const preferredLabel = textForNode(child, code) || childType;
-    const distractors = generateDistractors(preferredLabel);
-    const options = shuffleArray([preferredLabel, ...distractors]);
-
-    // Compute reveal ranges relative to the parent
-    const parentStart = node.startIndex;
-    const revealStart = parentStart;
-    const revealEndBeforeChild = child.startIndex;
-    const revealEndAfterChild = child.endIndex;
-
-    questions.push({
-      stem: "What comes next?",
-      answerLabel: preferredLabel,
-      options,
-      parentType: node.type,
-      index: idx,
-      childType,
-      parentNode: node,
-      node: child,
-      source: opts?.source ?? "base",
-      revealStart,
-      revealEndBeforeChild,
-      revealEndAfterChild,
-    });
-  });
-  return questions;
-};
-
 // v1.1: stable reference to an AST node or slice
 type SourceRef = {
   nodeType: string;
@@ -300,8 +221,7 @@ type SavedCustomQuizV11 = {
 
 const generateQuestionsFromCustom = (
   quiz: SavedCustomQuizV11,
-  code?: string,
-  astRootFallback?: TreeSitterAstNode
+  code?: string
 ): Question[] => {
   // Trust saved cards; do not reconstruct answers for multi-select.
   const cards = quiz.cards
@@ -422,24 +342,14 @@ export const QuizViewer = ({
   onQuizMetadataChange,
   parentFolderUrl,
 }: QuizViewerProps) => {
-  const languageTools = useMemo(
+  const { engine } = useMemo(
     () => getLanguageToolsForFileName(fileName ?? fileKey?.path),
     [fileName, fileKey?.path]
-  );
-  const { engine, curation, ui, id: languageId } = languageTools;
-  const BLOCK_TYPES = ui.blockTypes;
-  const CURATABLE_ANCHORS = ui.curatableAnchors;
-  // Memoize to prevent infinite re-render loop when isDocstringNode is undefined (e.g., Go)
-  const shouldSkipNode = useMemo(
-    () => curation.isDocstringNode || (() => false),
-    [curation.isDocstringNode]
   );
   // Custom quiz selection state
   const [selectedCustom, setSelectedCustom] = useState<
     SavedCustomQuizV11 | undefined
   >(undefined);
-  const [quizSource, setQuizSource] = useState<QuizSource>("ast");
-
   // Quiz state
   const [questions, setQuestions] = useState<Question[]>([]);
   const [current, setCurrent] = useState(0);
@@ -527,7 +437,6 @@ export const QuizViewer = ({
       .slice(0, total)
       .map((v) => !!v);
 
-    setQuizSource(data.quizSource === "saved" ? "saved" : "ast");
     setActiveQuizMeta(data.activeQuizMeta ?? {});
     setQuestions(qs);
     setCurrent(clampedCurrent);
@@ -672,9 +581,7 @@ export const QuizViewer = ({
     if (mode === "active") {
       if (didInitializeRef.current) return;
       didInitializeRef.current = true;
-      const qs = selectedCustom
-        ? generateQuestionsFromCustom(selectedCustom, code, root)
-        : generateQuestions(root, code, { source: "base" }, shouldSkipNode);
+      const qs = generateQuestionsFromCustom(selectedCustom as SavedCustomQuizV11, code);
       setQuestions(qs);
       setCurrent(0);
       setSelected(undefined);
@@ -684,16 +591,14 @@ export const QuizViewer = ({
       setAnswers(new Array(qs.length).fill(undefined));
       setAnsweredFlags(new Array(qs.length).fill(false));
       setExpandedOptions({});
-      setQuizSource(selectedCustom ? "saved" : "ast");
-      // Initial reveal window for the first question (AST, heuristic, or custom).
+      // Initial reveal window for the first question.
       const initialReveal = qs.length > 0 ? revealBeforeForQuestion(qs[0]) : undefined;
       onRevealChange?.(initialReveal);
 
       // Persist immediately so a fast refresh doesn't drop the run.
-      const persistableQuestions = qs.map(({ node, parentNode, ...rest }) => rest);
+      const persistableQuestions = qs.map((q) => ({ ...q }));
       persistNow({
         version: 1,
-        quizSource: selectedCustom ? "saved" : "ast",
         activeQuizMeta,
         questions: persistableQuestions,
         current: 0,
@@ -703,7 +608,7 @@ export const QuizViewer = ({
         updatedAt: Date.now(),
       });
     }
-  }, [mode, root, code, selectedCustom, shouldSkipNode]);
+  }, [mode, code, selectedCustom]);
 
   // Clear reveal when leaving quiz modes
   useEffect(() => {
@@ -719,10 +624,9 @@ export const QuizViewer = ({
     if (!questions.length) return;
 
     const handle = window.setTimeout(() => {
-      const persistableQuestions = questions.map(({ node, parentNode, ...rest }) => rest);
+      const persistableQuestions = questions.map((q) => ({ ...q }));
       persistNow({
         version: 1,
-        quizSource,
         activeQuizMeta,
         questions: persistableQuestions,
         current,
@@ -737,7 +641,6 @@ export const QuizViewer = ({
   }, [
     mode,
     progressStorageKey,
-    quizSource,
     activeQuizMeta,
     questions,
     current,
@@ -839,7 +742,6 @@ export const QuizViewer = ({
                 // panel is isolated; only it remounts on refresh/errors
                 setSelectedCustom(q as any);
                 setActiveQuizMeta({ quizId: qId, sectionIndex: secIdx });
-                setQuizSource("saved");
                 // Notify parent of quiz metadata for medal tracking
                 onQuizMetadataChange?.(qId, secIdx);
                 clearProgress();
@@ -857,19 +759,6 @@ export const QuizViewer = ({
             onClick={onCancel}
           >
             Back to File
-          </button>
-          <button
-            type="button"
-            className="rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white shadow-sm transition-colors hover:bg-violet-700"
-            onClick={() => {
-              setSelectedCustom(undefined);
-              setActiveQuizMeta({});
-              setQuizSource("ast");
-              clearProgress();
-              onStart();
-            }}
-          >
-            Start Quiz
           </button>
         </div>
       </div>
@@ -1031,7 +920,7 @@ export const QuizViewer = ({
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
         }
-        // Update reveal window for the next question if available (AST or custom)
+        // Update reveal window for the next question if available
         const nextQ = questions[nextIdx];
         onRevealChange?.(revealBeforeForQuestion(nextQ));
       }
@@ -1106,9 +995,7 @@ export const QuizViewer = ({
               <Code className="w-6 h-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-slate-900">
-                {quizSource === "saved" ? "Custom Quiz" : "AST Quiz"}
-              </h1>
+              <h1 className="text-2xl font-bold text-slate-900">Custom Quiz</h1>
               <p className="text-sm text-slate-500">
                 Q {current + 1} / {total}
               </p>
@@ -1336,261 +1223,6 @@ export const QuizViewer = ({
       </div>
     );
   };
-  // Helper to locate the AST node for a given question
-  function nodeFromQuestion(
-    q: Question,
-    root: TreeSitterAstNode,
-    code?: string
-  ): TreeSitterAstNode | undefined {
-    if (!root) return undefined;
-
-    // Prefer block/suite if the span is exactly a block, else land on a statement anchor
-    const resolveAnchor = (s: number, e: number) => {
-      const deepest = curation.findDeepestNodeCoveringSpan(root, s, e);
-      if (deepest && BLOCK_TYPES.has(deepest.type)) {
-        // If user marked a body span exactly, keep the block as the anchor
-        return deepest;
-      }
-      const anchor = curation.findNearestAnchorCoveringSpan(
-        root,
-        s,
-        e,
-        CURATABLE_ANCHORS
-      );
-      return anchor ?? deepest;
-    };
-
-    // Prefer explicit reveal spans (child range)
-    if (
-      typeof q.revealEndBeforeChild === "number" &&
-      typeof q.revealEndAfterChild === "number"
-    ) {
-      const n = resolveAnchor(q.revealEndBeforeChild, q.revealEndAfterChild);
-      if (n) return n;
-    }
-
-    // Fallback: locate answer text and resolve deepest covering node
-    if (code && q.answerLabel) {
-      const idx = code.indexOf(q.answerLabel);
-      if (idx >= 0) {
-        const n = resolveAnchor(idx, idx + q.answerLabel.length);
-        if (n) return n;
-      }
-    }
-
-    return undefined;
-  }
-
-  // Helpers to ensure we include a single body card for function definitions
-  function findBlockChild(n?: TreeSitterAstNode) {
-    if (!n?.namedChildren) return undefined;
-    return n.namedChildren.find((c) => BLOCK_TYPES.has(c.type));
-  }
-  function hasBodyPiece(pieces: any[]) {
-    return pieces.some(
-      (p) =>
-        p?.semanticRole === "body" ||
-        p?.semanticRole === "block" ||
-        p?.type === "body" ||
-        p?.type === "block"
-    );
-  }
-
-  function deriveCardsEnsuringBody(
-    anchor: TreeSitterAstNode,
-    code: string
-  ): any[] {
-    // Treat decorated_definition as function/class-like by peeking at its inner definition
-    const innerDef =
-      anchor.type === "decorated_definition"
-        ? (anchor.namedChildren || []).find(
-          (c) =>
-            c.type === "function_definition" || c.type === "class_definition"
-        )
-        : undefined;
-    const effective = innerDef || anchor;
-
-    const isFunc =
-      effective.type === "function_definition" ||
-      anchor.type === "function_definition";
-    const isClass =
-      effective.type === "class_definition" ||
-      anchor.type === "class_definition";
-    const hasBlock = !!findBlockChild(effective);
-
-    // Optional stable group ordering for common statements (handle _stmt/_statement)
-    const groupOrder = (() => {
-      if (languageId === "python") {
-        const isWhile =
-          anchor.type === "while_statement" || anchor.type === "while_stmt";
-        const isIf = anchor.type === "if_statement" || anchor.type === "if_stmt";
-        const isFor = anchor.type === "for_statement" || anchor.type === "for_stmt";
-        const isElif = anchor.type === "elif_clause";
-        const isElse = anchor.type === "else_clause";
-        return isFunc
-          ? ["type_params", "args", "returns", "body", "decorators"]
-          : isClass
-            ? ["type_params", "bases", "body", "decorators", "keywords"]
-            : isWhile
-              ? ["test", "body", "orelse"]
-              : isIf
-                ? ["test", "body", "orelse"]
-                : isElif
-                  ? ["test", "body"]
-                  : isElse
-                    ? ["body"]
-                    : isFor
-                      ? ["target", "iter", "body", "orelse"]
-                      : anchor.type === "with_statement"
-                        ? ["items", "body"]
-                        : anchor.type === "try_statement"
-                          ? ["body", "handlers", "orelse", "finalbody"]
-                          : undefined;
-      }
-      if (languageId === "c") {
-        if (anchor.type === "function_definition") return ["name", "params", "body"];
-        if (anchor.type === "declaration" || anchor.type === "type_definition")
-          return ["type", "names", "initializers"];
-        if (anchor.type === "struct_specifier") return ["name", "fields"];
-        if (anchor.type === "enum_specifier") return ["name", "enumerators"];
-        if (anchor.type === "if_statement") return ["condition", "then", "else"];
-        if (anchor.type === "for_statement")
-          return ["init", "condition", "update", "body"];
-        if (anchor.type === "while_statement" || anchor.type === "do_statement")
-          return ["condition", "body"];
-        if (anchor.type === "switch_statement")
-          return ["value", "cases", "body"];
-      }
-      return undefined;
-    })();
-
-    let pieces =
-      curation.cardsFromCuratedSections(anchor, code, {
-        // Show a single "body" card whenever this node actually owns a block/suite
-        includeBody: hasBlock || isFunc,
-        groupOrder,
-      }) || [];
-
-    // Fallback: if for any reason we still didn't get a body card but this node owns one,
-    // synthesize exactly one body card from the block/suite span.
-    if (hasBlock && !hasBodyPiece(pieces)) {
-      const body = findBlockChild(effective);
-      if (body) {
-        pieces = [
-          ...pieces,
-          {
-            order: 0, // caller will overwrite
-            type: "block",
-            text: code.substring(body.startIndex, body.endIndex),
-            action: "next" as const,
-            semanticRole: "body",
-            question: "What is the body?",
-          },
-        ];
-      }
-    }
-    return pieces;
-  }
-
-  // Types and builders for saving derived quizzes
-  type SavedCustomQuizCard = {
-    order: number;
-    type: string;
-    text: string;
-    source: "visited" | "pending";
-    action: "next" | "dig";
-    semanticRole?: string;
-    question?: string;
-  };
-
-  function baseCardsFromQuestions(
-    qs: Question[],
-    code?: string
-  ): SavedCustomQuizCard[] {
-    return qs.map((q, i) => {
-      const text =
-        typeof q.revealEndBeforeChild === "number" &&
-          typeof q.revealEndAfterChild === "number" &&
-          code
-          ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
-          : q.answerLabel;
-      return {
-        order: i,
-        type: q.childType || "unknown",
-        text: String(text ?? ""),
-        source: "visited",
-        action: "next",
-        semanticRole: q.parentType,
-        question: q.stem,
-      };
-    });
-  }
-
-  function derivedCardsFromMarks(
-    markedIdxs: number[],
-    qs: Question[],
-    root: TreeSitterAstNode,
-    code: string
-  ): SavedCustomQuizCard[] {
-    let order = 0;
-    const out: SavedCustomQuizCard[] = [];
-    for (const qi of markedIdxs) {
-      const q = qs[qi];
-      if (!q) continue;
-      const node = nodeFromQuestion(q, root, code);
-      if (!node) continue;
-      const cards = deriveCardsEnsuringBody(node, code).map((c) => ({
-        ...c,
-        order: order++,
-        source: "visited" as const,
-        action: "next" as const,
-      }));
-      out.push(...cards);
-    }
-    return out;
-  }
-
-  // Build v1.1 custom quiz cards from current questions (AST-backed where possible)
-  function buildV11Cards(
-    qs: Question[],
-    code?: string
-  ): SavedCustomQuizCardV11[] {
-    const out: SavedCustomQuizCardV11[] = [];
-    let order = 0;
-    for (const q of qs) {
-      const node = q.node;
-      const text = node
-        ? (code ?? "").substring(node.startIndex, node.endIndex)
-        : typeof q.revealEndBeforeChild === "number" &&
-          typeof q.revealEndAfterChild === "number" &&
-          typeof code === "string"
-          ? code.substring(q.revealEndBeforeChild, q.revealEndAfterChild)
-          : q.answerLabel;
-      const card: SavedCustomQuizCardV11 = {
-        order: order++,
-        type: q.childType || q.kind || "unknown",
-        text: String(text ?? ""),
-        action: "next",
-        question: q.stem,
-        semanticRole: q.parentType,
-        sourceRef: node
-          ? {
-            nodeType: node.type,
-            start: node.startIndex,
-            end: node.endIndex,
-            path: engine.computeAstPath(root, node),
-            preview:
-              typeof code === "string"
-                ? code.substring(node.startIndex, node.endIndex).slice(0, 120)
-                : undefined,
-          }
-          : undefined,
-      };
-      out.push(card);
-    }
-    return out;
-  }
-
   const renderComplete = () => (
     <div className="space-y-4">
       <div>
@@ -1601,164 +1233,6 @@ export const QuizViewer = ({
       </div>
       <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
         <p className="text-sm text-slate-700">Thanks for playing!</p>
-      </div>
-      <div className="flex justify-end gap-2">
-        {code && (
-          <>
-            <button
-              type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-              onClick={async () => {
-                try {
-                  const cards = buildV11Cards(questions, code);
-                  const payload = {
-                    fileKey,
-                    name: `Custom quiz ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1.1" as const,
-                    profile: "normal" as const,
-                    rootNode: {
-                      type: root.type,
-                      text: code.substring(root.startIndex, root.endIndex),
-                      start: root.startIndex,
-                      end: root.endIndex,
-                    },
-                    cards,
-                  };
-                  const res = await fetch("/api/quizzes", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                  });
-                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  alert("Custom quiz saved (all cards).");
-                } catch (err) {
-                  console.error(err);
-                  alert("Failed to save custom quiz.");
-                }
-              }}
-            >
-              Save Quiz: All Cards
-            </button>
-
-            <button
-              type="button"
-              className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50 disabled:opacity-50"
-              disabled={!questions.some((q) => q.source === "expanded")}
-              onClick={async () => {
-                try {
-                  const onlyNew = questions.filter(
-                    (q) => q.source === "expanded"
-                  );
-                  if (onlyNew.length === 0) {
-                    alert("No new cards to save.");
-                    return;
-                  }
-                  const cards = buildV11Cards(onlyNew, code);
-                  const payload = {
-                    fileKey,
-                    name: `New cards ${new Date().toLocaleString()}`,
-                    type: "CustomQuizV1.1" as const,
-                    profile: "normal" as const,
-                    rootNode: {
-                      type: root.type,
-                      text: code.substring(root.startIndex, root.endIndex),
-                      start: root.startIndex,
-                      end: root.endIndex,
-                    },
-                    cards,
-                  };
-                  const res = await fetch("/api/quizzes", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                  });
-                  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-                  alert("Custom quiz saved (new cards only).");
-                } catch (err) {
-                  console.error(err);
-                  alert("Failed to save new-cards quiz.");
-                }
-              }}
-            >
-              Save Quiz: New Only
-            </button>
-          </>
-        )}
-        {!selectedCustom && (
-          <button
-            type="button"
-            className="rounded-md border border-slate-200 bg-white px-3 py-1.5 text-sm text-slate-700 shadow-sm hover:bg-slate-50"
-            onClick={async () => {
-              const exportPayload = {
-                type: "ast-quiz",
-                root: {
-                  type: root.type,
-                  startIndex: root.startIndex,
-                  endIndex: root.endIndex,
-                },
-                totalQuestions: questions.length,
-                questions: questions.map((q, i) => ({
-                  index: i,
-                  stem: q.stem,
-                  parentType: q.parentType,
-                  childType: q.childType,
-                  correctAnswer: q.answerLabel,
-                  revealStart: q.revealStart,
-                  revealEndBeforeChild: q.revealEndBeforeChild,
-                  revealEndAfterChild: q.revealEndAfterChild,
-                  codeSnippet:
-                    typeof code === "string" &&
-                      typeof q.revealStart === "number" &&
-                      typeof q.revealEndBeforeChild === "number"
-                      ? code.substring(q.revealStart, q.revealEndBeforeChild)
-                      : undefined,
-                  childText:
-                    typeof code === "string" &&
-                      typeof q.revealEndBeforeChild === "number" &&
-                      typeof q.revealEndAfterChild === "number"
-                      ? code.substring(
-                        q.revealEndBeforeChild,
-                        q.revealEndAfterChild
-                      )
-                      : undefined,
-                  options: q.options,
-                })),
-              };
-
-              const json = JSON.stringify(exportPayload, null, 2);
-
-              const fallbackCopy = (text: string) => {
-                try {
-                  const ta = document.createElement("textarea");
-                  ta.value = text;
-                  ta.style.position = "fixed";
-                  ta.style.left = "-9999px";
-                  document.body.appendChild(ta);
-                  ta.focus();
-                  ta.select();
-                  document.execCommand("copy");
-                  document.body.removeChild(ta);
-                  return true;
-                } catch {
-                  return false;
-                }
-              };
-
-              try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                  await navigator.clipboard.writeText(json);
-                } else {
-                  const ok = fallbackCopy(json);
-                  if (!ok) throw new Error("Clipboard unavailable");
-                }
-              } catch {
-                // ignore
-              }
-            }}
-          >
-            Copy JSON
-          </button>
-        )}
       </div>
     </div>
   );
