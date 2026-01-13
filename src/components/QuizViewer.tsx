@@ -1,6 +1,6 @@
 import { Suspense } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronsLeft, ChevronsRight, FileUp, FolderUp, Code } from "lucide-react";
+import { ChevronsLeft, ChevronsRight, FileUp, FolderUp, Code, HelpCircle } from "lucide-react";
 import type { TreeSitterAstNode } from "../lib/treeSitter";
 import { randomString, shuffleArray } from "../lib/utils";
 import { getLanguageToolsForFileName } from "../lib/languages/registry";
@@ -24,6 +24,7 @@ export type QuizViewerProps = {
   onCancel: () => void;
   onComplete: () => void;
   onReturnToAst: () => void;
+  onReturnToSetup: () => void;
   // Notify parent of the absolute end index to reveal in the code viewer
   onRevealChange?: (endIndex: number | undefined) => void;
   // Medal tracking for saved quizzes
@@ -336,6 +337,7 @@ export const QuizViewer = ({
   onCancel,
   onComplete,
   onReturnToAst,
+  onReturnToSetup,
   onRevealChange,
   quizId,
   sectionIndex,
@@ -1223,19 +1225,88 @@ export const QuizViewer = ({
       </div>
     );
   };
-  const renderComplete = () => (
-    <div className="space-y-4">
-      <div>
-        <h3 className="text-lg font-semibold text-slate-800">Quiz Complete</h3>
-        <p className="text-xs uppercase tracking-wide text-slate-500">
-          You can return to the AST view.
-        </p>
+  const renderComplete = () => {
+    const percentage = total > 0 ? Math.round((score / total) * 100) : 0;
+    const isGoodScore = percentage >= 80;
+    const isAverageScore = percentage >= 50 && percentage < 80;
+
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="text-center">
+          <div className={`inline-flex items-center justify-center w-16 h-16 rounded-full mb-4 ${isGoodScore ? 'bg-green-100' : isAverageScore ? 'bg-amber-100' : 'bg-rose-100'
+            }`}>
+            <span className="text-3xl">
+              {isGoodScore ? '🎉' : isAverageScore ? '👍' : '💪'}
+            </span>
+          </div>
+          <h3 className="text-xl font-bold text-slate-800">Quiz Complete!</h3>
+        </div>
+
+        {/* Score Card */}
+        <div className={`rounded-xl border-2 p-6 text-center ${isGoodScore
+          ? 'border-green-200 bg-green-50'
+          : isAverageScore
+            ? 'border-amber-200 bg-amber-50'
+            : 'border-rose-200 bg-rose-50'
+          }`}>
+          <p className="text-sm font-medium text-slate-500 mb-2">Your Score</p>
+          <p className={`text-4xl font-bold mb-1 ${isGoodScore
+            ? 'text-green-600'
+            : isAverageScore
+              ? 'text-amber-600'
+              : 'text-rose-600'
+            }`}>
+            {score} / {total}
+          </p>
+          <p className={`text-lg font-semibold ${isGoodScore
+            ? 'text-green-500'
+            : isAverageScore
+              ? 'text-amber-500'
+              : 'text-rose-500'
+            }`}>
+            {percentage}%
+          </p>
+          <p className="text-sm text-slate-600 mt-3">
+            {isGoodScore
+              ? 'Excellent work! You really know this code!'
+              : isAverageScore
+                ? 'Good effort! Keep practicing to improve.'
+                : 'Keep studying - you\'ll get better with practice!'}
+          </p>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex flex-col gap-3">
+          <button
+            type="button"
+            onClick={onReturnToSetup}
+            className="flex w-full items-center justify-center gap-2 rounded-lg bg-cyan-600 px-4 py-3 text-sm font-medium text-white shadow-sm transition hover:bg-cyan-700"
+          >
+            <HelpCircle className="h-4 w-4" />
+            Take Another Quiz
+          </button>
+          <button
+            type="button"
+            onClick={onReturnToAst}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+          >
+            <FileUp className="h-4 w-4" />
+            Back to File
+          </button>
+          {parentFolderUrl && (
+            <a
+              href={parentFolderUrl}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-medium text-slate-600 transition hover:bg-slate-100"
+            >
+              <FolderUp className="h-4 w-4" />
+              Back to Folder
+            </a>
+          )}
+        </div>
       </div>
-      <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-        <p className="text-sm text-slate-700">Thanks for playing!</p>
-      </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="space-y-3">

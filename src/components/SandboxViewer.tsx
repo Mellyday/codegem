@@ -1145,6 +1145,7 @@ export const SandboxViewer = ({
                   onStart={() => setViewMode("quiz_active")}
                   onComplete={() => setViewMode("quiz_complete")}
                   onReturnToAst={() => setViewMode("ast")}
+                  onReturnToSetup={() => setViewMode("quiz_setup")}
                   onRevealChange={setRevealEndIndex}
                   quizId={currentQuizId}
                   sectionIndex={currentSectionIndex}
