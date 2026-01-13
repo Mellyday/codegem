@@ -2954,24 +2954,25 @@ export function buildCustomQuizPayload(params: {
     for (const child of children) appendStepCards(child, action);
   };
 
-  const orderedHistory = history.slice();
-  const current = lessonQueue[currentStep];
-  if (current) orderedHistory.push(current);
-
-  for (const step of orderedHistory) {
-    const action = step.action || "next";
-    appendStepCards(step, action);
+  const filteredHistory = history.filter((h) => h.action !== "dig");
+  for (const step of filteredHistory) {
+    appendStepCards(step, step.action ?? "next");
+  }
+  for (const step of lessonQueue.slice(currentStep)) {
+    appendStepCards(step, "next");
   }
 
   return {
-    version: "v1.1",
-    parser: "tree-sitter",
     fileKey,
+    name: `Custom quiz ${new Date().toLocaleString()}`,
+    type: "CustomQuizV1.1" as const,
+    profile: "shallow" as const,
     rootNode: {
       type: root.type,
-      text: textForRange(root.startIndex, root.endIndex, code) || root.type,
+      text: textForNode(root, code),
       start: root.startIndex,
       end: root.endIndex,
+      path: [] as number[],
     },
     cards,
   };
