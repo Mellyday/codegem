@@ -492,6 +492,12 @@ const unwrapExpressionStatement = (node?: TreeSitterAstNode): TreeSitterAstNode 
   return (node.namedChildren || [])[0];
 };
 
+const unwrapParenExpression = (node?: TreeSitterAstNode): TreeSitterAstNode | undefined => {
+  if (!node) return undefined;
+  if (node.type !== "parenthesized_expression") return node;
+  return (node.namedChildren || [])[0];
+};
+
 type ParamEntry = {
   raw: TreeSitterAstNode;
   pattern: TreeSitterAstNode;
@@ -504,6 +510,14 @@ const unwrapParamPattern = (param: TreeSitterAstNode): TreeSitterAstNode => {
   return param;
 };
 
+const isDestructuringParamPattern = (node: TreeSitterAstNode): boolean =>
+  [
+    "object_pattern",
+    "array_pattern",
+    "object_assignment_pattern",
+    "pair_pattern",
+  ].includes(node.type);
+
 const collectParamEntries = (paramsNode?: TreeSitterAstNode): ParamEntry[] => {
   if (!paramsNode) return [];
   const rawParams =
@@ -513,14 +527,16 @@ const collectParamEntries = (paramsNode?: TreeSitterAstNode): ParamEntry[] => {
   return rawParams.map((raw) => ({ raw, pattern: unwrapParamPattern(raw) }));
 };
 
-const paramLabel = (
+const paramLabels = (
   entry: ParamEntry,
   code: string | undefined
-): string => {
+): string[] => {
   const patternText = textForRange(entry.pattern.startIndex, entry.pattern.endIndex, code) || entry.pattern.type;
-  if (entry.pattern.type === "identifier") return patternText;
+  if (entry.pattern.type === "identifier") return [patternText];
+  const bindingNames = collectBindingNames(entry.pattern, code);
+  if (bindingNames.length > 0) return bindingNames;
   const rawText = textForRange(entry.raw.startIndex, entry.raw.endIndex, code) || entry.raw.type;
-  return rawText;
+  return [rawText];
 };
 
 const collectTypeParamNames = (
@@ -899,19 +915,23 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
   if (declarators.length === 0) return [];
 
   const bindingNames = new Set<string>();
+  const bindingNodes: TreeSitterAstNode[] = [];
   for (const decl of declarators) {
     const nameNode = getSectionFirstItem(decl, "name");
+    if (nameNode) bindingNodes.push(nameNode);
     collectBindingNames(nameNode, code).forEach((n) => bindingNames.add(n));
   }
 
   const bindings = Array.from(bindingNames).filter(Boolean);
   const qs: Q11[] = [];
   if (bindings.length > 0) {
+    const bindingRef =
+      bindingNodes.length > 0 ? sourceRefForNode(root, bindingNodes[0], code) : sourceRef;
     qs.push(
       multiQuestion(
         "Which bindings are declared here?",
         bindings,
-        sourceRef,
+        bindingRef,
         "decl.bindings",
         code,
         node.startIndex,
@@ -924,6 +944,7 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
     const nameNode = getSectionFirstItem(decl, "name");
     const valueNode = getSectionFirstItem(decl, "value");
     if (!valueNode || !nameNode) continue;
+    const value = unwrapParenExpression(valueNode) || valueNode;
     if (profile === "deep") {
       const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
       const bindingList = collectBindingNames(nameNode, code);
@@ -939,13 +960,24 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
           "decl.initializer"
         )
       );
-
-      if (valueNode.type === "arrow_function") {
-        qs.push(...buildArrowFunctionQuestions(valueNode, code, sourceRef, profile));
-      }
     }
 
-    const objects = findObjectLiteralNodes(valueNode);
+    if (value.type === "call_expression") {
+      const callRef = sourceRefForNode(root, value, code);
+      qs.push(...buildCallQuestions(value, code, callRef, profile));
+    }
+
+    if (value.type === "arrow_function") {
+      const arrowRef = sourceRefForNode(root, value, code);
+      qs.push(...buildArrowFunctionQuestions(value, code, arrowRef, profile));
+    }
+
+    if (isJsxNode(value)) {
+      const jsxRef = sourceRefForNode(root, value, code);
+      qs.push(...buildJsxQuestions(root, value, code, jsxRef, profile));
+    }
+
+    const objects = findObjectLiteralNodes(value);
     for (const obj of objects) {
       qs.push(...generateQuestionsV11(root, obj, profile, code));
     }
@@ -1005,11 +1037,21 @@ const ruleAssignmentExpression = (
     )
   );
 
-  if (profile === "deep" && right.type === "arrow_function") {
-    qs.push(...buildArrowFunctionQuestions(right, code, sourceRef, profile));
+  const rightValue = unwrapParenExpression(right) || right;
+  if (rightValue.type === "call_expression") {
+    const callRef = sourceRefForNode(root, rightValue, code);
+    qs.push(...buildCallQuestions(rightValue, code, callRef, profile));
+  }
+  if (rightValue.type === "arrow_function") {
+    const arrowRef = sourceRefForNode(root, rightValue, code);
+    qs.push(...buildArrowFunctionQuestions(rightValue, code, arrowRef, profile));
+  }
+  if (profile === "deep" && isJsxNode(rightValue)) {
+    const jsxRef = sourceRefForNode(root, rightValue, code);
+    qs.push(...buildJsxQuestions(root, rightValue, code, jsxRef, profile));
   }
 
-  const objects = findObjectLiteralNodes(right);
+  const objects = findObjectLiteralNodes(rightValue);
   for (const obj of objects) {
     qs.push(...generateQuestionsV11(root, obj, profile, code));
   }
@@ -1071,7 +1113,7 @@ const ruleFunctionDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
   }
 
   if (entries.length > 0) {
-    const params = entries.map((e) => paramLabel(e, code));
+    const params = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
     qs.push(
       multiQuestion(
         "Which are parameters of this function?",
@@ -1134,60 +1176,39 @@ const ruleFunctionDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
     );
   }
 
-  if (profile === "deep") {
-    let paramIndex = 0;
-    for (const entry of entries) {
-      const defaults = collectDescendants(entry.raw, (n) => n.type === "assignment_pattern");
-      for (const def of defaults) {
-        const left = childByField(def, "left");
-        const right = childByField(def, "right");
-        if (!left || !right) continue;
-        const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
-        const rightText = textForRange(right.startIndex, right.endIndex, code) || right.type;
+  for (const entry of entries) {
+    if (profile !== "deep") continue;
+    const defaults = collectDescendants(entry.raw, (n) => n.type === "assignment_pattern");
+    for (const def of defaults) {
+      const left = childByField(def, "left");
+      const right = childByField(def, "right");
+      if (!left || !right) continue;
+      const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
+      const rightText = textForRange(right.startIndex, right.endIndex, code) || right.type;
+      qs.push(
+        singleQuestion(
+          `What is the default value of ${leftText}?`,
+          rightText,
+          [sourceRef],
+          "function.param_default"
+        )
+      );
+    }
+
+    const rest = collectDescendants(entry.raw, (n) => n.type === "rest_pattern")[0];
+    if (rest) {
+      const restName = rest.namedChildren?.[0];
+      if (restName) {
+        const restText = textForRange(restName.startIndex, restName.endIndex, code) || restName.type;
         qs.push(
           singleQuestion(
-            `What is the default value of ${leftText}?`,
-            rightText,
+            "What is the rest parameter name?",
+            restText,
             [sourceRef],
-            "function.param_default"
+            "function.rest"
           )
         );
       }
-
-      const rest = collectDescendants(entry.raw, (n) => n.type === "rest_pattern")[0];
-      if (rest) {
-        const restName = rest.namedChildren?.[0];
-        if (restName) {
-          const restText = textForRange(restName.startIndex, restName.endIndex, code) || restName.type;
-          qs.push(
-            singleQuestion(
-              "What is the rest parameter name?",
-              restText,
-              [sourceRef],
-              "function.rest"
-            )
-          );
-        }
-      }
-
-      const bindingNames = collectBindingNames(entry.pattern, code);
-      if (
-        bindingNames.length > 0 &&
-        (bindingNames.length > 1 || entry.pattern.type.endsWith("pattern"))
-      ) {
-        qs.push(
-          multiQuestion(
-            `Which bindings are introduced by parameter #${paramIndex + 1}?`,
-            bindingNames,
-            sourceRef,
-            "function.param_bindings",
-            code,
-            entry.raw.startIndex,
-            entry.raw.endIndex
-          )
-        );
-      }
-      paramIndex += 1;
     }
   }
 
@@ -1203,14 +1224,21 @@ const buildArrowFunctionQuestions = (
   const paramsNode = getSectionFirstItem(node, "params");
   const entries = collectParamEntries(paramsNode);
   const qs: Q11[] = [];
+  const headerSpan = headerSpanByAst(node);
+  const headerRef: SourceRef = {
+    ...sourceRef,
+    start: headerSpan.start,
+    end: headerSpan.end,
+    preview: textForRange(headerSpan.start, headerSpan.end, code)?.slice(0, 120),
+  };
 
   if (entries.length > 0) {
-    const params = entries.map((e) => paramLabel(e, code));
+    const params = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
     qs.push(
       multiQuestion(
         "Which are parameters of this arrow function?",
         params,
-        sourceRef,
+        headerRef,
         "arrow.params",
         code,
         node.startIndex,
@@ -1219,51 +1247,7 @@ const buildArrowFunctionQuestions = (
     );
   }
 
-  qs.push(
-    yesNoQuestion(
-      "Is this arrow function async?",
-      isAsyncNode(node, code),
-      [sourceRef],
-      "arrow.async"
-    )
-  );
-
-  const body = getSectionFirstItem(node, "body");
-  if (body) {
-    const isBlock = body.type === "statement_block";
-    qs.push(
-      yesNoQuestion(
-        "Is the body a block?",
-        isBlock,
-        [sourceRef],
-        "arrow.body_block"
-      )
-    );
-  }
-
-  if (profile === "deep") {
-    let paramIndex = 0;
-    for (const entry of entries) {
-      const bindingNames = collectBindingNames(entry.pattern, code);
-      if (
-        bindingNames.length > 0 &&
-        (bindingNames.length > 1 || entry.pattern.type.endsWith("pattern"))
-      ) {
-        qs.push(
-          multiQuestion(
-            `Which bindings are introduced by parameter #${paramIndex + 1}?`,
-            bindingNames,
-            sourceRef,
-            "arrow.param_bindings",
-            code,
-            entry.raw.startIndex,
-            entry.raw.endIndex
-          )
-        );
-      }
-      paramIndex += 1;
-    }
-  }
+  // Intentionally omit parameter binding breakdown questions to avoid repeats.
 
   return qs;
 };
@@ -1368,7 +1352,7 @@ const ruleMethodDefinition: Rule = ({ node, code, sourceRef, profile }) => {
   const paramsNode = getSectionFirstItem(node, "params");
   const entries = collectParamEntries(paramsNode);
   if (entries.length > 0) {
-    const params = entries.map((e) => paramLabel(e, code));
+    const params = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
     qs.push(
       multiQuestion(
         "Which are parameters of this method?",
@@ -1428,28 +1412,6 @@ const ruleMethodDefinition: Rule = ({ node, code, sourceRef, profile }) => {
   }
 
   if (profile === "deep") {
-    let paramIndex = 0;
-    for (const entry of entries) {
-      const bindingNames = collectBindingNames(entry.pattern, code);
-      if (
-        bindingNames.length > 0 &&
-        (bindingNames.length > 1 || entry.pattern.type.endsWith("pattern"))
-      ) {
-        qs.push(
-          multiQuestion(
-            `Which bindings are introduced by parameter #${paramIndex + 1}?`,
-            bindingNames,
-            sourceRef,
-            "method.param_bindings",
-            code,
-            entry.raw.startIndex,
-            entry.raw.endIndex
-          )
-        );
-      }
-      paramIndex += 1;
-    }
-
     const decorators = getSectionItems(node, "decorators");
     if (decorators.length > 0) {
       qs.push(...decoratorQuestions(decorators, code, sourceRef));
@@ -1637,14 +1599,17 @@ const ruleCatchClause: Rule = ({ node, code, sourceRef, profile }) => {
 };
 
 const ruleReturnStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
-  const value = (node.namedChildren || [])[0];
-  if (!value) return [];
-  const text = textForRange(value.startIndex, value.endIndex, code) || value.type;
-  const qs = [
-    singleQuestion("What value is returned?", text, [sourceRef], "return.value"),
-  ];
-  if (value.type === "jsx_element" || value.type === "jsx_self_closing_element") {
-    qs.push(...buildJsxQuestions(value, code, sourceRef));
+  const rawValue = (node.namedChildren || [])[0];
+  if (!rawValue) return [];
+  const value = unwrapParenExpression(rawValue) || rawValue;
+  const qs: Q11[] = [];
+  if (!isJsxNode(value)) {
+    const text = textForRange(rawValue.startIndex, rawValue.endIndex, code) || rawValue.type;
+    qs.push(singleQuestion("What value is returned?", text, [sourceRef], "return.value"));
+  }
+  if (isJsxNode(value)) {
+    const jsxRef = sourceRefForNode(root, value, code);
+    qs.push(...buildJsxQuestions(root, value, code, jsxRef, profile));
   }
   const objects = findObjectLiteralNodes(value);
   for (const obj of objects) {
@@ -1853,36 +1818,198 @@ const buildCallQuestions = (
   return qs;
 };
 
-const buildJsxQuestions = (
+const isJsxNode = (node?: TreeSitterAstNode): boolean =>
+  Boolean(node && ["jsx_element", "jsx_self_closing_element", "jsx_fragment"].includes(node.type));
+
+const jsxElementName = (
   node: TreeSitterAstNode,
-  code: string | undefined,
-  sourceRef: SourceRef
+  code: string | undefined
+): string | undefined => {
+  if (node.type === "jsx_fragment") return "Fragment";
+  const nameNode =
+    getSectionFirstItem(node, "name") ||
+    firstChildOfTypes(node, ["identifier", "property_identifier", "jsx_identifier"]);
+  if (!nameNode) return undefined;
+  return textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
+};
+
+const jsxAttributeValueText = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): string => {
+  if (node.type === "string") {
+    return stripQuotes(textForRange(node.startIndex, node.endIndex, code) || "");
+  }
+  if (node.type === "jsx_expression") {
+    const expr =
+      childByField(node, "expression") ||
+      (node.namedChildren || [])[0];
+    if (expr) {
+      return textForRange(expr.startIndex, expr.endIndex, code) || expr.type;
+    }
+  }
+  return textForRange(node.startIndex, node.endIndex, code) || node.type;
+};
+
+const sourceRefForNode = (
+  root: TreeSitterAstNode,
+  node: TreeSitterAstNode,
+  code: string | undefined
+): SourceRef => ({
+  nodeType: node.type,
+  start: node.startIndex,
+  end: node.endIndex,
+  path: computeAstPath(root, node),
+  preview: textForRange(node.startIndex, node.endIndex, code)?.slice(0, 120),
+});
+
+const collectJsxElementsFromExpression = (exprNode: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const visit = (node: TreeSitterAstNode | undefined) => {
+    if (!node) return;
+    if (isJsxNode(node)) {
+      out.push(node);
+      return;
+    }
+    for (const child of node.namedChildren || []) {
+      visit(child);
+    }
+  };
+  visit(exprNode);
+  return out;
+};
+
+const isMapCallExpression = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): boolean => {
+  if (node.type !== "call_expression") return false;
+  const callee = childByField(node, "function") || (node.namedChildren || [])[0];
+  if (!callee || callee.type !== "member_expression") return false;
+  const prop = childByField(callee, "property") || (callee.namedChildren || [])[1];
+  if (!prop) return false;
+  const propText = textForRange(prop.startIndex, prop.endIndex, code) || prop.type;
+  return propText === "map";
+};
+
+const mapCallQuestions = (
+  root: TreeSitterAstNode,
+  callNode: TreeSitterAstNode,
+  code: string | undefined
 ): Q11[] => {
   const qs: Q11[] = [];
-  const nameNode = getSectionFirstItem(node, "name");
-  if (nameNode) {
-    const nameText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
+  const callee = childByField(callNode, "function") || (callNode.namedChildren || [])[0];
+  if (!callee || callee.type !== "member_expression") return qs;
+  const objectNode = childByField(callee, "object") || (callee.namedChildren || [])[0];
+  if (objectNode) {
+    const objText =
+      textForRange(objectNode.startIndex, objectNode.endIndex, code) || objectNode.type;
+    const objRef = sourceRefForNode(root, objectNode, code);
     qs.push(
       singleQuestion(
-        "What is the component/tag name?",
-        nameText,
-        [sourceRef],
-        "jsx.name"
+        "What collection is being mapped?",
+        objText,
+        [objRef],
+        "jsx.map.collection"
       )
     );
   }
 
+  const args = getSectionItems(callNode, "args");
+  const callbackRaw = args[0];
+  const callback = unwrapParenExpression(callbackRaw) || callbackRaw;
+  if (callback) {
+    let paramsNode =
+      callback.type === "arrow_function"
+        ? getSectionFirstItem(callback, "params")
+        : undefined;
+    if (!paramsNode) {
+      paramsNode =
+        childByField(callback, "parameters") || childByField(callback, "parameter");
+    }
+    const entries = collectParamEntries(paramsNode);
+    const paramNames = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
+    if (paramNames.length > 0) {
+      const headerSpan = headerSpanByAst(callback);
+      const cbRef = sourceRefForNode(root, callback, code);
+      const headerRef: SourceRef = {
+        ...cbRef,
+        start: headerSpan.start,
+        end: headerSpan.end,
+        preview: textForRange(headerSpan.start, headerSpan.end, code)?.slice(0, 120),
+      };
+      qs.push(
+        multiQuestion(
+          "Which are the map callback parameters?",
+          paramNames,
+          headerRef,
+          "jsx.map.params",
+          code,
+          callback.startIndex,
+          callback.endIndex
+        )
+      );
+    }
+  }
+
+  return qs;
+};
+
+const buildJsxQuestions = (
+  root: TreeSitterAstNode,
+  node: TreeSitterAstNode,
+  code: string | undefined,
+  sourceRef: SourceRef,
+  profile: DecompositionLevel,
+  opts: {
+    depth?: number;
+    maxDepth?: number;
+    contextLabel?: string;
+    includeName?: boolean;
+  } = {}
+): Q11[] => {
+  const qs: Q11[] = [];
+  const depth = opts.depth ?? 0;
+  const maxDepth = opts.maxDepth ?? (profile === "deep" ? 7 : 5);
+  const includeName = opts.includeName ?? depth === 0;
+  const prefix = opts.contextLabel ? `For <${opts.contextLabel}>: ` : "";
+
+  if (includeName && node.type === "jsx_fragment") {
+    qs.push(
+      singleQuestion(
+        `${prefix}What is the JSX wrapper?`,
+        "Fragment",
+        [sourceRef],
+        "jsx.fragment"
+      )
+    );
+  }
+
+  if (includeName && node.type !== "jsx_fragment") {
+    const nameText = jsxElementName(node, code);
+    if (nameText) {
+      qs.push(
+        singleQuestion(
+          `${prefix}What is the component/tag name?`,
+          nameText,
+          [sourceRef],
+          "jsx.name"
+        )
+      );
+    }
+  }
+
   const attrs = getSectionItems(node, "attributes");
-  const propNames = attrs
-    .filter((a) => a.type === "jsx_attribute")
-    .map((a) => (a.namedChildren || [])[0])
+  const attrNodes = attrs.filter((a) => a.type === "jsx_attribute");
+  const propNames = attrNodes
+    .map((a) => getSectionFirstItem(a, "name") || (a.namedChildren || [])[0])
     .filter(Boolean)
-    .map((n) => textForRange(n.startIndex, n.endIndex, code) || n.type);
+    .map((n) => textForRange(n!.startIndex, n!.endIndex, code) || n!.type);
 
   if (propNames.length > 0) {
     qs.push(
       multiQuestion(
-        "Which prop names are set on this JSX element?",
+        `${prefix}Which prop names are set on this JSX element?`,
         Array.from(new Set(propNames)),
         sourceRef,
         "jsx.props",
@@ -1893,11 +2020,123 @@ const buildJsxQuestions = (
     );
   }
 
+  for (const attr of attrNodes) {
+    const nameNode = getSectionFirstItem(attr, "name") || (attr.namedChildren || [])[0];
+    if (!nameNode) continue;
+    const nameText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
+    const valueNode = getSectionFirstItem(attr, "value") || (attr.namedChildren || [])[1];
+    if (!valueNode) continue;
+    const valueText = jsxAttributeValueText(valueNode, code);
+    const stem =
+      nameText === "className"
+        ? "What is the className value?"
+        : `What is the value for prop ${nameText}?`;
+    const valueRef = sourceRefForNode(root, valueNode, code);
+    qs.push(
+      singleQuestion(
+        `${prefix}${stem}`,
+        valueText,
+        [valueRef],
+        "jsx.prop_value"
+      )
+    );
+  }
+
+  const children = getSectionItems(node, "children");
+  const childItems: Array<
+    | { kind: "jsx"; node: TreeSitterAstNode; fromExpression: boolean }
+    | { kind: "map"; callNode: TreeSitterAstNode; elements: TreeSitterAstNode[] }
+  > = [];
+  const seenChildStarts = new Set<number>();
+  const pushChild = (child: TreeSitterAstNode, fromExpression: boolean) => {
+    if (seenChildStarts.has(child.startIndex)) return;
+    seenChildStarts.add(child.startIndex);
+    childItems.push({ kind: "jsx", node: child, fromExpression });
+  };
+
+  for (const child of children) {
+    if (isJsxNode(child)) {
+      pushChild(child, false);
+      continue;
+    }
+    if (child.type === "jsx_expression") {
+      const exprNode =
+        childByField(child, "expression") || (child.namedChildren || [])[0];
+      if (exprNode) {
+        const expr = unwrapParenExpression(exprNode) || exprNode;
+        if (isMapCallExpression(expr, code)) {
+          const exprElements = collectJsxElementsFromExpression(expr);
+          childItems.push({
+            kind: "map",
+            callNode: expr,
+            elements: exprElements,
+          });
+        } else {
+          const exprElements = collectJsxElementsFromExpression(expr);
+          exprElements.forEach((el) => pushChild(el, true));
+        }
+      }
+    }
+  }
+  const childNames = childItems.flatMap((item) => {
+    if (item.kind === "jsx") return [jsxElementName(item.node, code)];
+    return item.elements.map((el) => jsxElementName(el, code));
+  })
+    .filter((name): name is string => Boolean(name));
+  if (childNames.length > 0) {
+    const containerLabel = node.type === "jsx_fragment" ? "JSX fragment" : "JSX element";
+    qs.push(
+      multiQuestion(
+        `${prefix}Which child elements are directly nested in this ${containerLabel}?`,
+        Array.from(new Set(childNames)),
+        sourceRef,
+        "jsx.children",
+        code,
+        node.startIndex,
+        node.endIndex
+      )
+    );
+  }
+
+  if (depth < maxDepth) {
+    for (const item of childItems) {
+      if (item.kind === "map") {
+        qs.push(...mapCallQuestions(root, item.callNode, code));
+        for (const el of item.elements) {
+          const childName = jsxElementName(el, code) || "JSXElement";
+          const childRef = sourceRefForNode(root, el, code);
+          qs.push(
+            ...buildJsxQuestions(root, el, code, childRef, profile, {
+              depth: depth + 1,
+              maxDepth,
+              contextLabel: undefined,
+              includeName: true,
+            })
+          );
+        }
+        continue;
+      }
+      const childName = jsxElementName(item.node, code) || "JSXElement";
+      const childRef = sourceRefForNode(root, item.node, code);
+      const includeName = item.fromExpression;
+      const contextLabel = includeName ? undefined : childName;
+      qs.push(
+        ...buildJsxQuestions(root, item.node, code, childRef, profile, {
+          depth: depth + 1,
+          maxDepth,
+          contextLabel,
+          includeName,
+        })
+      );
+    }
+  }
+
   return qs;
 };
 
 const ruleExpressionStatement: Rule = ({ root, node, code, sourceRef, profile }) => {
-  const expr = getSectionFirstItem(node, "expr") || (node.namedChildren || [])[0];
+  const rawExpr = getSectionFirstItem(node, "expr") || (node.namedChildren || [])[0];
+  const expr = unwrapParenExpression(rawExpr) || rawExpr;
   if (!expr) return [];
   if (expr.type === "assignment_expression") {
     return ruleAssignmentExpression(root, expr, code, sourceRef, profile);
@@ -1913,8 +2152,9 @@ const ruleExpressionStatement: Rule = ({ root, node, code, sourceRef, profile })
     }
     return qs;
   }
-  if (expr.type === "jsx_element" || expr.type === "jsx_self_closing_element") {
-    return buildJsxQuestions(expr, code, sourceRef);
+  if (isJsxNode(expr)) {
+    const jsxRef = sourceRefForNode(root, expr, code);
+    return buildJsxQuestions(root, expr, code, jsxRef, profile);
   }
   return [];
 };
@@ -2224,7 +2464,9 @@ const hasQuizChildren = (node: TreeSitterAstNode): boolean => {
 };
 
 const isHeaderQuestion = (q: QuizQuestion): boolean =>
-  q.stem === "Write the full header line" || q.generatorRule === "header.line";
+  q.stem === "Write the full header line" ||
+  q.generatorRule === "header.line" ||
+  (typeof q.generatorRule === "string" && q.generatorRule.startsWith("jsx."));
 
 const spanForQuestion = (
   q: QuizQuestion
@@ -2623,6 +2865,57 @@ export const generateEngineSteps = (
     return statements.some((stmt) => isAnchorNode(stmt) || statementHasAnchor(stmt));
   };
 
+  const getFunctionLikeBody = (node?: TreeSitterAstNode) => {
+    const value = unwrapParenExpression(node);
+    if (!value) return undefined;
+    if (!["arrow_function", "function", "generator_function"].includes(value.type)) {
+      return undefined;
+    }
+    const body =
+      getSectionFirstItem(value, "body") ||
+      childByField(value, "body") ||
+      firstChildOfType(value, "statement_block");
+    if (body && body.type === "statement_block") return body;
+    return undefined;
+  };
+
+  const getBodiesFromDeclarators = (declNode: TreeSitterAstNode) => {
+    const declarators = getSectionItems(declNode, "declarators");
+    const bodies: TreeSitterAstNode[] = [];
+    for (const decl of declarators) {
+      const valueNode = getSectionFirstItem(decl, "value");
+      const body = getFunctionLikeBody(valueNode);
+      if (body) bodies.push(body);
+    }
+    return bodies;
+  };
+
+  const getChildBlocksFromDeclaration = (declNode?: TreeSitterAstNode) => {
+    if (!declNode) return [];
+    if (declNode.type === "lexical_declaration" || declNode.type === "variable_declaration") {
+      return getBodiesFromDeclarators(declNode);
+    }
+    if (
+      declNode.type === "function_declaration" ||
+      declNode.type === "generator_function_declaration"
+    ) {
+      const body =
+        getSectionFirstItem(declNode, "body") ||
+        childByField(declNode, "body") ||
+        firstChildOfType(declNode, "statement_block");
+      return body ? [body] : [];
+    }
+    if (declNode.type === "class_declaration") {
+      const body =
+        getSectionFirstItem(declNode, "body") ||
+        childByField(declNode, "body") ||
+        firstChildOfType(declNode, "class_body");
+      return body ? [body] : [];
+    }
+    const body = getFunctionLikeBody(declNode);
+    return body ? [body] : [];
+  };
+
   const walkBlock = (block: TreeSitterAstNode) => {
     const children = getStatementChildren(block);
     let i = 0;
@@ -2743,6 +3036,25 @@ export const generateEngineSteps = (
         if (body) walkBlock(body);
         if (handler) walkStmt(handler);
         if (finalizer) walkStmt(finalizer);
+        break;
+      }
+      case "export_statement": {
+        const declaration = getSectionFirstItem(stmt, "declaration");
+        const value = getSectionFirstItem(stmt, "value");
+        const childBlocks = getChildBlocksFromDeclaration(declaration);
+        const valueBody = getFunctionLikeBody(value);
+        if (valueBody) childBlocks.push(valueBody);
+        const hasChildStatements = childBlocks.some(blockHasStatements);
+        emitAnchorStep(stmt, Boolean(hasChildStatements));
+        childBlocks.forEach((block) => walkBlock(block));
+        break;
+      }
+      case "lexical_declaration":
+      case "variable_declaration": {
+        const childBlocks = getBodiesFromDeclarators(stmt);
+        const hasChildStatements = childBlocks.some(blockHasStatements);
+        emitAnchorStep(stmt, Boolean(hasChildStatements));
+        childBlocks.forEach((block) => walkBlock(block));
         break;
       }
       case "catch_clause":

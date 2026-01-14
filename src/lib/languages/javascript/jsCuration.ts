@@ -514,6 +514,17 @@ export const buildCuratedSections = (
       ];
     }
 
+    case "jsx_fragment": {
+      const children = (node.namedChildren || []).filter(
+        (c) => !["jsx_opening_fragment", "jsx_closing_fragment"].includes(c.type)
+      );
+      return [
+        { key: "name", items: [] },
+        { key: "attributes", items: [] },
+        { key: "children", items: children },
+      ];
+    }
+
     case "jsx_attribute": {
       const name = (node.namedChildren || [])[0];
       const value = (node.namedChildren || [])[1];
