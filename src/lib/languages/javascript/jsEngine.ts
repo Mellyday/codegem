@@ -7,6 +7,7 @@ import {
   firstChildOfTypes,
   getSectionItems,
   getSectionFirstItem,
+  getSectionSpan,
   getRevealAnchors,
   collectBindingNames,
   isDocstringNode,
@@ -1826,9 +1827,7 @@ const jsxElementName = (
   code: string | undefined
 ): string | undefined => {
   if (node.type === "jsx_fragment") return "Fragment";
-  const nameNode =
-    getSectionFirstItem(node, "name") ||
-    firstChildOfTypes(node, ["identifier", "property_identifier", "jsx_identifier"]);
+  const nameNode = getSectionFirstItem(node, "name");
   if (!nameNode) return undefined;
   return textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
 };
@@ -1862,6 +1861,54 @@ const sourceRefForNode = (
   path: computeAstPath(root, node),
   preview: textForRange(node.startIndex, node.endIndex, code)?.slice(0, 120),
 });
+
+const sourceRefForSpan = (
+  root: TreeSitterAstNode,
+  base: TreeSitterAstNode,
+  span: { start: number; end: number },
+  code: string | undefined
+): SourceRef => ({
+  nodeType: base.type,
+  start: span.start,
+  end: span.end,
+  path: computeAstPath(root, base),
+  preview: textForRange(span.start, span.end, code)?.slice(0, 120),
+});
+
+const exprFromJsxExpression = (
+  jsxExpr: TreeSitterAstNode
+): TreeSitterAstNode | undefined => {
+  const expr = childByField(jsxExpr, "expression") || (jsxExpr.namedChildren || [])[0];
+  return unwrapParenExpression(expr) || expr;
+};
+
+const withStemPrefix = (prefix: string, qs: QuizQuestion[]): QuizQuestion[] =>
+  qs.map((q) => ({
+    ...q,
+    stem: `${prefix}${q.stem}`,
+  }));
+
+const addExprQuestions = (
+  root: TreeSitterAstNode,
+  expr: TreeSitterAstNode,
+  code: string | undefined,
+  profile: DecompositionLevel,
+  prefix: string
+): QuizQuestion[] => {
+  const qs = generateQuestionsV11(root, expr, profile, code);
+  if (qs.length) return withStemPrefix(prefix, qs);
+  const exprRef = sourceRefForNode(root, expr, code);
+  if (expr.type === "assignment_expression") {
+    return withStemPrefix(
+      prefix,
+      ruleAssignmentExpression(root, expr, code, exprRef, profile)
+    );
+  }
+  if (expr.type === "augmented_assignment_expression") {
+    return withStemPrefix(prefix, ruleAugmentedAssignment(expr, code, exprRef));
+  }
+  return [];
+};
 
 const collectJsxElementsFromExpression = (exprNode: TreeSitterAstNode): TreeSitterAstNode[] => {
   const out: TreeSitterAstNode[] = [];
@@ -1973,6 +2020,8 @@ const buildJsxQuestions = (
   const maxDepth = opts.maxDepth ?? (profile === "deep" ? 7 : 5);
   const includeName = opts.includeName ?? depth === 0;
   const prefix = opts.contextLabel ? `For <${opts.contextLabel}>: ` : "";
+  const attrSpan = getSectionSpan(node, "attributes");
+  const childSpan = getSectionSpan(node, "children");
 
   if (includeName && node.type === "jsx_fragment") {
     qs.push(
@@ -2001,17 +2050,24 @@ const buildJsxQuestions = (
 
   const attrs = getSectionItems(node, "attributes");
   const attrNodes = attrs.filter((a) => a.type === "jsx_attribute");
+  const spreadAttrs = attrs.filter(
+    (a) =>
+      a.type === "jsx_spread_attribute" ||
+      (a.type === "jsx_expression" && exprFromJsxExpression(a)?.type === "spread_element")
+  );
   const propNames = attrNodes
     .map((a) => getSectionFirstItem(a, "name") || (a.namedChildren || [])[0])
     .filter(Boolean)
     .map((n) => textForRange(n!.startIndex, n!.endIndex, code) || n!.type);
 
   if (propNames.length > 0) {
+    const attrRef =
+      attrSpan ? sourceRefForSpan(root, node, attrSpan, code) : sourceRef;
     qs.push(
       multiQuestion(
         `${prefix}Which prop names are set on this JSX element?`,
         Array.from(new Set(propNames)),
-        sourceRef,
+        attrRef,
         "jsx.props",
         code,
         node.startIndex,
@@ -2025,7 +2081,18 @@ const buildJsxQuestions = (
     if (!nameNode) continue;
     const nameText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
     const valueNode = getSectionFirstItem(attr, "value") || (attr.namedChildren || [])[1];
-    if (!valueNode) continue;
+    if (!valueNode) {
+      const nameRef = sourceRefForNode(root, nameNode, code);
+      qs.push(
+        yesNoQuestion(
+          `${prefix}Is prop ${nameText} set?`,
+          true,
+          [nameRef],
+          "jsx.prop_bool"
+        )
+      );
+      continue;
+    }
     const valueText = jsxAttributeValueText(valueNode, code);
     const stem =
       nameText === "className"
@@ -2040,12 +2107,56 @@ const buildJsxQuestions = (
         "jsx.prop_value"
       )
     );
+    if (valueNode.type === "jsx_expression") {
+      const expr = exprFromJsxExpression(valueNode);
+      if (expr) {
+        qs.push(
+          ...addExprQuestions(
+            root,
+            expr,
+            code,
+            profile,
+            `${prefix}For prop ${nameText}: `
+          )
+        );
+      }
+    }
+  }
+
+  for (const spreadAttr of spreadAttrs) {
+    const expr = exprFromJsxExpression(spreadAttr);
+    const spreadExpr =
+      expr?.type === "spread_element"
+        ? childByField(expr, "argument") || (expr.namedChildren || [])[0]
+        : expr;
+    if (!spreadExpr) continue;
+    const spreadText =
+      textForRange(spreadExpr.startIndex, spreadExpr.endIndex, code) || spreadExpr.type;
+    const spreadRef = sourceRefForNode(root, spreadExpr, code);
+    qs.push(
+      singleQuestion(
+        `${prefix}What object is being spread into props?`,
+        spreadText,
+        [spreadRef],
+        "jsx.props_spread"
+      )
+    );
+    qs.push(
+      ...addExprQuestions(
+        root,
+        spreadExpr,
+        code,
+        profile,
+        `${prefix}For spread props: `
+      )
+    );
   }
 
   const children = getSectionItems(node, "children");
   const childItems: Array<
     | { kind: "jsx"; node: TreeSitterAstNode; fromExpression: boolean }
     | { kind: "map"; callNode: TreeSitterAstNode; elements: TreeSitterAstNode[] }
+    | { kind: "expr"; expr: TreeSitterAstNode; elements: TreeSitterAstNode[] }
   > = [];
   const seenChildStarts = new Set<number>();
   const pushChild = (child: TreeSitterAstNode, fromExpression: boolean) => {
@@ -2060,10 +2171,8 @@ const buildJsxQuestions = (
       continue;
     }
     if (child.type === "jsx_expression") {
-      const exprNode =
-        childByField(child, "expression") || (child.namedChildren || [])[0];
-      if (exprNode) {
-        const expr = unwrapParenExpression(exprNode) || exprNode;
+      const expr = exprFromJsxExpression(child);
+      if (expr) {
         if (isMapCallExpression(expr, code)) {
           const exprElements = collectJsxElementsFromExpression(expr);
           childItems.push({
@@ -2073,7 +2182,11 @@ const buildJsxQuestions = (
           });
         } else {
           const exprElements = collectJsxElementsFromExpression(expr);
-          exprElements.forEach((el) => pushChild(el, true));
+          childItems.push({
+            kind: "expr",
+            expr,
+            elements: exprElements,
+          });
         }
       }
     }
@@ -2085,11 +2198,13 @@ const buildJsxQuestions = (
     .filter((name): name is string => Boolean(name));
   if (childNames.length > 0) {
     const containerLabel = node.type === "jsx_fragment" ? "JSX fragment" : "JSX element";
+    const childRef =
+      childSpan ? sourceRefForSpan(root, node, childSpan, code) : sourceRef;
     qs.push(
       multiQuestion(
         `${prefix}Which child elements are directly nested in this ${containerLabel}?`,
         Array.from(new Set(childNames)),
-        sourceRef,
+        childRef,
         "jsx.children",
         code,
         node.startIndex,
@@ -2101,7 +2216,45 @@ const buildJsxQuestions = (
   if (depth < maxDepth) {
     for (const item of childItems) {
       if (item.kind === "map") {
-        qs.push(...mapCallQuestions(root, item.callNode, code));
+        qs.push(
+          ...withStemPrefix(
+            `${prefix}In JSX expression: `,
+            mapCallQuestions(root, item.callNode, code)
+          )
+        );
+        qs.push(
+          ...addExprQuestions(
+            root,
+            item.callNode,
+            code,
+            profile,
+            `${prefix}In JSX expression: `
+          )
+        );
+        for (const el of item.elements) {
+          const childName = jsxElementName(el, code) || "JSXElement";
+          const childRef = sourceRefForNode(root, el, code);
+          qs.push(
+            ...buildJsxQuestions(root, el, code, childRef, profile, {
+              depth: depth + 1,
+              maxDepth,
+              contextLabel: undefined,
+              includeName: true,
+            })
+          );
+        }
+        continue;
+      }
+      if (item.kind === "expr") {
+        qs.push(
+          ...addExprQuestions(
+            root,
+            item.expr,
+            code,
+            profile,
+            `${prefix}In JSX expression: `
+          )
+        );
         for (const el of item.elements) {
           const childName = jsxElementName(el, code) || "JSXElement";
           const childRef = sourceRefForNode(root, el, code);
@@ -2466,7 +2619,9 @@ const hasQuizChildren = (node: TreeSitterAstNode): boolean => {
 const isHeaderQuestion = (q: QuizQuestion): boolean =>
   q.stem === "Write the full header line" ||
   q.generatorRule === "header.line" ||
-  (typeof q.generatorRule === "string" && q.generatorRule.startsWith("jsx."));
+  q.generatorRule === "jsx.name" ||
+  q.generatorRule === "jsx.fragment" ||
+  q.generatorRule === "jsx.children";
 
 const spanForQuestion = (
   q: QuizQuestion

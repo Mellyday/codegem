@@ -493,7 +493,9 @@ export const buildCuratedSections = (
       const openTag = childByField(node, "open_tag") || firstChildOfType(node, "jsx_opening_element");
       const name = openTag ? childByField(openTag, "name") || firstChildOfType(openTag, "identifier") : undefined;
       const attributes = openTag
-        ? (openTag.namedChildren || []).filter((c) => c.type === "jsx_attribute" || c.type === "jsx_expression")
+        ? (openTag.namedChildren || []).filter((c) =>
+          ["jsx_attribute", "jsx_expression", "jsx_spread_attribute"].includes(c.type)
+        )
         : [];
       const children = (node.namedChildren || []).filter(
         (c) => !["jsx_opening_element", "jsx_closing_element"].includes(c.type)
@@ -507,7 +509,9 @@ export const buildCuratedSections = (
 
     case "jsx_self_closing_element": {
       const name = childByField(node, "name") || firstChildOfType(node, "identifier");
-      const attributes = (node.namedChildren || []).filter((c) => c.type === "jsx_attribute" || c.type === "jsx_expression");
+      const attributes = (node.namedChildren || []).filter((c) =>
+        ["jsx_attribute", "jsx_expression", "jsx_spread_attribute"].includes(c.type)
+      );
       return [
         { key: "name", items: name ? [name] : [] },
         { key: "attributes", items: attributes },
