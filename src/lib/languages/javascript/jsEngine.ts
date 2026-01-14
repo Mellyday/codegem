@@ -1878,7 +1878,10 @@ const sourceRefForSpan = (
 const exprFromJsxExpression = (
   jsxExpr: TreeSitterAstNode
 ): TreeSitterAstNode | undefined => {
-  const expr = childByField(jsxExpr, "expression") || (jsxExpr.namedChildren || [])[0];
+  const expr =
+    childByField(jsxExpr, "expression") ||
+    childByField(jsxExpr, "argument") ||
+    (jsxExpr.namedChildren || [])[0];
   return unwrapParenExpression(expr) || expr;
 };
 
