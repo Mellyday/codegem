@@ -1824,12 +1824,30 @@ const buildCallQuestions = (
   if (profile === "shallow") {
     const fullCallText =
       textForRange(callNode.startIndex, callNode.endIndex, code) || callNode.type;
+    const argsNode =
+      childByField(callNode, "arguments") ||
+      getSectionFirstItem(callNode, "arguments") ||
+      getSectionFirstItem(callNode, "args");
+    const headerSpan = argsNode
+      ? { start: callNode.startIndex, end: argsNode.startIndex }
+      : {
+          start: callNode.startIndex,
+          end: Math.min(callNode.endIndex, callNode.startIndex + 40),
+        };
+    const headerText = (code || "")
+      .slice(headerSpan.start, headerSpan.end)
+      .trim();
+    const isHuge = fullCallText.includes("\n") || fullCallText.length > 80;
+    const answerLabel = isHuge && headerText ? headerText : fullCallText;
+    const headerRef = sourceRefForSpan(root, callNode, headerSpan, code);
     qs.push({
       kind: "call.full",
       stem: "What function is called?",
-      answerLabel: fullCallText,
-      options: shuffle([fullCallText, ...buildDistractors(fullCallText)]),
-      sourceRefs: [callRef],
+      answerLabel,
+      options: shuffle([answerLabel, ...buildDistractors(answerLabel)]),
+      sourceRefs: [headerRef],
+      revealEndBeforeChild: headerSpan.start,
+      revealEndAfterChild: headerSpan.end,
       generatorRule: "call.full",
     });
   } else {
