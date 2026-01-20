@@ -559,6 +559,27 @@ const findCallExpressionNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] =
   return out;
 };
 
+const findOuterJsxNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [node];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (isFunctionLikeNode(cur)) continue;
+    if (BODY_NODES.has(cur.type)) continue;
+    if (isJsxNode(cur)) {
+      out.push(cur);
+      continue;
+    }
+    const children = cur.namedChildren || [];
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]);
+    }
+  }
+  out.sort((a, b) => a.startIndex - b.startIndex);
+  return out;
+};
+
 const collectCallbackBodiesFromExpression = (
   exprNode?: TreeSitterAstNode
 ): TreeSitterAstNode[] => {
@@ -1000,6 +1021,67 @@ const ruleExportStatement: Rule = ({ root, node, code, sourceRef, profile }) => 
   return questions;
 };
 
+const exprSummaryQuestion = (params: {
+  root: TreeSitterAstNode;
+  rawExpr: TreeSitterAstNode;
+  code: string | undefined;
+  stem: string;
+  generatorRule: string;
+}): Q11 => {
+  const { root, rawExpr, code, stem, generatorRule } = params;
+  const rawText =
+    textForRange(rawExpr.startIndex, rawExpr.endIndex, code) || rawExpr.type;
+  const rawRef = sourceRefForNode(root, rawExpr, code);
+  const base = singleQuestion(stem, rawText, [rawRef], generatorRule);
+  return { ...base, kind: `expr.summary.${generatorRule}` };
+};
+
+const deepExprBreakdownQuestions = (params: {
+  root: TreeSitterAstNode;
+  rawExpr: TreeSitterAstNode;
+  code: string | undefined;
+  profile: DecompositionLevel;
+}): Q11[] => {
+  const { root, rawExpr, code, profile } = params;
+  if (profile !== "deep") return [];
+  const out: Q11[] = [];
+
+  const expr = unwrapParenExpression(rawExpr) || rawExpr;
+  const calls = findCallExpressionNodes(expr);
+  if (calls.length > 0) {
+    const seen = new Set<string>();
+    for (const call of calls) {
+      const key = `${call.startIndex}-${call.endIndex}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push(...buildCallQuestions(root, call, code, profile));
+    }
+  }
+  if (expr.type === "arrow_function") {
+    const ref = sourceRefForNode(root, expr, code);
+    out.push(...buildArrowFunctionQuestions(expr, code, ref, profile));
+  }
+  const jsxNodes = findOuterJsxNodes(expr);
+  if (jsxNodes.length > 0) {
+    const seen = new Set<string>();
+    for (const node of jsxNodes) {
+      const key = `${node.startIndex}-${node.endIndex}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const ref = sourceRefForNode(root, node, code);
+      out.push(...buildJsxQuestions(root, node, code, ref, profile));
+    }
+  }
+
+  const objects = findObjectLiteralNodes(expr, {
+    descendIntoBodies: shouldDescendIntoBodiesForObjectScan(expr),
+  });
+  for (const obj of objects) {
+    out.push(...generateQuestionsV11(root, obj, profile, code));
+  }
+  return out;
+};
+
 const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile }) => {
   const declarators = getSectionItems(node, "declarators");
   if (declarators.length === 0) return [];
@@ -1034,45 +1116,19 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
     const nameNode = getSectionFirstItem(decl, "name");
     const valueNode = getSectionFirstItem(decl, "value");
     if (!valueNode || !nameNode) continue;
-    const value = unwrapParenExpression(valueNode) || valueNode;
-    if (profile === "deep") {
-      const valueText = textForRange(valueNode.startIndex, valueNode.endIndex, code) || valueNode.type;
-      const bindingList = collectBindingNames(nameNode, code);
-      const isSimple = nameNode.type === "identifier" && bindingList.length === 1;
-      const stem = isSimple
-        ? `What is the initializer for ${bindingList[0]}?`
-        : "What value is being destructured to initialize these bindings?";
-      qs.push(
-        singleQuestion(
-          stem,
-          valueText,
-          [sourceRef],
-          "decl.initializer"
-        )
-      );
-    }
-
-    if (value.type === "call_expression") {
-      const callRef = sourceRefForNode(root, value, code);
-      qs.push(...buildCallQuestions(value, code, callRef, profile));
-    }
-
-    if (value.type === "arrow_function") {
-      const arrowRef = sourceRefForNode(root, value, code);
-      qs.push(...buildArrowFunctionQuestions(value, code, arrowRef, profile));
-    }
-
-    if (isJsxNode(value)) {
-      const jsxRef = sourceRefForNode(root, value, code);
-      qs.push(...buildJsxQuestions(root, value, code, jsxRef, profile));
-    }
-
-    const objects = findObjectLiteralNodes(value, {
-      descendIntoBodies: shouldDescendIntoBodiesForObjectScan(value),
-    });
-    for (const obj of objects) {
-      qs.push(...generateQuestionsV11(root, obj, profile, code));
-    }
+    const bindingList = collectBindingNames(nameNode, code);
+    const isSimple = nameNode.type === "identifier" && bindingList.length === 1;
+    const stem = isSimple
+      ? `What is the initializer for ${bindingList[0]}?`
+      : "What value is being destructured to initialize these bindings?";
+    qs.push(exprSummaryQuestion({
+      root,
+      rawExpr: valueNode,
+      code,
+      stem,
+      generatorRule: "decl.initializer",
+    }));
+    qs.push(...deepExprBreakdownQuestions({ root, rawExpr: valueNode, code, profile }));
   }
 
   return qs;
@@ -1096,59 +1152,39 @@ const ruleAssignmentExpression = (
     const stem = bindings.length > 1
       ? "Which bindings are assigned here?"
       : "What is the left-hand target?";
+    const leftRef = sourceRefForNode(root, left, code);
     qs.push(
       multiQuestion(
         stem,
         Array.from(new Set(bindings)),
-        sourceRef,
+        leftRef,
         "assign.bindings",
         code,
-        node.startIndex,
-        node.endIndex
+        left.startIndex,
+        left.endIndex
       )
     );
   } else {
     const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
+    const leftRef = sourceRefForNode(root, left, code);
     qs.push(
       singleQuestion(
         "What is the left-hand target?",
         leftText,
-        [sourceRef],
+        [leftRef],
         "assign.left"
       )
     );
   }
 
-  const rightText = textForRange(right.startIndex, right.endIndex, code) || right.type;
-  qs.push(
-    singleQuestion(
-      "What is the right-hand value?",
-      rightText,
-      [sourceRef],
-      "assign.value"
-    )
-  );
-
-  const rightValue = unwrapParenExpression(right) || right;
-  if (rightValue.type === "call_expression") {
-    const callRef = sourceRefForNode(root, rightValue, code);
-    qs.push(...buildCallQuestions(rightValue, code, callRef, profile));
-  }
-  if (rightValue.type === "arrow_function") {
-    const arrowRef = sourceRefForNode(root, rightValue, code);
-    qs.push(...buildArrowFunctionQuestions(rightValue, code, arrowRef, profile));
-  }
-  if (profile === "deep" && isJsxNode(rightValue)) {
-    const jsxRef = sourceRefForNode(root, rightValue, code);
-    qs.push(...buildJsxQuestions(root, rightValue, code, jsxRef, profile));
-  }
-
-  const objects = findObjectLiteralNodes(rightValue, {
-    descendIntoBodies: shouldDescendIntoBodiesForObjectScan(rightValue),
-  });
-  for (const obj of objects) {
-    qs.push(...generateQuestionsV11(root, obj, profile, code));
-  }
+  qs.push(exprSummaryQuestion({
+    root,
+    rawExpr: right,
+    code,
+    stem: "What is the right-hand value?",
+    generatorRule: "assign.value",
+  }));
+  qs.push(...deepExprBreakdownQuestions({ root, rawExpr: right, code, profile }));
 
   return qs;
 };
@@ -1774,15 +1810,16 @@ const decomposeCallChain = (
 };
 
 const buildCallQuestions = (
+  root: TreeSitterAstNode,
   callNode: TreeSitterAstNode,
   code: string | undefined,
-  sourceRef: SourceRef,
   profile: DecompositionLevel
 ): Q11[] => {
   const qs: Q11[] = [];
   const callee = childByField(callNode, "function") || (callNode.namedChildren || [])[0];
   const argsNode = childByField(callNode, "arguments");
   const args = argsNode ? argsNode.namedChildren || [] : [];
+  const callRef = sourceRefForNode(root, callNode, code);
 
   if (profile === "shallow") {
     const fullCallText =
@@ -1792,7 +1829,7 @@ const buildCallQuestions = (
       stem: "What function is called?",
       answerLabel: fullCallText,
       options: shuffle([fullCallText, ...buildDistractors(fullCallText)]),
-      sourceRefs: [sourceRef],
+      sourceRefs: [callRef],
       generatorRule: "call.full",
     });
   } else {
@@ -1805,22 +1842,24 @@ const buildCallQuestions = (
       let stepNum = 1;
       for (const seg of segments) {
         if (seg.segmentType === "base") {
+          const segRef = sourceRefForNode(root, seg.node, code);
           qs.push({
             kind: "call.chain.base",
             stem: `Step ${stepNum}: What is the base/starting expression?`,
             answerLabel: seg.text,
             options: shuffle([seg.text, ...buildDistractors(seg.text)]),
-            sourceRefs: [sourceRef],
+            sourceRefs: [segRef],
             generatorRule: "call.chain.base",
           });
           stepNum += 1;
         } else if (seg.segmentType === "field") {
+          const segRef = sourceRefForNode(root, seg.node, code);
           qs.push({
             kind: "call.chain.field",
             stem: `Step ${stepNum}: What field/method is accessed next?`,
             answerLabel: seg.text,
             options: shuffle([seg.text, ...buildDistractors(seg.text)]),
-            sourceRefs: [sourceRef],
+            sourceRefs: [segRef],
             generatorRule: "call.chain.field",
           });
           stepNum += 1;
@@ -1836,6 +1875,7 @@ const buildCallQuestions = (
               callNode.startIndex,
               callNode.endIndex
             );
+            const argsRef = sourceRefForNode(root, seg.node, code);
             qs.push({
               kind: "call.chain.args",
               stem: `Step ${stepNum}: Select the arguments in order`,
@@ -1845,7 +1885,7 @@ const buildCallQuestions = (
               questionType: "orderedMulti",
               multiCorrect: argTexts,
               multiSelectHint: argTexts.length,
-              sourceRefs: [sourceRef],
+              sourceRefs: [argsRef],
               generatorRule: "call.chain.args",
             });
             stepNum += 1;
@@ -1856,12 +1896,13 @@ const buildCallQuestions = (
       if (callee) {
         const calleeText =
           textForRange(callee.startIndex, callee.endIndex, code) || callee.type;
+        const calleeRef = sourceRefForNode(root, callee, code);
         qs.push({
           kind: "call.callee",
           stem: "What function is called?",
           answerLabel: calleeText,
           options: shuffle([calleeText, ...buildDistractors(calleeText)]),
-          sourceRefs: [sourceRef],
+          sourceRefs: [calleeRef],
           generatorRule: "call.callee",
         });
       }
@@ -1875,6 +1916,7 @@ const buildCallQuestions = (
           callNode.startIndex,
           callNode.endIndex
         );
+        const argsRef = argsNode ? sourceRefForNode(root, argsNode, code) : callRef;
         qs.push({
           kind: "call.args",
           stem: "Select the arguments in order",
@@ -1884,7 +1926,7 @@ const buildCallQuestions = (
           questionType: "orderedMulti",
           multiCorrect: argTexts,
           multiSelectHint: argTexts.length,
-          sourceRefs: [sourceRef],
+          sourceRefs: [argsRef],
           generatorRule: "call.args",
         });
       }
@@ -1893,18 +1935,19 @@ const buildCallQuestions = (
     const optional = firstChildOfType(callNode, "optional_chain");
     if (optional) {
       qs.push(
-        yesNoQuestion("Is this an optional call?", true, [sourceRef], "call.optional")
+        yesNoQuestion("Is this an optional call?", true, [callRef], "call.optional")
       );
     }
 
     if (callee && callee.type === "import" && args[0]) {
       const mod = args[0];
       const modText = textForRange(mod.startIndex, mod.endIndex, code) || mod.type;
+      const modRef = sourceRefForNode(root, mod, code);
       qs.push(
         singleQuestion(
           "What module is dynamically imported?",
           stripQuotes(modText),
-          [sourceRef],
+          [modRef],
           "call.dynamic_import"
         )
       );
@@ -2396,7 +2439,7 @@ const ruleExpressionStatement: Rule = ({ root, node, code, sourceRef, profile })
     return ruleAugmentedAssignment(expr, code, sourceRef);
   }
   if (expr.type === "call_expression") {
-    const qs = buildCallQuestions(expr, code, sourceRef, profile);
+    const qs = buildCallQuestions(root, expr, code, profile);
     const objects = findObjectLiteralNodes(expr);
     for (const obj of objects) {
       qs.push(...generateQuestionsV11(root, obj, profile, code));
@@ -2513,8 +2556,8 @@ const ruleObjectLiteral: Rule = ({ root, node, code, sourceRef, profile }) => {
   return qs;
 };
 
-const ruleCallExpression: Rule = ({ root, node, code, sourceRef, profile }) => {
-  const qs = buildCallQuestions(node, code, sourceRef, profile);
+const ruleCallExpression: Rule = ({ root, node, code, profile }) => {
+  const qs = buildCallQuestions(root, node, code, profile);
   const objects = findObjectLiteralNodes(node);
   for (const obj of objects) {
     qs.push(...generateQuestionsV11(root, obj, profile, code));
