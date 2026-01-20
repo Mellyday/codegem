@@ -1043,10 +1043,18 @@ const deepExprBreakdownQuestions = (params: {
   profile: DecompositionLevel;
 }): Q11[] => {
   const { root, rawExpr, code, profile } = params;
-  if (profile !== "deep") return [];
   const out: Q11[] = [];
 
   const expr = unwrapParenExpression(rawExpr) || rawExpr;
+  // Always include arrow-function parameter questions (useful even in shallow).
+  if (expr.type === "arrow_function") {
+    const ref = sourceRefForNode(root, expr, code);
+    out.push(...buildArrowFunctionQuestions(expr, code, ref, profile));
+    if (profile !== "deep") return out;
+  } else if (profile !== "deep") {
+    return [];
+  }
+
   const calls = findCallExpressionNodes(expr);
   if (calls.length > 0) {
     const seen = new Set<string>();
@@ -1056,10 +1064,6 @@ const deepExprBreakdownQuestions = (params: {
       seen.add(key);
       out.push(...buildCallQuestions(root, call, code, profile));
     }
-  }
-  if (expr.type === "arrow_function") {
-    const ref = sourceRefForNode(root, expr, code);
-    out.push(...buildArrowFunctionQuestions(expr, code, ref, profile));
   }
   const jsxNodes = findOuterJsxNodes(expr);
   if (jsxNodes.length > 0) {
