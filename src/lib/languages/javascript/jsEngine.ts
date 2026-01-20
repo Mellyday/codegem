@@ -422,18 +422,32 @@ const splitCorrectIntoCards = (correct: string[]): string[][] => {
   return shuffle(cards);
 };
 
-const findObjectLiteralNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+const BODY_NODES = new Set(["statement_block", "class_body", "switch_body"]);
+
+const findObjectLiteralNodes = (
+  node: TreeSitterAstNode,
+  opts: { descendIntoBodies?: boolean } = {}
+): TreeSitterAstNode[] => {
+  const descendIntoBodies = opts.descendIntoBodies ?? false;
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
     const cur = stack.pop();
     if (!cur) continue;
+    if (!descendIntoBodies && BODY_NODES.has(cur.type)) {
+      continue;
+    }
     if (cur.type === "object") {
       out.push(cur);
       continue;
     }
-    (cur.namedChildren || []).forEach((c) => stack.push(c));
+    const children = cur.namedChildren || [];
+    // Push in reverse so pop() walks left-to-right.
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]);
+    }
   }
+  out.sort((a, b) => a.startIndex - b.startIndex);
   return out;
 };
 
@@ -497,6 +511,81 @@ const unwrapParenExpression = (node?: TreeSitterAstNode): TreeSitterAstNode | un
   if (!node) return undefined;
   if (node.type !== "parenthesized_expression") return node;
   return (node.namedChildren || [])[0];
+};
+
+const FUNCTION_LIKE_NODE_TYPES = new Set([
+  "arrow_function",
+  "function",
+  "generator_function",
+  "function_expression",
+]);
+
+const isFunctionLikeNode = (node?: TreeSitterAstNode): boolean =>
+  Boolean(node && FUNCTION_LIKE_NODE_TYPES.has(node.type));
+
+const shouldDescendIntoBodiesForObjectScan = (node?: TreeSitterAstNode): boolean =>
+  Boolean(node && !isFunctionLikeNode(node) && node.type !== "call_expression");
+
+const getFunctionLikeBodyBlock = (
+  node?: TreeSitterAstNode
+): TreeSitterAstNode | undefined => {
+  const value = unwrapParenExpression(node) || node;
+  if (!value || !isFunctionLikeNode(value)) return undefined;
+  const body =
+    getSectionFirstItem(value, "body") ||
+    childByField(value, "body") ||
+    firstChildOfType(value, "statement_block");
+  if (body && body.type === "statement_block") return body;
+  return undefined;
+};
+
+const findCallExpressionNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const out: TreeSitterAstNode[] = [];
+  const stack: TreeSitterAstNode[] = [node];
+  while (stack.length > 0) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    if (isFunctionLikeNode(cur)) continue;
+    if (BODY_NODES.has(cur.type)) continue;
+    if (cur.type === "call_expression") {
+      out.push(cur);
+    }
+    const children = cur.namedChildren || [];
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push(children[i]);
+    }
+  }
+  out.sort((a, b) => a.startIndex - b.startIndex);
+  return out;
+};
+
+const collectCallbackBodiesFromExpression = (
+  exprNode?: TreeSitterAstNode
+): TreeSitterAstNode[] => {
+  const expr = unwrapParenExpression(exprNode) || exprNode;
+  if (!expr) return [];
+  const calls = findCallExpressionNodes(expr);
+  if (calls.length === 0) return [];
+  const bodies: TreeSitterAstNode[] = [];
+  for (const call of calls) {
+    const argsNode = childByField(call, "arguments");
+    const args = argsNode ? argsNode.namedChildren || [] : [];
+    for (const arg of args) {
+      const body = getFunctionLikeBodyBlock(arg);
+      if (body) bodies.push(body);
+    }
+  }
+  if (bodies.length <= 1) return bodies;
+  bodies.sort((a, b) => a.startIndex - b.startIndex);
+  const unique: TreeSitterAstNode[] = [];
+  const seen = new Set<string>();
+  for (const body of bodies) {
+    const key = `${body.startIndex}-${body.endIndex}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(body);
+  }
+  return unique;
 };
 
 type ParamEntry = {
@@ -978,7 +1067,9 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
       qs.push(...buildJsxQuestions(root, value, code, jsxRef, profile));
     }
 
-    const objects = findObjectLiteralNodes(value);
+    const objects = findObjectLiteralNodes(value, {
+      descendIntoBodies: shouldDescendIntoBodiesForObjectScan(value),
+    });
     for (const obj of objects) {
       qs.push(...generateQuestionsV11(root, obj, profile, code));
     }
@@ -1052,7 +1143,9 @@ const ruleAssignmentExpression = (
     qs.push(...buildJsxQuestions(root, rightValue, code, jsxRef, profile));
   }
 
-  const objects = findObjectLiteralNodes(rightValue);
+  const objects = findObjectLiteralNodes(rightValue, {
+    descendIntoBodies: shouldDescendIntoBodiesForObjectScan(rightValue),
+  });
   for (const obj of objects) {
     qs.push(...generateQuestionsV11(root, obj, profile, code));
   }
@@ -1612,7 +1705,9 @@ const ruleReturnStatement: Rule = ({ root, node, code, sourceRef, profile }) => 
     const jsxRef = sourceRefForNode(root, value, code);
     qs.push(...buildJsxQuestions(root, value, code, jsxRef, profile));
   }
-  const objects = findObjectLiteralNodes(value);
+  const objects = findObjectLiteralNodes(value, {
+    descendIntoBodies: shouldDescendIntoBodiesForObjectScan(value),
+  });
   for (const obj of objects) {
     qs.push(...generateQuestionsV11(root, obj, profile, code));
   }
@@ -3024,17 +3119,7 @@ export const generateEngineSteps = (
   };
 
   const getFunctionLikeBody = (node?: TreeSitterAstNode) => {
-    const value = unwrapParenExpression(node);
-    if (!value) return undefined;
-    if (!["arrow_function", "function", "generator_function"].includes(value.type)) {
-      return undefined;
-    }
-    const body =
-      getSectionFirstItem(value, "body") ||
-      childByField(value, "body") ||
-      firstChildOfType(value, "statement_block");
-    if (body && body.type === "statement_block") return body;
-    return undefined;
+    return getFunctionLikeBodyBlock(node);
   };
 
   const getBodiesFromDeclarators = (declNode: TreeSitterAstNode) => {
@@ -3090,6 +3175,37 @@ export const generateEngineSteps = (
       }
       i++;
     }
+  };
+
+  const walkCallbackBodiesFromExpression = (exprNode?: TreeSitterAstNode) => {
+    const bodies = collectCallbackBodiesFromExpression(exprNode);
+    for (const body of bodies) {
+      walkBlock(body);
+    }
+  };
+
+  const walkBlocksInSourceOrder = (blocks: TreeSitterAstNode[]) => {
+    if (blocks.length === 0) return;
+    const uniq = new Map<string, TreeSitterAstNode>();
+    for (const block of blocks) {
+      uniq.set(`${block.startIndex}-${block.endIndex}`, block);
+    }
+    Array.from(uniq.values())
+      .sort((a, b) => a.startIndex - b.startIndex)
+      .forEach((block) => walkBlock(block));
+  };
+
+  const collectDeclaratorSubBlocks = (declNode: TreeSitterAstNode): TreeSitterAstNode[] => {
+    const declarators = getSectionItems(declNode, "declarators");
+    const blocks: TreeSitterAstNode[] = [];
+    for (const decl of declarators) {
+      const valueNode = getSectionFirstItem(decl, "value");
+      if (!valueNode) continue;
+      const fnBody = getFunctionLikeBody(valueNode);
+      if (fnBody) blocks.push(fnBody);
+      blocks.push(...collectCallbackBodiesFromExpression(valueNode));
+    }
+    return blocks;
   };
 
   const walkStmt = (stmt: TreeSitterAstNode) => {
@@ -3199,20 +3315,30 @@ export const generateEngineSteps = (
       case "export_statement": {
         const declaration = getSectionFirstItem(stmt, "declaration");
         const value = getSectionFirstItem(stmt, "value");
-        const childBlocks = getChildBlocksFromDeclaration(declaration);
-        const valueBody = getFunctionLikeBody(value);
-        if (valueBody) childBlocks.push(valueBody);
-        const hasChildStatements = childBlocks.some(blockHasStatements);
+        const orderedBlocks: TreeSitterAstNode[] = [];
+        if (declaration) {
+          if (["lexical_declaration", "variable_declaration"].includes(declaration.type)) {
+            orderedBlocks.push(...collectDeclaratorSubBlocks(declaration));
+          } else {
+            orderedBlocks.push(...getChildBlocksFromDeclaration(declaration));
+          }
+        }
+        if (value) {
+          const valueBody = getFunctionLikeBody(value);
+          if (valueBody) orderedBlocks.push(valueBody);
+          orderedBlocks.push(...collectCallbackBodiesFromExpression(value));
+        }
+        const hasChildStatements = orderedBlocks.some(blockHasStatements);
         emitAnchorStep(stmt, Boolean(hasChildStatements));
-        childBlocks.forEach((block) => walkBlock(block));
+        walkBlocksInSourceOrder(orderedBlocks);
         break;
       }
       case "lexical_declaration":
       case "variable_declaration": {
-        const childBlocks = getBodiesFromDeclarators(stmt);
-        const hasChildStatements = childBlocks.some(blockHasStatements);
+        const blocks = collectDeclaratorSubBlocks(stmt);
+        const hasChildStatements = blocks.some(blockHasStatements);
         emitAnchorStep(stmt, Boolean(hasChildStatements));
-        childBlocks.forEach((block) => walkBlock(block));
+        walkBlocksInSourceOrder(blocks);
         break;
       }
       case "catch_clause":
@@ -3221,6 +3347,27 @@ export const generateEngineSteps = (
         const hasChildStatements = blockHasStatements(body);
         emitAnchorStep(stmt, Boolean(hasChildStatements));
         if (body) walkBlock(body);
+        break;
+      }
+      case "expression_statement": {
+        const rawExpr = getSectionFirstItem(stmt, "expr") || (stmt.namedChildren || [])[0];
+        const expr = unwrapParenExpression(rawExpr) || rawExpr;
+        emitAnchorStep(stmt, false);
+        walkCallbackBodiesFromExpression(expr);
+        break;
+      }
+      case "return_statement": {
+        const rawValue = (stmt.namedChildren || [])[0];
+        const value = unwrapParenExpression(rawValue) || rawValue;
+        emitAnchorStep(stmt, false);
+        walkCallbackBodiesFromExpression(value);
+        break;
+      }
+      case "throw_statement": {
+        const rawValue = (stmt.namedChildren || [])[0];
+        const value = unwrapParenExpression(rawValue) || rawValue;
+        emitAnchorStep(stmt, false);
+        walkCallbackBodiesFromExpression(value);
         break;
       }
       default: {
