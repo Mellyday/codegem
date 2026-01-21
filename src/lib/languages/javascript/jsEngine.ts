@@ -1261,17 +1261,33 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
   if (bindings.length > 0) {
     const bindingRef =
       bindingNodes.length > 0 ? sourceRefForNode(root, bindingNodes[0], code) : sourceRef;
-    qs.push(
-      multiQuestion(
-        "Which bindings are declared here?",
-        bindings,
-        bindingRef,
-        "decl.bindings",
-        code,
-        node.startIndex,
-        node.endIndex
-      )
-    );
+    if (bindings.length === 1) {
+      const options = buildIdentifierOptionPool(bindings, code, {
+        start: node.startIndex,
+        end: node.endIndex,
+      });
+      qs.push(
+        singleQuestion(
+          "Which binding is declared here?",
+          bindings[0],
+          [bindingRef],
+          "decl.bindings",
+          { options }
+        )
+      );
+    } else {
+      qs.push(
+        multiQuestion(
+          "Which bindings are declared here?",
+          bindings,
+          bindingRef,
+          "decl.bindings",
+          code,
+          node.startIndex,
+          node.endIndex
+        )
+      );
+    }
   }
 
   for (const decl of declarators) {
@@ -1311,21 +1327,38 @@ const ruleAssignmentExpression = (
   const isPattern = left.type === "identifier" || left.type.endsWith("pattern");
   const qs: Q11[] = [];
   if (bindings.length > 0 && isPattern) {
-    const stem = bindings.length > 1
+    const uniqueBindings = Array.from(new Set(bindings));
+    const stem = uniqueBindings.length > 1
       ? "Which bindings are assigned here?"
       : "What is the left-hand target?";
     const leftRef = sourceRefForNode(root, left, code);
-    qs.push(
-      multiQuestion(
-        stem,
-        Array.from(new Set(bindings)),
-        leftRef,
-        "assign.bindings",
-        code,
-        left.startIndex,
-        left.endIndex
-      )
-    );
+    if (uniqueBindings.length === 1) {
+      const options = buildIdentifierOptionPool(uniqueBindings, code, {
+        start: left.startIndex,
+        end: left.endIndex,
+      });
+      qs.push(
+        singleQuestion(
+          stem,
+          uniqueBindings[0],
+          [leftRef],
+          "assign.bindings",
+          { options }
+        )
+      );
+    } else {
+      qs.push(
+        multiQuestion(
+          stem,
+          uniqueBindings,
+          leftRef,
+          "assign.bindings",
+          code,
+          left.startIndex,
+          left.endIndex
+        )
+      );
+    }
   } else {
     const leftText = textForRange(left.startIndex, left.endIndex, code) || left.type;
     const leftRef = sourceRefForNode(root, left, code);
