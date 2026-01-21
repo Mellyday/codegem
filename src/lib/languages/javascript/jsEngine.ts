@@ -251,8 +251,8 @@ const buildDistractors = (correct: string): string[] => {
           ? correct.toUpperCase()
           : correct.toLowerCase()
         : correct.replace(/[a-zA-Z]/, (c) =>
-            c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
-          );
+          c === c.toLowerCase() ? c.toUpperCase() : c.toLowerCase()
+        );
     if (variation !== correct) out.add(variation);
     if (out.size < 3) out.add(correct + "_");
     if (out.size < 3)
@@ -282,7 +282,7 @@ const buildMultiSelectOptionPool = (
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) idPool.push(m[0]);
     while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
-  } catch {}
+  } catch { }
 
   let pool = Array.from(new Set<string>([...correct, ...idPool, ...strPool]));
   if (pool.length < 10) {
@@ -334,7 +334,7 @@ const buildKeyGroupOptionPool = (
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) pushCandidate(m[0]);
     while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
-  } catch {}
+  } catch { }
   let pool = Array.from(new Set<string>([...correct, ...candidates]));
   if (pool.length < 10) {
     const needed = 10 - pool.length;
@@ -368,7 +368,7 @@ const buildImportOptionPool = (
       if (!candidate) continue;
       pool.add(candidate);
     }
-  } catch {}
+  } catch { }
 
   const distractors = Array.from(pool).filter((d) => !correct.includes(d));
   if (distractors.length < 10 - correct.length) {
@@ -781,9 +781,6 @@ function generateImportRunQuestions(
       multiSelectHint: card.length,
       sourceRefs: [baseSourceRef],
       generatorRule: "import_run.modules",
-      revealStart: span.start,
-      revealEndBeforeChild: span.start,
-      revealEndAfterChild: span.start,
       distractorPoolSize: 10,
     });
   }
@@ -1847,9 +1844,9 @@ const buildCallQuestions = (
     const headerSpan = argsNode
       ? { start: callNode.startIndex, end: argsNode.startIndex }
       : {
-          start: callNode.startIndex,
-          end: Math.min(callNode.endIndex, callNode.startIndex + 40),
-        };
+        start: callNode.startIndex,
+        end: Math.min(callNode.endIndex, callNode.startIndex + 40),
+      };
     const headerText = (code || "")
       .slice(headerSpan.start, headerSpan.end)
       .trim();
@@ -2217,18 +2214,18 @@ const buildJsxQuestions = (
     const nameSpan = jsxElementNameSpan(node);
     const fragRef = nameSpan
       ? sourceRefForSpan(
-          root,
-          node,
-          { start: node.startIndex, end: nameSpan.end },
-          code
-        )
+        root,
+        node,
+        { start: node.startIndex, end: nameSpan.end },
+        code
+      )
       : sourceRef;
     const revealOpts = nameSpan
       ? {
-          revealStart: node.startIndex,
-          revealEndBeforeChild: nameSpan.start,
-          revealEndAfterChild: nameSpan.end,
-        }
+        revealStart: node.startIndex,
+        revealEndBeforeChild: nameSpan.start,
+        revealEndAfterChild: nameSpan.end,
+      }
       : {};
     qs.push(
       singleQuestion(
@@ -2247,18 +2244,18 @@ const buildJsxQuestions = (
       const nameSpan = jsxElementNameSpan(node);
       const nameRef = nameSpan
         ? sourceRefForSpan(
-            root,
-            node,
-            { start: node.startIndex, end: nameSpan.end },
-            code
-          )
+          root,
+          node,
+          { start: node.startIndex, end: nameSpan.end },
+          code
+        )
         : sourceRef;
       const revealOpts = nameSpan
         ? {
-            revealStart: node.startIndex,
-            revealEndBeforeChild: nameSpan.start,
-            revealEndAfterChild: nameSpan.end,
-          }
+          revealStart: node.startIndex,
+          revealEndBeforeChild: nameSpan.start,
+          revealEndAfterChild: nameSpan.end,
+        }
         : {};
       qs.push(
         singleQuestion(
@@ -3662,18 +3659,18 @@ export function buildCustomQuizPayload(params: {
       q.generatorRule?.startsWith("import_run.") && revealSpan
         ? revealSpan
         : step.displaySpan ?? {
-            start: step.node.startIndex,
-            end: step.node.endIndex,
-          };
+          start: step.node.startIndex,
+          end: step.node.endIndex,
+        };
     const snippet = code.slice(spanForSnippet.start, spanForSnippet.end).trimEnd();
     const cardRef =
       baseRef && revealSpan
         ? {
-            ...baseRef,
-            start: revealSpan.start,
-            end: revealSpan.end,
-            preview: textForRange(revealSpan.start, revealSpan.end, code)?.slice(0, 120),
-          }
+          ...baseRef,
+          start: revealSpan.start,
+          end: revealSpan.end,
+          preview: textForRange(revealSpan.start, revealSpan.end, code)?.slice(0, 120),
+        }
         : baseRef;
     return {
       order,
