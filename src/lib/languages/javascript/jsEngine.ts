@@ -895,6 +895,7 @@ function generateImportRunQuestions(
         : baseSourceRef;
 
     const optionPool = buildImportOptionPool(card, code, span);
+    const noRevealAt = cardSpan.start;
     qs.push({
       kind: "import_run.modules",
       stem: "Which modules are imported here? (use module specifiers, ignore local aliases)",
@@ -906,7 +907,8 @@ function generateImportRunQuestions(
       sourceRefs: [cardSourceRef],
       generatorRule: "import_run.modules",
       revealStart: cardSpan.start,
-      revealEndAfterChild: cardSpan.end,
+      revealEndBeforeChild: noRevealAt,
+      revealEndAfterChild: noRevealAt,
       distractorPoolSize: 10,
     });
   }
@@ -3344,9 +3346,15 @@ const applyQuestionOverlapGuard = (steps: EngineStep[]): void => {
 
     if (!entry.isHeader && kept.length > 0) {
       const entryLen = entry.span.end - entry.span.start;
-      const smallestKeptLen = kept[0].span.end - kept[0].span.start;
-      if (entryLen > smallestKeptLen) {
-        const containsKept = kept.some(
+      const keptNonZero = kept.filter(
+        (k) => k.span.end - k.span.start > 0
+      );
+      const smallestKeptLen =
+        keptNonZero.length > 0
+          ? keptNonZero[0].span.end - keptNonZero[0].span.start
+          : undefined;
+      if (smallestKeptLen !== undefined && entryLen > smallestKeptLen) {
+        const containsKept = keptNonZero.some(
           (k) =>
             entry.span.start <= k.span.start &&
             entry.span.end >= k.span.end &&
@@ -4059,7 +4067,10 @@ export function buildCustomQuizPayload(params: {
           : fallback?.end;
 
     if (typeof start === "number" && typeof end === "number" && end >= start) {
-      if (end === start) return undefined;
+      if (end === start) {
+        if (q.generatorRule === "import_run.modules") return { start, end };
+        return undefined;
+      }
       return { start, end };
     }
     return undefined;
@@ -4092,7 +4103,12 @@ export function buildCustomQuizPayload(params: {
           start: step.node.startIndex,
           end: step.node.endIndex,
         };
-    const snippet = code.slice(spanForSnippet.start, spanForSnippet.end).trimEnd();
+    const snippetRaw = code
+      .slice(spanForSnippet.start, spanForSnippet.end)
+      .trimEnd();
+    // Prevent empty snippet fallback for import_run.modules by emitting a zero-width space.
+    const snippet =
+      q.generatorRule === "import_run.modules" ? "\u200B" : snippetRaw;
     const cardRef =
       baseRef && revealSpan
         ? {
