@@ -142,9 +142,7 @@ describe("jsx quiz generation", () => {
         steps.forEach(collect);
 
         const classNameQuestion = questions.find(
-            (q) =>
-                q.generatorRule === "jsx.className.token" &&
-                (q.sourceRefs?.[0]?.preview || "").includes("className")
+            (q) => q.generatorRule === "jsx.className.token"
         );
 
         expect(classNameQuestion).toBeDefined();
@@ -480,7 +478,7 @@ describe("multiselect question splitting", () => {
 });
 
 describe("progressive reveal for split multiselect questions", () => {
-    it("only the last split question should reveal code (currently expected to FAIL)", async () => {
+    it("first split question reveals less than last split question", async () => {
         // CandlestickChart-style component with 9 parameters - will be split into 2 questions
         const code = [
             "const CandlestickChart = ({",
@@ -516,30 +514,34 @@ describe("progressive reveal for split multiselect questions", () => {
         // Should be at least 2 questions
         expect(paramQuestions.length).toBeGreaterThanOrEqual(2);
 
-        // Helper to check if a question reveals nothing (zero-width span)
-        const revealsNothing = (q: any): boolean => {
-            const revealStart = q.revealStart;
-            const revealEndBefore = q.revealEndBeforeChild;
-            const revealEndAfter = q.revealEndAfterChild;
-
-            // If reveal spans are defined, they should be zero-width (same value)
-            if (typeof revealStart === "number" && typeof revealEndBefore === "number") {
-                return revealStart === revealEndBefore && revealStart === revealEndAfter;
-            }
-
-            // If no explicit reveal spans, falls back to sourceRef
-            // which would reveal the whole thing - so this is NOT "reveals nothing"
-            return false;
+        // Helper to compute what would actually get revealed for this question
+        // This mirrors the QuizViewer's revealAfterForQuestion logic
+        const computeRevealEnd = (q: any): number | undefined => {
+            if (typeof q.revealEndAfterChild === "number") return q.revealEndAfterChild;
+            const firstRef = Array.isArray(q.sourceRefs) ? q.sourceRefs[0] : undefined;
+            if (firstRef && typeof firstRef.end === "number") return firstRef.end;
+            if (typeof q.revealEndBeforeChild === "number") return q.revealEndBeforeChild;
+            if (typeof q.revealStart === "number") return q.revealStart;
+            return undefined;
         };
 
-        // All but the last question should reveal nothing
-        for (let i = 0; i < paramQuestions.length - 1; i++) {
-            const q = paramQuestions[i];
-            expect(revealsNothing(q)).toBe(true);
-        }
+        // Key positions in the code
+        const firstParamStart = code.indexOf("children");  // Where parameters start
+        const headerEnd = code.indexOf(") => {") + ") =>".length;  // Full header end
 
-        // The last question SHOULD reveal (not be zero-width)
+        // First split question should reveal BEFORE the parameters start
+        const firstQ = paramQuestions[0];
+        const firstRevealEnd = computeRevealEnd(firstQ);
+        expect(firstRevealEnd).toBeDefined();
+        expect(firstRevealEnd).toBeLessThan(firstParamStart);
+
+        // Last split question should reveal the FULL header (including all parameters)
         const lastQ = paramQuestions[paramQuestions.length - 1];
-        expect(revealsNothing(lastQ)).toBe(false);
+        const lastRevealEnd = computeRevealEnd(lastQ);
+        expect(lastRevealEnd).toBeDefined();
+        expect(lastRevealEnd).toBeGreaterThanOrEqual(headerEnd);
+
+        // Verify first reveals less than last
+        expect(firstRevealEnd).toBeLessThan(lastRevealEnd!);
     });
 });

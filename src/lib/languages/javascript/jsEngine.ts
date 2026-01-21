@@ -1018,17 +1018,37 @@ const buildMultiSelectQuestions = (params: {
     const mergedStem = merged.stem ?? stem;
     const mergedRule = merged.generatorRule ?? generatorRule;
     const sourceRefs = merged.sourceRefs ?? [];
+    // If a multi-select is split across multiple cards, only the last card
+    // should be able to reveal more code in the editor.
+    const suppressReveal = cards.length > 1 && index < cards.length - 1;
+    const anchor =
+      typeof merged.revealStart === "number"
+        ? merged.revealStart
+        : typeof merged.revealEndBeforeChild === "number"
+          ? merged.revealEndBeforeChild
+          : sourceRefs[0]?.start;
+    const suppressedSourceRefs =
+      suppressReveal && typeof anchor === "number" && sourceRefs.length
+        ? sourceRefs.map((ref) => ({ ...ref, start: anchor, end: anchor }))
+        : sourceRefs;
     return {
       ...merged,
       kind,
       stem: mergedStem,
       answerLabel: "",
       questionType: "multi",
-      sourceRefs,
+      sourceRefs: suppressedSourceRefs,
       generatorRule: mergedRule,
       options: optionsForCard(card),
       multiCorrect: card,
       multiSelectHint: card.length,
+      ...(suppressReveal
+        ? {
+            revealStart: undefined,
+            revealEndBeforeChild: undefined,
+            revealEndAfterChild: undefined,
+          }
+        : {}),
     };
   });
 };
@@ -4172,6 +4192,13 @@ export function buildCustomQuizPayload(params: {
           preview: textForRange(revealSpan.start, revealSpan.end, code)?.slice(0, 120),
         }
         : baseRef;
+    const revealProps = revealSpan
+      ? {
+          revealStart: q.revealStart,
+          revealEndBeforeChild: q.revealEndBeforeChild,
+          revealEndAfterChild: q.revealEndAfterChild,
+        }
+      : {};
     return {
       order,
       type: q.kind,
@@ -4186,9 +4213,7 @@ export function buildCustomQuizPayload(params: {
       multiSelectHint: q.multiSelectHint,
       optionPool: q.optionPool ?? q.options,
       sourceRef: cardRef,
-      revealStart: q.revealStart,
-      revealEndBeforeChild: q.revealEndBeforeChild,
-      revealEndAfterChild: q.revealEndAfterChild,
+      ...revealProps,
       distractorPoolSize: q.distractorPoolSize,
     };
   };
