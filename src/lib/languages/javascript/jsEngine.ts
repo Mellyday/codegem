@@ -2960,7 +2960,8 @@ const isHeaderQuestion = (q: QuizQuestion): boolean =>
   q.generatorRule === "header.line" ||
   q.generatorRule === "jsx.name" ||
   q.generatorRule === "jsx.fragment" ||
-  q.generatorRule === "jsx.children";
+  q.generatorRule === "jsx.children" ||
+  q.generatorRule === "import_run.modules";
 
 const spanForQuestion = (
   q: QuizQuestion
