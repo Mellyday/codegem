@@ -924,7 +924,13 @@ export const QuizViewer = ({
         }
         // Update reveal window for the next question if available
         const nextQ = questions[nextIdx];
-        onRevealChange?.(revealBeforeForQuestion(nextQ));
+        const curAfter = revealAfterForQuestion(currentQ);
+        const nextBefore = revealBeforeForQuestion(nextQ);
+        const nextReveal =
+          typeof curAfter === "number" && typeof nextBefore === "number"
+            ? Math.max(curAfter, nextBefore)
+            : nextBefore ?? curAfter;
+        onRevealChange?.(nextReveal);
       }
     };
 

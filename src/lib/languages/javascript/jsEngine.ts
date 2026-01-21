@@ -2140,6 +2140,46 @@ const jsxElementNameSpan = (
   return { start: nameNode.startIndex, end: nameNode.endIndex };
 };
 
+const jsxLiteralPropValue = (
+  elementNode: TreeSitterAstNode,
+  propName: string,
+  code: string | undefined
+): string | undefined => {
+  const attrs = getSectionItems(elementNode, "attributes");
+  const attrNodes = attrs.filter((a) => a.type === "jsx_attribute");
+  for (const attr of attrNodes) {
+    const nameNode = getSectionFirstItem(attr, "name") || (attr.namedChildren || [])[0];
+    if (!nameNode) continue;
+    const nameText = textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
+    if (nameText !== propName) continue;
+    const valueNode = getSectionFirstItem(attr, "value") || (attr.namedChildren || [])[1];
+    if (!valueNode || valueNode.type !== "string") return undefined;
+    const raw = textForRange(valueNode.startIndex, valueNode.endIndex, code);
+    return raw ? stripQuotes(raw) : undefined;
+  }
+  return undefined;
+};
+
+const jsxElementDescriptor = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): string | undefined => {
+  const name = jsxElementName(node, code);
+  if (!name) return undefined;
+  if (name === "Fragment") return name;
+
+  const id = jsxLiteralPropValue(node, "id", code);
+  if (id) return `${name}#${id}`.slice(0, 60);
+
+  const className = jsxLiteralPropValue(node, "className", code);
+  if (className) {
+    const firstToken = className.trim().split(/\s+/)[0];
+    if (firstToken) return `${name}.${firstToken}`.slice(0, 60);
+  }
+
+  return name;
+};
+
 const jsxAttributeValueText = (
   node: TreeSitterAstNode,
   code: string | undefined,
@@ -2605,7 +2645,7 @@ const buildJsxQuestions = (
       : { start: node.startIndex, end: Math.min(node.endIndex, node.startIndex + 80) };
     const childRef = sourceRefForSpan(root, node, openTagSpan, code);
     const childQuestion = multiQuestion(
-      `${prefix}Which child elements are directly nested in this ${containerLabel}?`,
+      `${prefix}Which tag/component names appear among the direct children of this ${containerLabel}?`,
       Array.from(new Set(childNames)),
       childRef,
       "jsx.children",
@@ -2613,10 +2653,10 @@ const buildJsxQuestions = (
       node.startIndex,
       node.endIndex
     );
-    const noRevealAt = childSpan?.start ?? node.startIndex;
+    const noRevealAt = openTagSpan.end;
     qs.push({
       ...childQuestion,
-      revealStart: noRevealAt,
+      revealStart: openTagSpan.start,
       revealEndBeforeChild: noRevealAt,
       revealEndAfterChild: noRevealAt,
     });
@@ -2681,7 +2721,9 @@ const buildJsxQuestions = (
       const childName = jsxElementName(item.node, code) || "JSXElement";
       const childRef = sourceRefForNode(root, item.node, code);
       const includeName = item.fromExpression;
-      const contextLabel = includeName ? undefined : childName;
+      const contextLabel = includeName
+        ? undefined
+        : (jsxElementDescriptor(item.node, code) || childName);
       qs.push(
         ...buildJsxQuestions(root, item.node, code, childRef, profile, {
           depth: depth + 1,
