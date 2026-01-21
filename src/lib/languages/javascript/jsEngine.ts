@@ -397,6 +397,44 @@ const buildIdentifierOptionPool = (
   return shuffle(padded).slice(0, 10);
 };
 
+const buildClassNameTokenOptionPool = (
+  correct: string,
+  code: string | undefined,
+  span: { start: number; end: number }
+): string[] => {
+  const pool = new Set<string>();
+  const addTokens = (raw: string) => {
+    raw
+      .trim()
+      .split(/\s+/)
+      .filter(Boolean)
+      .forEach((t) => pool.add(t));
+  };
+
+  try {
+    const snippetStart = Math.max(0, span.start - 800);
+    const snippetEnd = span.end + 800;
+    const snippet = (code || "").slice(snippetStart, snippetEnd);
+    const re = /className\s*=\s*(["'`])((?:\\.|(?!\1).)*)\1/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(snippet))) {
+      addTokens(m[2]);
+    }
+  } catch { }
+
+  pool.delete(correct);
+  const candidates = shuffle(Array.from(pool));
+  const options = [correct, ...candidates].slice(0, 10);
+  if (options.length < 10) {
+    const needed = 10 - options.length;
+    const pad = shuffle(GENERIC_DISTRACTORS)
+      .filter((d) => !options.includes(d))
+      .slice(0, needed);
+    options.push(...pad);
+  }
+  return shuffle(options).slice(0, 10);
+};
+
 const splitCorrectIntoCards = (correct: string[]): string[][] => {
   const unique = [...new Set(correct)];
   if (unique.length <= 6) return [unique];
@@ -2052,6 +2090,30 @@ const jsxAttributeValueText = (
   return textForRange(node.startIndex, node.endIndex, code) || node.type;
 };
 
+const classNameTokensWithSpans = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): Array<{ token: string; start: number; end: number }> => {
+  if (!code) return [];
+  if (node.type !== "string") return [];
+  const raw = textForRange(node.startIndex, node.endIndex, code) || "";
+  const quote = raw[0];
+  if (!quote || raw[raw.length - 1] !== quote) return [];
+  const contentStart = node.startIndex + 1;
+  const contentEnd = node.endIndex - 1;
+  if (contentEnd <= contentStart) return [];
+  const content = code.slice(contentStart, contentEnd);
+  const tokens: Array<{ token: string; start: number; end: number }> = [];
+  const re = /\S+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(content))) {
+    const token = m[0];
+    const start = contentStart + m.index;
+    tokens.push({ token, start, end: start + token.length });
+  }
+  return tokens;
+};
+
 const sourceRefForNode = (
   root: TreeSitterAstNode,
   node: TreeSitterAstNode,
@@ -2331,6 +2393,37 @@ const buildJsxQuestions = (
         )
       );
       continue;
+    }
+    if (nameText === "className" && valueNode.type === "string") {
+      const tokens = classNameTokensWithSpans(valueNode, code);
+      if (tokens.length > 1) {
+        const pick = tokens[(valueNode.startIndex + tokens.length) % tokens.length];
+        const optionPool = buildClassNameTokenOptionPool(
+          pick.token,
+          code,
+          { start: valueNode.startIndex, end: valueNode.endIndex }
+        );
+        const valueRef = sourceRefForSpan(
+          root,
+          valueNode,
+          { start: pick.start, end: pick.end },
+          code
+        );
+        qs.push({
+          kind: "jsx.className.token",
+          stem: `${prefix}Select the className token`,
+          answerLabel: "",
+          options: optionPool,
+          questionType: "multi",
+          multiCorrect: [pick.token],
+          multiSelectHint: 1,
+          sourceRefs: [valueRef],
+          generatorRule: "jsx.className.token",
+          revealStart: pick.start,
+          revealEndAfterChild: pick.end,
+        });
+        continue;
+      }
     }
     const valueText = jsxAttributeValueText(valueNode, code);
     const stem =
