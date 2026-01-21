@@ -116,4 +116,45 @@ describe("jsx quiz generation", () => {
         // Ensure the opening tag is visible: we should have revealed past the attribute text.
         expect(revealEnd).toBeGreaterThan(code.indexOf("chart-header"));
     });
+
+    it("treats all className tokens as correct for className token questions", async () => {
+        const code = [
+            "function X() {",
+            "  return (",
+            "    <div>",
+            "      <span className=\"text-sm mx-2 font-medium text-purple-100/50\">Period</span>",
+            "    </div>",
+            "  );",
+            "}",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "tsx");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const classNameQuestion = questions.find(
+            (q) =>
+                q.generatorRule === "jsx.className.token" &&
+                (q.sourceRefs?.[0]?.preview || "").includes("className")
+        );
+
+        expect(classNameQuestion).toBeDefined();
+        expect(classNameQuestion.questionType).toBe("multi");
+        expect(classNameQuestion.multiCorrect).toEqual([
+            "text-sm",
+            "mx-2",
+            "font-medium",
+            "text-purple-100/50",
+        ]);
+        expect(classNameQuestion.multiSelectHint).toBe(4);
+    });
 });
