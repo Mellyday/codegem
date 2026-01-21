@@ -462,17 +462,23 @@ const buildIdentifierOptionPool = (
 };
 
 const buildClassNameTokenOptionPool = (
-  correct: string,
+  correct: string[],
   code: string | undefined,
   span: { start: number; end: number }
 ): string[] => {
+  const correctTokens = Array.from(
+    new Set(correct.map((token) => token.trim()).filter(Boolean))
+  );
+  const correctSet = new Set(correctTokens);
   const pool = new Set<string>();
   const addTokens = (raw: string) => {
     raw
       .trim()
       .split(/\s+/)
       .filter(Boolean)
-      .forEach((t) => pool.add(t));
+      .forEach((t) => {
+        if (!correctSet.has(t)) pool.add(t);
+      });
   };
 
   try {
@@ -486,17 +492,17 @@ const buildClassNameTokenOptionPool = (
     }
   } catch { }
 
-  pool.delete(correct);
   const candidates = shuffle(Array.from(pool));
-  const options = [correct, ...candidates].slice(0, 10);
-  if (options.length < 10) {
-    const needed = 10 - options.length;
+  const targetCount = Math.max(10, correctTokens.length);
+  const needed = Math.max(0, targetCount - correctTokens.length);
+  const options = [...correctTokens, ...candidates.slice(0, needed)];
+  if (options.length < targetCount) {
     const pad = shuffle(GENERIC_DISTRACTORS)
-      .filter((d) => !options.includes(d))
-      .slice(0, needed);
+      .filter((d) => !options.includes(d) && !correctSet.has(d))
+      .slice(0, targetCount - options.length);
     options.push(...pad);
   }
-  return shuffle(options).slice(0, 10);
+  return shuffle(options);
 };
 
 const splitCorrectIntoCards = (correct: string[]): string[][] => {
@@ -2682,31 +2688,37 @@ const buildJsxQuestions = (
     }
     if (nameText === "className" && valueNode.type === "string") {
       const tokens = classNameTokensWithSpans(valueNode, code);
-      if (tokens.length > 1) {
-        const pick = tokens[(valueNode.startIndex + tokens.length) % tokens.length];
+      const uniqueTokens: string[] = [];
+      const seenTokens = new Set<string>();
+      for (const token of tokens) {
+        if (seenTokens.has(token.token)) continue;
+        seenTokens.add(token.token);
+        uniqueTokens.push(token.token);
+      }
+      if (uniqueTokens.length > 1) {
         const optionPool = buildClassNameTokenOptionPool(
-          pick.token,
+          uniqueTokens,
           code,
           { start: valueNode.startIndex, end: valueNode.endIndex }
         );
         const valueRef = sourceRefForSpan(
           root,
           valueNode,
-          { start: pick.start, end: pick.end },
+          { start: valueNode.startIndex, end: valueNode.endIndex },
           code
         );
         qs.push({
           kind: "jsx.className.token",
-          stem: `${prefix}Select the className token`,
+          stem: `${prefix}Select all className tokens`,
           answerLabel: "",
           options: optionPool,
           questionType: "multi",
-          multiCorrect: [pick.token],
-          multiSelectHint: 1,
+          multiCorrect: uniqueTokens,
+          multiSelectHint: uniqueTokens.length,
           sourceRefs: [valueRef],
           generatorRule: "jsx.className.token",
-          revealStart: pick.start,
-          revealEndAfterChild: pick.end,
+          revealStart: valueNode.startIndex,
+          revealEndAfterChild: valueNode.endIndex,
         });
         continue;
       }
