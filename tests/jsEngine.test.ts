@@ -111,7 +111,7 @@ describe("jsx quiz generation", () => {
         expect(buttonGroupChildQ.questionType).toBe("sequence");
         expect(buttonGroupChildQ.multiCorrect).toEqual(["span", "EXPR(button*)"]);
 
-        const revealEnd = chartHeaderChildQ.revealEndBeforeChild ?? chartHeaderChildQ.sourceRefs?.[0]?.end;
+        const revealEnd = chartHeaderChildQ.revealEndAfterChild ?? chartHeaderChildQ.revealEndBeforeChild ?? chartHeaderChildQ.sourceRefs?.[0]?.end;
         expect(revealEnd).toBeTypeOf("number");
         // Ensure the opening tag is visible: we should have revealed past the attribute text.
         expect(revealEnd).toBeGreaterThan(code.indexOf("chart-header"));
