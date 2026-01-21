@@ -158,3 +158,215 @@ describe("jsx quiz generation", () => {
         expect(classNameQuestion.multiSelectHint).toBe(4);
     });
 });
+
+describe("import question generation", () => {
+    const importCode = [
+        "'use client';",
+        "",
+        "import { useEffect, useRef, useState, useTransition } from 'react';",
+        "import {",
+        "  getCandlestickConfig,",
+        "  getChartConfig,",
+        "  LIVE_INTERVAL_BUTTONS,",
+        "  PERIOD_BUTTONS,",
+        "  PERIOD_CONFIG,",
+        "} from '@/constants';",
+        "import { CandlestickSeries, createChart, IChartApi, ISeriesApi } from 'lightweight-charts';",
+        "import { fetcher } from '@/lib/coingecko.actions';",
+        "import { convertOHLCData } from '@/lib/utils';",
+    ].join("\n");
+
+    it("generates correct modules question with all module specifiers", async () => {
+        const { ast } = await parseWithTreeSitter(importCode, "tsx");
+        const steps = generateEngineSteps(ast, ast, importCode, {
+            profile: "shallow",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const modulesQuestion = questions.find(
+            (q) => q.generatorRule === "import_run.modules"
+        );
+
+        expect(modulesQuestion).toBeDefined();
+        expect(modulesQuestion.questionType).toBe("multi");
+        expect(modulesQuestion.multiCorrect).toEqual(
+            expect.arrayContaining([
+                "react",
+                "@/constants",
+                "lightweight-charts",
+                "@/lib/coingecko.actions",
+                "@/lib/utils",
+            ])
+        );
+        expect(modulesQuestion.multiCorrect).toHaveLength(5);
+    });
+
+    it("generates correct bindings questions for each module", async () => {
+        const { ast } = await parseWithTreeSitter(importCode, "tsx");
+        const steps = generateEngineSteps(ast, ast, importCode, {
+            profile: "shallow",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        // Check react bindings
+        const reactBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:react"
+        );
+        expect(reactBindings).toBeDefined();
+        expect(reactBindings.multiCorrect).toEqual(
+            expect.arrayContaining(["useEffect", "useRef", "useState", "useTransition"])
+        );
+
+        // Check @/constants bindings
+        const constantsBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:@/constants"
+        );
+        expect(constantsBindings).toBeDefined();
+        expect(constantsBindings.multiCorrect).toEqual(
+            expect.arrayContaining([
+                "getCandlestickConfig",
+                "getChartConfig",
+                "LIVE_INTERVAL_BUTTONS",
+                "PERIOD_BUTTONS",
+                "PERIOD_CONFIG",
+            ])
+        );
+
+        // Check lightweight-charts bindings
+        const lightweightBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:lightweight-charts"
+        );
+        expect(lightweightBindings).toBeDefined();
+        expect(lightweightBindings.multiCorrect).toEqual(
+            expect.arrayContaining(["CandlestickSeries", "createChart", "IChartApi", "ISeriesApi"])
+        );
+
+        // Check @/lib/coingecko.actions bindings
+        const coingeckoBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:@/lib/coingecko.actions"
+        );
+        expect(coingeckoBindings).toBeDefined();
+        expect(coingeckoBindings.multiCorrect).toEqual(["fetcher"]);
+
+        // Check @/lib/utils bindings
+        const utilsBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:@/lib/utils"
+        );
+        expect(utilsBindings).toBeDefined();
+        expect(utilsBindings.multiCorrect).toEqual(["convertOHLCData"]);
+    });
+});
+
+describe("import progressive reveal", () => {
+    const importCode = [
+        "'use client';",
+        "",
+        "import { useEffect, useRef, useState, useTransition } from 'react';",
+        "import {",
+        "  getCandlestickConfig,",
+        "  getChartConfig,",
+        "  LIVE_INTERVAL_BUTTONS,",
+        "  PERIOD_BUTTONS,",
+        "  PERIOD_CONFIG,",
+        "} from '@/constants';",
+        "import { CandlestickSeries, createChart, IChartApi, ISeriesApi } from 'lightweight-charts';",
+        "import { fetcher } from '@/lib/coingecko.actions';",
+        "import { convertOHLCData } from '@/lib/utils';",
+    ].join("\n");
+
+    it("modules question reveals nothing new (zero-width span)", async () => {
+        const { ast } = await parseWithTreeSitter(importCode, "tsx");
+        const steps = generateEngineSteps(ast, ast, importCode, {
+            profile: "shallow",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const modulesQuestion = questions.find(
+            (q) => q.generatorRule === "import_run.modules"
+        );
+
+        expect(modulesQuestion).toBeDefined();
+
+        // The modules question should have a zero-width reveal span
+        // This means revealStart === revealEndBeforeChild === revealEndAfterChild
+        const revealStart = modulesQuestion.revealStart;
+        const revealEndBefore = modulesQuestion.revealEndBeforeChild;
+        const revealEndAfter = modulesQuestion.revealEndAfterChild;
+
+        expect(revealStart).toBeTypeOf("number");
+        expect(revealEndBefore).toBe(revealStart);
+        expect(revealEndAfter).toBe(revealStart);
+    });
+
+    it("bindings questions reveal their respective import statement lines", async () => {
+        const { ast } = await parseWithTreeSitter(importCode, "tsx");
+        const steps = generateEngineSteps(ast, ast, importCode, {
+            profile: "shallow",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        // Check react bindings reveal span
+        const reactBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:react"
+        );
+        expect(reactBindings).toBeDefined();
+
+        const reactLine = importCode.indexOf("import { useEffect");
+        const reactLineEnd = importCode.indexOf("from 'react';") + "from 'react';".length;
+
+        expect(reactBindings.revealStart).toBe(reactLine);
+        expect(reactBindings.revealEndAfterChild).toBe(reactLineEnd);
+
+        // Check @/constants bindings - multi-line import
+        const constantsBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:@/constants"
+        );
+        expect(constantsBindings).toBeDefined();
+
+        const constantsStart = importCode.indexOf("import {\n  getCandlestickConfig");
+        const constantsEnd = importCode.indexOf("} from '@/constants';") + "} from '@/constants';".length;
+
+        expect(constantsBindings.revealStart).toBe(constantsStart);
+        expect(constantsBindings.revealEndAfterChild).toBe(constantsEnd);
+
+        // Check @/lib/utils bindings (last import)
+        const utilsBindings = questions.find(
+            (q) => q.kind === "import_run.bindings:@/lib/utils"
+        );
+        expect(utilsBindings).toBeDefined();
+
+        const utilsStart = importCode.indexOf("import { convertOHLCData }");
+        const utilsEnd = importCode.indexOf("from '@/lib/utils';") + "from '@/lib/utils';".length;
+
+        expect(utilsBindings.revealStart).toBe(utilsStart);
+        expect(utilsBindings.revealEndAfterChild).toBe(utilsEnd);
+    });
+});
