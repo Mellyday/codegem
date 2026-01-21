@@ -876,47 +876,42 @@ function generateImportRunQuestions(
 
   const qs: QuizQuestion[] = [];
   const moduleNames = Array.from(modules);
-  const moduleCards = splitCorrectIntoCards(moduleNames);
-  for (const card of moduleCards) {
-    // Compute scoped span for just the statements containing these modules
-    const stmts = card
-      .map((m) => firstStmtByModule.get(m))
-      .filter((s): s is TreeSitterAstNode => Boolean(s));
-    const cardSpan =
-      stmts.length > 0
-        ? {
-          start: Math.min(...stmts.map((s) => s.startIndex)),
-          end: Math.max(...stmts.map((s) => s.endIndex)),
-        }
-        : span;
-    const cardSourceRef =
-      stmts.length > 0
-        ? sourceRefForSpan(root, stmts[0], cardSpan, code)
-        : baseSourceRef;
-
-    const optionPool = buildImportOptionPool(card, code, span);
-    const noRevealAt = cardSpan.start;
-    qs.push({
-      kind: "import_run.modules",
+  qs.push(
+    ...buildMultiSelectQuestions({
       stem: "Which modules are imported here? (use module specifiers, ignore local aliases)",
-      answerLabel: "",
-      options: optionPool,
-      questionType: "multi",
-      multiCorrect: card,
-      multiSelectHint: card.length,
-      sourceRefs: [cardSourceRef],
+      answers: moduleNames,
       generatorRule: "import_run.modules",
-      revealStart: cardSpan.start,
-      revealEndBeforeChild: noRevealAt,
-      revealEndAfterChild: noRevealAt,
-      distractorPoolSize: 10,
-    });
-  }
+      optionsForCard: (card) => buildImportOptionPool(card, code, span),
+      perCard: (card) => {
+        const stmts = card
+          .map((m) => firstStmtByModule.get(m))
+          .filter((s): s is TreeSitterAstNode => Boolean(s));
+        const cardSpan =
+          stmts.length > 0
+            ? {
+              start: Math.min(...stmts.map((s) => s.startIndex)),
+              end: Math.max(...stmts.map((s) => s.endIndex)),
+            }
+            : span;
+        const cardSourceRef =
+          stmts.length > 0
+            ? sourceRefForSpan(root, stmts[0], cardSpan, code)
+            : baseSourceRef;
+        const noRevealAt = cardSpan.start;
+        return {
+          sourceRefs: [cardSourceRef],
+          revealStart: cardSpan.start,
+          revealEndBeforeChild: noRevealAt,
+          revealEndAfterChild: noRevealAt,
+          distractorPoolSize: 10,
+        };
+      },
+    })
+  );
 
   for (const [moduleName, bindings] of bindingsByModule.entries()) {
     const bindingList = Array.from(bindings);
     if (bindingList.length === 0) continue;
-    const bindingCards = splitCorrectIntoCards(bindingList);
     const importStmt = firstStmtByModule.get(moduleName);
     const stmtSpan = importStmt
       ? { start: importStmt.startIndex, end: importStmt.endIndex }
@@ -924,22 +919,20 @@ function generateImportRunQuestions(
     const stmtSourceRef = importStmt
       ? sourceRefForSpan(root, importStmt, stmtSpan, code)
       : baseSourceRef;
-    for (const card of bindingCards) {
-      const optionPool = buildIdentifierOptionPool(card, code, span);
-      qs.push({
-        kind: `import_run.bindings:${moduleName}`,
+    qs.push(
+      ...buildMultiSelectQuestions({
         stem: `What bindings are imported from '${moduleName}'? (use exported names; ignore local aliases)`,
-        answerLabel: "",
-        options: optionPool,
-        questionType: "multi",
-        multiCorrect: card,
-        multiSelectHint: card.length,
-        sourceRefs: [stmtSourceRef],
+        answers: bindingList,
         generatorRule: "import_run.bindings",
-        revealStart: stmtSpan.start,
-        revealEndAfterChild: stmtSpan.end,
-      });
-    }
+        optionsForCard: (card) => buildIdentifierOptionPool(card, code, span),
+        base: {
+          kind: `import_run.bindings:${moduleName}`,
+          sourceRefs: [stmtSourceRef],
+          revealStart: stmtSpan.start,
+          revealEndAfterChild: stmtSpan.end,
+        },
+      })
+    );
   }
 
   if (profile === "deep") {
@@ -1009,6 +1002,37 @@ const yesNoQuestion = (
   generatorRule,
 });
 
+const buildMultiSelectQuestions = (params: {
+  stem: string;
+  answers: string[];
+  generatorRule: string;
+  optionsForCard: (card: string[]) => string[];
+  base?: Partial<QuizQuestion>;
+  perCard?: (card: string[], index: number) => Partial<QuizQuestion>;
+}): QuizQuestion[] => {
+  const { stem, answers, generatorRule, optionsForCard, base, perCard } = params;
+  const cards = splitCorrectIntoCards(answers);
+  return cards.map((card, index) => {
+    const merged = { ...(base ?? {}), ...(perCard ? perCard(card, index) : {}) };
+    const kind = merged.kind ?? generatorRule;
+    const mergedStem = merged.stem ?? stem;
+    const mergedRule = merged.generatorRule ?? generatorRule;
+    const sourceRefs = merged.sourceRefs ?? [];
+    return {
+      ...merged,
+      kind,
+      stem: mergedStem,
+      answerLabel: "",
+      questionType: "multi",
+      sourceRefs,
+      generatorRule: mergedRule,
+      options: optionsForCard(card),
+      multiCorrect: card,
+      multiSelectHint: card.length,
+    };
+  });
+};
+
 const multiQuestion = (
   stem: string,
   answers: string[],
@@ -1017,17 +1041,17 @@ const multiQuestion = (
   code: string | undefined,
   spanStart: number,
   spanEnd: number
-): QuizQuestion => ({
-  kind: generatorRule,
-  stem,
-  answerLabel: "",
-  options: buildMultiSelectOptionPool(answers, code, spanStart, spanEnd),
-  questionType: "multi",
-  multiCorrect: answers,
-  multiSelectHint: answers.length,
-  sourceRefs: [sourceRef],
-  generatorRule,
-});
+): QuizQuestion[] =>
+  buildMultiSelectQuestions({
+    stem,
+    answers,
+    generatorRule,
+    optionsForCard: (card) =>
+      buildMultiSelectOptionPool(card, code, spanStart, spanEnd),
+    base: {
+      sourceRefs: [sourceRef],
+    },
+  });
 
 const sequenceQuestion = (
   stem: string,
@@ -1122,7 +1146,7 @@ const ruleExportStatement: Rule = ({ root, node, code, sourceRef, profile }) => 
 
     if (exportedNames.length > 0) {
       questions.push(
-        multiQuestion(
+        ...multiQuestion(
           "Which names are exported?",
           Array.from(new Set(exportedNames)),
           sourceRef,
@@ -1277,7 +1301,7 @@ const ruleVariableDeclaration: Rule = ({ root, node, code, sourceRef, profile })
       );
     } else {
       qs.push(
-        multiQuestion(
+        ...multiQuestion(
           "Which bindings are declared here?",
           bindings,
           bindingRef,
@@ -1348,7 +1372,7 @@ const ruleAssignmentExpression = (
       );
     } else {
       qs.push(
-        multiQuestion(
+        ...multiQuestion(
           stem,
           uniqueBindings,
           leftRef,
@@ -1440,7 +1464,7 @@ const ruleFunctionDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
   if (entries.length > 0) {
     const params = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
     qs.push(
-      multiQuestion(
+      ...multiQuestion(
         "Which are parameters of this function?",
         params,
         sourceRef,
@@ -1475,7 +1499,7 @@ const ruleFunctionDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
     const names = collectTypeParamNames(typeParams, code);
     if (names.length > 0) {
       qs.push(
-        multiQuestion(
+        ...multiQuestion(
           "Which type parameters are declared?",
           names,
           sourceRef,
@@ -1560,7 +1584,7 @@ const buildArrowFunctionQuestions = (
   if (entries.length > 0) {
     const params = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
     qs.push(
-      multiQuestion(
+      ...multiQuestion(
         "Which are parameters of this arrow function?",
         params,
         headerRef,
@@ -1617,7 +1641,7 @@ const ruleClassDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
         .map((c) => textForRange(c.startIndex, c.endIndex, code) || c.type);
       if (impls.length > 0) {
         qs.push(
-          multiQuestion(
+          ...multiQuestion(
             "Which interfaces are implemented?",
             impls,
             sourceRef,
@@ -1636,7 +1660,7 @@ const ruleClassDeclaration: Rule = ({ node, code, sourceRef, profile }) => {
     const names = collectTypeParamNames(typeParams, code);
     if (names.length > 0) {
       qs.push(
-        multiQuestion(
+        ...multiQuestion(
           "Which type parameters are declared?",
           names,
           sourceRef,
@@ -1679,7 +1703,7 @@ const ruleMethodDefinition: Rule = ({ node, code, sourceRef, profile }) => {
   if (entries.length > 0) {
     const params = Array.from(new Set(entries.flatMap((e) => paramLabels(e, code))));
     qs.push(
-      multiQuestion(
+      ...multiQuestion(
         "Which are parameters of this method?",
         params,
         sourceRef,
@@ -1710,7 +1734,7 @@ const ruleMethodDefinition: Rule = ({ node, code, sourceRef, profile }) => {
     const names = collectTypeParamNames(typeParams, code);
     if (names.length > 0) {
       qs.push(
-        multiQuestion(
+        ...multiQuestion(
           "Which type parameters are declared?",
           names,
           sourceRef,
@@ -2580,7 +2604,7 @@ const mapCallQuestions = (
         preview: textForRange(headerSpan.start, headerSpan.end, code)?.slice(0, 120),
       };
       qs.push(
-        multiQuestion(
+        ...multiQuestion(
           "Which are the map callback parameters?",
           paramNames,
           headerRef,
@@ -2692,7 +2716,7 @@ const buildJsxQuestions = (
     const attrRef =
       attrSpan ? sourceRefForSpan(root, node, attrSpan, code) : sourceRef;
     qs.push(
-      multiQuestion(
+      ...multiQuestion(
         `${prefix}Which prop names are set on this JSX element?`,
         Array.from(new Set(propNames)),
         attrRef,
@@ -2731,30 +2755,30 @@ const buildJsxQuestions = (
         uniqueTokens.push(token.token);
       }
       if (uniqueTokens.length > 1) {
-        const optionPool = buildClassNameTokenOptionPool(
-          uniqueTokens,
-          code,
-          { start: valueNode.startIndex, end: valueNode.endIndex }
-        );
         const valueRef = sourceRefForSpan(
           root,
           valueNode,
           { start: valueNode.startIndex, end: valueNode.endIndex },
           code
         );
-        qs.push({
-          kind: "jsx.className.token",
-          stem: `${prefix}Select all className tokens`,
-          answerLabel: "",
-          options: optionPool,
-          questionType: "multi",
-          multiCorrect: uniqueTokens,
-          multiSelectHint: uniqueTokens.length,
-          sourceRefs: [valueRef],
-          generatorRule: "jsx.className.token",
-          revealStart: valueNode.startIndex,
-          revealEndAfterChild: valueNode.endIndex,
-        });
+        qs.push(
+          ...buildMultiSelectQuestions({
+            stem: `${prefix}Select all className tokens`,
+            answers: uniqueTokens,
+            generatorRule: "jsx.className.token",
+            optionsForCard: (card) =>
+              buildClassNameTokenOptionPool(card, code, {
+                start: valueNode.startIndex,
+                end: valueNode.endIndex,
+              }),
+            base: {
+              kind: "jsx.className.token",
+              sourceRefs: [valueRef],
+              revealStart: valueNode.startIndex,
+              revealEndAfterChild: valueNode.endIndex,
+            },
+          })
+        );
         continue;
       }
     }
@@ -3037,28 +3061,24 @@ const ruleObjectLiteral: Rule = ({ root, node, code, sourceRef, profile }) => {
 
   const qs: Q11[] = [];
   const allKeysSet = new Set(keys);
-  const keyCards = splitCorrectIntoCards(keys);
-  for (const card of keyCards) {
-    const optionPool = buildKeyGroupOptionPool(
-      card,
-      allKeysSet,
-      code,
-      node.startIndex,
-      node.endIndex
-    );
-    qs.push({
-      kind: "object.keys",
+  qs.push(
+    ...buildMultiSelectQuestions({
       stem: "Which keys are present in this object literal?",
-      answerLabel: "",
-      options: optionPool,
-      optionPool,
-      questionType: "multi",
-      multiCorrect: card,
-      multiSelectHint: card.length,
-      sourceRefs: [sourceRef],
+      answers: keys,
       generatorRule: "object.keys",
-    });
-  }
+      optionsForCard: (card) =>
+        buildKeyGroupOptionPool(
+          card,
+          allKeysSet,
+          code,
+          node.startIndex,
+          node.endIndex
+        ),
+      base: {
+        sourceRefs: [sourceRef],
+      },
+    })
+  );
 
   for (const entry of entries) {
     const keyRef: SourceRef = {
@@ -3136,17 +3156,15 @@ const decoratorQuestions = (
   }
 
   if (names.length === 0) return [];
-  return [
-    multiQuestion(
-      "Which decorators are applied?",
-      Array.from(new Set(names)),
-      sourceRef,
-      "decorators.list",
-      code,
-      decorators[0].startIndex,
-      decorators[decorators.length - 1].endIndex
-    ),
-  ];
+  return multiQuestion(
+    "Which decorators are applied?",
+    Array.from(new Set(names)),
+    sourceRef,
+    "decorators.list",
+    code,
+    decorators[0].startIndex,
+    decorators[decorators.length - 1].endIndex
+  );
 };
 
 const rules: Record<string, Rule[]> = {
@@ -3367,7 +3385,10 @@ const applyQuestionOverlapGuard = (steps: EngineStep[]): void => {
 
   const makeDuplicateKey = (q: QuizQuestion) => {
     const span = spanForQuestion(q);
-    return `${q.stem}::${q.answerLabel}::${span?.start}-${span?.end}`;
+    const multiKey = Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0
+      ? `::${Array.from(new Set(q.multiCorrect)).sort().join("|")}`
+      : "";
+    return `${q.stem}::${q.answerLabel}${multiKey}::${span?.start}-${span?.end}`;
   };
 
   for (const entry of sorted) {

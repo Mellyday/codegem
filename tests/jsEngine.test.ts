@@ -370,3 +370,176 @@ describe("import progressive reveal", () => {
         expect(utilsBindings.revealEndAfterChild).toBe(utilsEnd);
     });
 });
+
+describe("multiselect question splitting", () => {
+    it("splits arrow function parameter questions into multiple questions when >6 correct answers", async () => {
+        // CandlestickChart-style component with 9 parameters
+        const code = [
+            "const CandlestickChart = ({",
+            "  children,",
+            "  data,",
+            "  coinId,",
+            "  height = 360,",
+            "  initialPeriod = 'daily',",
+            "  liveOhlcv = null,",
+            "  mode = 'historical',",
+            "  liveInterval,",
+            "  setLiveInterval,",
+            "}: CandlestickChartProps) => {",
+            "  return <div>{children}</div>;",
+            "};",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "tsx");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        // Find all arrow.params questions
+        const paramQuestions = questions.filter((q) => q.generatorRule === "arrow.params");
+
+        // Should be split into 2 questions (9 parameters > 6)
+        expect(paramQuestions.length).toBeGreaterThanOrEqual(2);
+
+        // Collect all correct answers across all split questions
+        const allCorrectAnswers: string[] = [];
+        for (const q of paramQuestions) {
+            expect(q.questionType).toBe("multi");
+            expect(q.multiCorrect).toBeDefined();
+            expect(Array.isArray(q.multiCorrect)).toBe(true);
+
+            // Each question should have at most 6 correct answers
+            expect(q.multiCorrect.length).toBeLessThanOrEqual(6);
+            expect(q.multiCorrect.length).toBeGreaterThan(0);
+
+            allCorrectAnswers.push(...q.multiCorrect);
+        }
+
+        // No duplicates between questions
+        const uniqueAnswers = new Set(allCorrectAnswers);
+        expect(uniqueAnswers.size).toBe(allCorrectAnswers.length);
+
+        // All answers should come from the expected parameter list
+        const expectedParams = [
+            "children",
+            "data",
+            "coinId",
+            "height",
+            "initialPeriod",
+            "liveOhlcv",
+            "mode",
+            "liveInterval",
+            "setLiveInterval",
+        ];
+        for (const answer of allCorrectAnswers) {
+            expect(expectedParams).toContain(answer);
+        }
+
+        // All expected parameters should be covered
+        expect(uniqueAnswers.size).toBe(expectedParams.length);
+    });
+
+    it("does not split when <=6 correct answers", async () => {
+        const code = [
+            "const Component = ({",
+            "  prop1,",
+            "  prop2,",
+            "  prop3,",
+            "}: Props) => {",
+            "  return <div />;",
+            "};",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "tsx");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const paramQuestions = questions.filter((q) => q.generatorRule === "arrow.params");
+
+        // Should NOT be split (3 parameters <= 6)
+        expect(paramQuestions.length).toBe(1);
+        expect(paramQuestions[0].multiCorrect).toHaveLength(3);
+    });
+});
+
+describe("progressive reveal for split multiselect questions", () => {
+    it("only the last split question should reveal code (currently expected to FAIL)", async () => {
+        // CandlestickChart-style component with 9 parameters - will be split into 2 questions
+        const code = [
+            "const CandlestickChart = ({",
+            "  children,",
+            "  data,",
+            "  coinId,",
+            "  height = 360,",
+            "  initialPeriod = 'daily',",
+            "  liveOhlcv = null,",
+            "  mode = 'historical',",
+            "  liveInterval,",
+            "  setLiveInterval,",
+            "}: CandlestickChartProps) => {",
+            "  return <div>{children}</div>;",
+            "};",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "tsx");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const paramQuestions = questions.filter((q) => q.generatorRule === "arrow.params");
+
+        // Should be at least 2 questions
+        expect(paramQuestions.length).toBeGreaterThanOrEqual(2);
+
+        // Helper to check if a question reveals nothing (zero-width span)
+        const revealsNothing = (q: any): boolean => {
+            const revealStart = q.revealStart;
+            const revealEndBefore = q.revealEndBeforeChild;
+            const revealEndAfter = q.revealEndAfterChild;
+
+            // If reveal spans are defined, they should be zero-width (same value)
+            if (typeof revealStart === "number" && typeof revealEndBefore === "number") {
+                return revealStart === revealEndBefore && revealStart === revealEndAfter;
+            }
+
+            // If no explicit reveal spans, falls back to sourceRef
+            // which would reveal the whole thing - so this is NOT "reveals nothing"
+            return false;
+        };
+
+        // All but the last question should reveal nothing
+        for (let i = 0; i < paramQuestions.length - 1; i++) {
+            const q = paramQuestions[i];
+            expect(revealsNothing(q)).toBe(true);
+        }
+
+        // The last question SHOULD reveal (not be zero-width)
+        const lastQ = paramQuestions[paramQuestions.length - 1];
+        expect(revealsNothing(lastQ)).toBe(false);
+    });
+});
