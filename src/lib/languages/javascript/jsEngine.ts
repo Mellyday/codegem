@@ -770,6 +770,22 @@ function generateImportRunQuestions(
   const moduleNames = Array.from(modules);
   const moduleCards = splitCorrectIntoCards(moduleNames);
   for (const card of moduleCards) {
+    // Compute scoped span for just the statements containing these modules
+    const stmts = card
+      .map((m) => firstStmtByModule.get(m))
+      .filter((s): s is TreeSitterAstNode => Boolean(s));
+    const cardSpan =
+      stmts.length > 0
+        ? {
+          start: Math.min(...stmts.map((s) => s.startIndex)),
+          end: Math.max(...stmts.map((s) => s.endIndex)),
+        }
+        : span;
+    const cardSourceRef =
+      stmts.length > 0
+        ? sourceRefForSpan(root, stmts[0], cardSpan, code)
+        : baseSourceRef;
+
     const optionPool = buildImportOptionPool(card, code, span);
     qs.push({
       kind: "import_run.modules",
@@ -779,8 +795,10 @@ function generateImportRunQuestions(
       questionType: "multi",
       multiCorrect: card,
       multiSelectHint: card.length,
-      sourceRefs: [baseSourceRef],
+      sourceRefs: [cardSourceRef],
       generatorRule: "import_run.modules",
+      revealStart: cardSpan.start,
+      revealEndAfterChild: cardSpan.end,
       distractorPoolSize: 10,
     });
   }

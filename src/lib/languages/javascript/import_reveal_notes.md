@@ -1,65 +1,57 @@
 # Import Question Reveal Behavior Notes
 
-## Why `import_run.modules` Questions Are Currently Hidden
+## `import_run.modules` Question Filtering Issue
 
-**Date**: 2026-01-21
+**Date**: 2026-01-21  
+**Status**: ✅ Fixed
 
 ### The Issue
 
-The "Which modules are imported here?" question (`import_run.modules`) is currently not producing visible behavior because of how the reveal span is calculated.
+The "Which modules are imported here?" question (`import_run.modules`) was being filtered out and not appearing in quizzes.
 
 ### Root Cause
 
-In `generateImportRunQuestions`, the modules question sets:
+The question was being **dropped by `applyQuestionOverlapGuard`**.
+
+This function filters out questions whose span **contains** already-kept smaller questions:
 
 ```typescript
-revealStart: span.start,
-revealEndBeforeChild: span.start,
-revealEndAfterChild: span.start,  // All three are the same value!
+// Questions sorted by span length (smallest first)
+// For each question, if its span CONTAINS an already-kept smaller question, DROP it
+if (entryLen > smallestKeptLen) {
+  const containsKept = kept.some(
+    (k) =>
+      entry.span.start <= k.span.start &&
+      entry.span.end >= k.span.end
+  );
+  if (containsKept) {
+    drop.add(entry.question);  // <-- Modules question was dropped here
+  }
+}
 ```
 
-In `buildCustomQuizPayload`, the `revealSpanForCard` function has this check (added in commit 8589526):
+The modules question originally used `baseSourceRef` spanning the **entire import block**, which contained all the bindings questions (individual statements). Since bindings questions have smaller spans, they were kept first, and the modules question was dropped as overlapping.
+
+### The Fix
+
+Changed the modules question to use **statement-scoped spans** like bindings:
 
 ```typescript
-if (end === start) return undefined;  // Zero-length span → undefined
+// Compute scoped span for just the statements containing these modules
+const stmts = card
+  .map((m) => firstStmtByModule.get(m))
+  .filter((s): s is TreeSitterAstNode => Boolean(s));
+const cardSpan = stmts.length > 0
+  ? { start: Math.min(...stmts.map((s) => s.startIndex)), end: Math.max(...stmts.map((s) => s.endIndex)) }
+  : span;
+const cardSourceRef = stmts.length > 0
+  ? sourceRefForSpan(root, stmts[0], cardSpan, code)
+  : baseSourceRef;
 ```
 
-Since all three reveal values are `span.start`, the computed `end === start`, so `revealSpan` becomes `undefined`.
+Now the modules question span matches the smallest bindings question span for that module, preventing overlap filtering.
 
-### The Cascade Effect
+### Why `import_run.bindings` Worked Correctly
 
-When `revealSpan` is `undefined`, the snippet fallback logic kicks in:
+The bindings question always used `stmtSourceRef` scoped to a single import statement, so it was never filtered out.
 
-```typescript
-const spanForSnippet =
-  q.generatorRule?.startsWith("import_run.") && revealSpan
-    ? revealSpan          // Not taken because revealSpan is undefined
-    : step.displaySpan ?? {...};  // Falls back to full import group span
-```
-
-This causes the modules question to display the **entire import block** as its snippet. Since everything is already visible, answering the question doesn't progressively reveal anything new.
-
-### Why `import_run.bindings` Works Correctly
-
-The bindings question uses:
-
-```typescript
-revealStart: stmtSpan.start,
-revealEndAfterChild: stmtSpan.end,  // Points to a single import statement
-```
-
-Here `start !== end`, so the reveal span is valid and each binding question reveals just one import line at a time.
-
-### Potential Fix
-
-To restore the modules question with proper progressive reveal:
-1. The modules question should reveal the module specifiers progressively
-2. This requires computing a proper reveal span that covers just the revealed content
-3. The `sourceRef` should be scoped to avoid pre-revealing the entire block
-
-### Related Commits
-
-- `58f0374`: Added `jsxElementNameSpan` helper and reveal options for JSX
-- `dfdaa25`: Adjusted import reveal behavior (changed reveal spans)
-- `a65b123`: Fixed import reveal snippet calculation  
-- `8589526`: Tightened JSX children sourceRef and added zero-span filter
