@@ -101,6 +101,15 @@ describe("jsx quiz generation", () => {
             (q.sourceRefs?.[0]?.preview || "").includes("chart-header")
         );
         expect(chartHeaderChildQ).toBeDefined();
+        expect(chartHeaderChildQ.questionType).toBe("sequence");
+        expect(chartHeaderChildQ.multiCorrect).toEqual(["div", "div", "EXPR(div?)"]);
+
+        const buttonGroupChildQ = childQs.find((q) =>
+            (q.sourceRefs?.[0]?.preview || "").includes("button-group")
+        );
+        expect(buttonGroupChildQ).toBeDefined();
+        expect(buttonGroupChildQ.questionType).toBe("sequence");
+        expect(buttonGroupChildQ.multiCorrect).toEqual(["span", "EXPR(button*)"]);
 
         const revealEnd = chartHeaderChildQ.revealEndBeforeChild ?? chartHeaderChildQ.sourceRefs?.[0]?.end;
         expect(revealEnd).toBeTypeOf("number");

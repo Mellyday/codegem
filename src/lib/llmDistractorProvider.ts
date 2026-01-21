@@ -112,7 +112,7 @@ export type DistractorRequest = {
   snippet?: string;
   preview?: string;
   targetCount: number;
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
   provider?: DistractorProvider;
   model?: string;
   signal?: AbortSignal;

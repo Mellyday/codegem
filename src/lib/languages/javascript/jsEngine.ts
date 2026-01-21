@@ -42,7 +42,7 @@ export type QuizQuestion = {
   sourceRefs: SourceRef[];
   generatorRule: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
   multiCorrect?: string[];
   optionPool?: string[];
   multiSelectHint?: number;
@@ -1019,6 +1019,25 @@ const multiQuestion = (
   multiSelectHint: answers.length,
   sourceRefs: [sourceRef],
   generatorRule,
+});
+
+const sequenceQuestion = (
+  stem: string,
+  ordered: string[],
+  palette: string[],
+  sourceRef: SourceRef,
+  generatorRule: string
+): QuizQuestion => ({
+  kind: generatorRule,
+  stem,
+  answerLabel: "",
+  options: palette,
+  questionType: "sequence",
+  multiCorrect: ordered,
+  multiSelectHint: ordered.length,
+  sourceRefs: [sourceRef],
+  generatorRule,
+  optionPool: palette,
 });
 
 const headerRule: Rule = ({ node, code, sourceRef }) => {
@@ -2180,6 +2199,163 @@ const jsxElementDescriptor = (
   return name;
 };
 
+const jsxTextLabel = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): string | undefined => {
+  const raw = textForRange(node.startIndex, node.endIndex, code);
+  if (typeof raw !== "string") return "TEXT";
+  return raw.trim().length ? "TEXT" : undefined;
+};
+
+const isPortalCallExpression = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): boolean => {
+  if (node.type !== "call_expression") return false;
+  const callee = childByField(node, "function") || (node.namedChildren || [])[0];
+  if (!callee) return false;
+  if (callee.type === "identifier") {
+    const name = textForRange(callee.startIndex, callee.endIndex, code) || "";
+    return name === "createPortal";
+  }
+  if (callee.type === "member_expression") {
+    const prop = childByField(callee, "property") || (callee.namedChildren || [])[1];
+    const name = prop
+      ? textForRange(prop.startIndex, prop.endIndex, code) || prop.type
+      : "";
+    return name === "createPortal";
+  }
+  return false;
+};
+
+const exprTagNames = (
+  expr: TreeSitterAstNode | undefined,
+  code: string | undefined
+): string[] => {
+  if (!expr) return [];
+  if (isPortalCallExpression(expr, code)) return ["Portal"];
+  if (isJsxNode(expr)) {
+    const name = jsxElementName(expr, code);
+    return name ? [name] : [];
+  }
+  const tags = collectJsxElementsFromExpression(expr)
+    .map((el) => jsxElementName(el, code))
+    .filter((name): name is string => Boolean(name));
+  return Array.from(new Set(tags));
+};
+
+const isEmptyRenderExpression = (
+  expr: TreeSitterAstNode | undefined,
+  code: string | undefined
+): boolean => {
+  if (!expr) return true;
+  if (expr.type === "null" || expr.type === "false" || expr.type === "true") return true;
+  if (expr.type === "identifier") {
+    const name = textForRange(expr.startIndex, expr.endIndex, code) || "";
+    return name === "undefined";
+  }
+  return false;
+};
+
+const binaryOperatorText = (
+  expr: TreeSitterAstNode,
+  code: string | undefined
+): string | undefined => {
+  if (expr.type !== "binary_expression") return undefined;
+  if (!code) return undefined;
+  const left = childByField(expr, "left") || (expr.namedChildren || [])[0];
+  const right = childByField(expr, "right") || (expr.namedChildren || [])[1];
+  const opRe = /(&&|\\|\\||\\?\\?)/;
+  if (left && right) {
+    const between = code.slice(left.endIndex, right.startIndex);
+    const m = between.match(opRe);
+    if (m) return m[1];
+  }
+  const snippet = textForRange(expr.startIndex, expr.endIndex, code) || "";
+  const m = snippet.match(opRe);
+  return m ? m[1] : undefined;
+};
+
+const isListyExpression = (
+  expr: TreeSitterAstNode,
+  code: string | undefined
+): boolean => {
+  if (expr.type === "array") return true;
+  if (expr.type !== "call_expression") return false;
+  const callee = childByField(expr, "function") || (expr.namedChildren || [])[0];
+  if (!callee || callee.type !== "member_expression") return false;
+  const prop = childByField(callee, "property") || (callee.namedChildren || [])[1];
+  if (!prop) return false;
+  const propText = textForRange(prop.startIndex, prop.endIndex, code) || prop.type;
+  return propText === "map" || propText === "flatMap";
+};
+
+const describeJsxExpressionLabel = (
+  expr: TreeSitterAstNode | undefined,
+  code: string | undefined
+): string => {
+  if (!expr) return "EXPR(unknown)";
+  if (isPortalCallExpression(expr, code)) return "EXPR(Portal)";
+
+  if (expr.type === "ternary_expression") {
+    const cons = childByField(expr, "consequence") || (expr.namedChildren || [])[1];
+    const alt = childByField(expr, "alternative") || (expr.namedChildren || [])[2];
+    const consTags = exprTagNames(cons, code);
+    const altTags = exprTagNames(alt, code);
+    const tags = Array.from(new Set([...consTags, ...altTags]));
+    const consEmpty = isEmptyRenderExpression(cons, code);
+    const altEmpty = isEmptyRenderExpression(alt, code);
+    const consNonElement = !consEmpty && consTags.length === 0;
+    const altNonElement = !altEmpty && altTags.length === 0;
+    if (tags.length === 1 && !consNonElement && !altNonElement) {
+      const suffix = consEmpty || altEmpty ? "?" : "";
+      return `EXPR(${tags[0]}${suffix})`;
+    }
+    if (tags.length > 1) return "EXPR(mixed)";
+    return "EXPR(unknown)";
+  }
+
+  if (expr.type === "binary_expression") {
+    const op = binaryOperatorText(expr, code);
+    if (op === "&&") {
+      const right = childByField(expr, "right") || (expr.namedChildren || [])[1];
+      if (right && isPortalCallExpression(right, code)) return "EXPR(Portal)";
+      const tags = exprTagNames(right, code);
+      if (tags.length === 1) return `EXPR(${tags[0]}?)`;
+      if (tags.length > 1) return "EXPR(mixed)";
+      return "EXPR(unknown)";
+    }
+    if (op === "||" || op === "??") {
+      const tags = exprTagNames(expr, code);
+      if (tags.length > 0) return "EXPR(mixed)";
+      return "EXPR(unknown)";
+    }
+    const right = childByField(expr, "right") || (expr.namedChildren || [])[1];
+    const left = childByField(expr, "left") || (expr.namedChildren || [])[0];
+    const rightTags = exprTagNames(right, code);
+    const leftTags = exprTagNames(left, code);
+    if (rightTags.length === 1 && leftTags.length === 0) {
+      return `EXPR(${rightTags[0]}?)`;
+    }
+    if (rightTags.length > 1 && leftTags.length === 0) {
+      return "EXPR(mixed)";
+    }
+  }
+
+  if (isListyExpression(expr, code)) {
+    const tags = exprTagNames(expr, code);
+    if (tags.length === 1) return `EXPR(${tags[0]}*)`;
+    if (tags.length > 1) return "EXPR(mixed)";
+    return "EXPR(unknown)";
+  }
+
+  const tags = exprTagNames(expr, code);
+  if (tags.length === 1) return `EXPR(${tags[0]})`;
+  if (tags.length > 1) return "EXPR(mixed)";
+  return "EXPR(unknown)";
+};
+
 const jsxAttributeValueText = (
   node: TreeSitterAstNode,
   code: string | undefined,
@@ -2600,6 +2776,7 @@ const buildJsxQuestions = (
     | { kind: "map"; callNode: TreeSitterAstNode; elements: TreeSitterAstNode[] }
     | { kind: "expr"; expr: TreeSitterAstNode; elements: TreeSitterAstNode[] }
   > = [];
+  const childLabels: string[] = [];
   const seenChildStarts = new Set<number>();
   const pushChild = (child: TreeSitterAstNode, fromExpression: boolean) => {
     if (seenChildStarts.has(child.startIndex)) return;
@@ -2610,11 +2787,20 @@ const buildJsxQuestions = (
   for (const child of children) {
     if (isJsxNode(child)) {
       pushChild(child, false);
+      const label = jsxElementName(child, code);
+      if (label) {
+        childLabels.push(label);
+      }
       continue;
+    }
+    if (child.type === "jsx_text") {
+      const label = jsxTextLabel(child, code);
+      if (label) childLabels.push(label);
     }
     if (child.type === "jsx_expression") {
       const expr = exprFromJsxExpression(child);
       if (expr) {
+        childLabels.push(describeJsxExpressionLabel(expr, code));
         if (isMapCallExpression(expr, code)) {
           const exprElements = collectJsxElementsFromExpression(expr);
           childItems.push({
@@ -2630,28 +2816,30 @@ const buildJsxQuestions = (
             elements: exprElements,
           });
         }
+      } else {
+        childLabels.push("EXPR(unknown)");
       }
     }
   }
-  const childNames = childItems.flatMap((item) => {
-    if (item.kind === "jsx") return [jsxElementName(item.node, code)];
-    return item.elements.map((el) => jsxElementName(el, code));
-  })
-    .filter((name): name is string => Boolean(name));
-  if (childNames.length > 0) {
+  const childLabelsUnique = Array.from(new Set(childLabels));
+  if (childLabelsUnique.length > 0) {
     const containerLabel = node.type === "jsx_fragment" ? "JSX fragment" : "JSX element";
     const openTagSpan = childSpan
       ? { start: node.startIndex, end: childSpan.start }
       : { start: node.startIndex, end: Math.min(node.endIndex, node.startIndex + 80) };
     const childRef = sourceRefForSpan(root, node, openTagSpan, code);
-    const childQuestion = multiQuestion(
-      `${prefix}Which tag/component names appear among the direct children of this ${containerLabel}?`,
-      Array.from(new Set(childNames)),
-      childRef,
-      "jsx.children",
+    const palette = buildMultiSelectOptionPool(
+      childLabelsUnique,
       code,
       node.startIndex,
       node.endIndex
+    );
+    const childQuestion = sequenceQuestion(
+      `${prefix}Build the direct child sequence for this ${containerLabel}.`,
+      childLabels,
+      palette,
+      childRef,
+      "jsx.children"
     );
     const noRevealAt = openTagSpan.end;
     qs.push({
@@ -3814,7 +4002,7 @@ type CustomQuizCard = {
   semanticRole?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -3871,12 +4059,18 @@ export function buildCustomQuizPayload(params: {
     order: number,
     action: "next" | "dig"
   ): CustomQuizCard => {
-    const isMulti =
-      q.questionType === "multi" ||
-      q.questionType === "orderedMulti" ||
-      (Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0);
+    const isSequence = q.questionType === "sequence";
     const isOrderedMulti = q.questionType === "orderedMulti";
-    const resolvedQuestionType = isOrderedMulti ? "orderedMulti" : "multi";
+    const isMulti =
+      isSequence ||
+      q.questionType === "multi" ||
+      isOrderedMulti ||
+      (Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0);
+    const resolvedQuestionType = isSequence
+      ? "sequence"
+      : isOrderedMulti
+        ? "orderedMulti"
+        : "multi";
     const baseRef = bestSourceRef(q);
     const revealSpan = revealSpanForCard(q, baseRef);
     const spanForSnippet =

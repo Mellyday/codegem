@@ -44,7 +44,7 @@ type Question = {
   // Options to display
   options: string[];
   // Multi-select support
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
   // For multi-select questions, the set of correct labels
   answerLabels?: string[];
   // For multi-select questions, how many to select
@@ -160,6 +160,33 @@ const buildMultiChoiceOptions = (
   return options;
 };
 
+const buildSequenceOptions = (
+  correct: string[],
+  llmPool?: string[] | null,
+  fallbackPool?: string[] | null
+) => {
+  const uniqueCorrect = Array.from(new Set(correct));
+  const correctSet = new Set(uniqueCorrect.map((c) => c.toLowerCase()));
+  const falseNeeded = Math.max(0, MULTI_OPTION_TARGET - uniqueCorrect.length);
+  const poolSource = [
+    ...(Array.isArray(llmPool) ? llmPool : []),
+    ...(Array.isArray(fallbackPool) ? fallbackPool : []),
+  ];
+  const pool = normalizePool(poolSource, correctSet);
+  const distractors = sampleDistractors(pool, falseNeeded, correctSet);
+  while (distractors.length < falseNeeded) {
+    const d = randomString(6);
+    const key = d.toLowerCase();
+    if (
+      !correctSet.has(key) &&
+      !distractors.some((x) => x.toLowerCase() === key)
+    ) {
+      distractors.push(d);
+    }
+  }
+  return shuffleArray([...uniqueCorrect, ...distractors]).slice(0, MULTI_OPTION_TARGET);
+};
+
 // v1.1: stable reference to an AST node or slice
 type SourceRef = {
   nodeType: string;
@@ -184,7 +211,7 @@ type SavedCustomQuizCardV11 = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   // multi-select (optional)
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -234,6 +261,36 @@ const generateQuestionsFromCustom = (
   for (const c of cards) {
     const multiCorrect = Array.isArray(c.multiCorrect) ? c.multiCorrect : undefined;
     const hasMultiCorrect = !!multiCorrect;
+    const isSequence = c.questionType === "sequence" && hasMultiCorrect;
+    if (isSequence) {
+      const correct = multiCorrect ?? [];
+      const llmPool = Array.isArray(c.llmDistractors) ? c.llmDistractors : undefined;
+      const optionPool = Array.isArray(c.optionPool) ? c.optionPool : undefined;
+      const options = buildSequenceOptions(correct, llmPool, optionPool);
+      qs.push({
+        stem: c.question || "Build the sequence in order.",
+        answerLabel: "", // unused for sequence
+        options,
+        questionType: "sequence",
+        answerLabels: correct,
+        numToSelect: correct.length,
+        kind: c.type,
+        generatorRule: c.generatorRule,
+        difficulty: c.difficulty,
+        sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
+        snippetText: c.text,
+        revealStart: typeof c.revealStart === "number" ? c.revealStart : undefined,
+        revealEndBeforeChild:
+          typeof c.revealEndBeforeChild === "number"
+            ? c.revealEndBeforeChild
+            : undefined,
+        revealEndAfterChild:
+          typeof c.revealEndAfterChild === "number"
+            ? c.revealEndAfterChild
+            : undefined,
+      });
+      continue;
+    }
     const isOrderedMulti = c.questionType === "orderedMulti" && hasMultiCorrect;
     const isMulti =
       (c.questionType === "multi" || isOrderedMulti || (!c.questionType && hasMultiCorrect)) &&
@@ -358,6 +415,7 @@ export const QuizViewer = ({
   const [selected, setSelected] = useState<string | undefined>(undefined);
   const [selectedMulti, setSelectedMulti] = useState<Set<string>>(new Set());
   const [selectedOrdered, setSelectedOrdered] = useState<string[]>([]);
+  const [selectedSequence, setSelectedSequence] = useState<string[]>([]);
   const [score, setScore] = useState(0);
   // Persist answers per question index so navigation retains choices
   const [answers, setAnswers] = useState<Array<string | string[] | undefined>>(
@@ -447,15 +505,25 @@ export const QuizViewer = ({
     setScore(Number.isFinite(data.score) ? data.score : 0);
     setExpandedOptions({});
 
+    const curQ = qs[clampedCurrent];
     const curAns = answersRestored[clampedCurrent];
     if (Array.isArray(curAns)) {
       setSelected(undefined);
-      setSelectedMulti(new Set(curAns));
-      setSelectedOrdered(curAns);
+      setSelectedMulti(new Set());
+      setSelectedOrdered([]);
+      setSelectedSequence([]);
+      if (curQ?.questionType === "sequence") {
+        setSelectedSequence(curAns);
+      } else if (curQ?.questionType === "orderedMulti") {
+        setSelectedOrdered(curAns);
+      } else {
+        setSelectedMulti(new Set(curAns));
+      }
     } else {
       setSelected(curAns as string | undefined);
       setSelectedMulti(new Set());
       setSelectedOrdered([]);
+      setSelectedSequence([]);
     }
 
     const meta = data.activeQuizMeta;
@@ -589,6 +657,7 @@ export const QuizViewer = ({
       setSelected(undefined);
       setSelectedMulti(new Set());
       setSelectedOrdered([]);
+      setSelectedSequence([]);
       setScore(0);
       setAnswers(new Array(qs.length).fill(undefined));
       setAnsweredFlags(new Array(qs.length).fill(false));
@@ -775,18 +844,24 @@ export const QuizViewer = ({
       );
     }
 
+    const isSequence =
+      currentQ.questionType === "sequence" &&
+      Array.isArray(currentQ.answerLabels);
     const isOrderedMulti =
       currentQ.questionType === "orderedMulti" &&
       Array.isArray(currentQ.answerLabels);
     const isMulti =
       (currentQ.questionType === "multi" || isOrderedMulti) &&
       Array.isArray(currentQ.answerLabels);
-    const correctLabels = isMulti ? (currentQ.answerLabels as string[]) : [];
+    const correctLabels = (isMulti || isSequence)
+      ? (currentQ.answerLabels as string[])
+      : [];
     const correctSet = new Set<string>(correctLabels);
     const selectionTarget =
       typeof currentQ.numToSelect === "number"
         ? currentQ.numToSelect
         : correctLabels.length;
+    const sequenceTarget = isSequence ? correctLabels.length : 0;
     const isAnswered = answeredFlags[current] || false;
     const unorderedCorrect =
       isAnswered &&
@@ -799,14 +874,21 @@ export const QuizViewer = ({
       isAnswered &&
       selectedOrdered.length === correctLabels.length &&
       selectedOrdered.every((v, idx) => v === correctLabels[idx]);
-    const correct = isMulti
-      ? isOrderedMulti
-        ? orderedCorrect
-        : unorderedCorrect
-      : isAnswered && selected === currentQ.answerLabel;
+    const sequenceCorrect =
+      isAnswered &&
+      selectedSequence.length === correctLabels.length &&
+      selectedSequence.every((v, idx) => v === correctLabels[idx]);
+    const correct = isSequence
+      ? sequenceCorrect
+      : isMulti
+        ? isOrderedMulti
+          ? orderedCorrect
+          : unorderedCorrect
+        : isAnswered && selected === currentQ.answerLabel;
 
     const handleSelect = (opt: string) => {
       if (isAnswered) return;
+      if (isSequence) return;
       if (isMulti) {
         if (isOrderedMulti) {
           setSelectedOrdered((prev) => {
@@ -855,6 +937,40 @@ export const QuizViewer = ({
       }
     };
 
+    const syncSequenceAnswer = (next: string[]) => {
+      setSelectedSequence(next);
+      setAnswers((prev) => {
+        const n = prev.slice();
+        n[current] = next;
+        return n;
+      });
+    };
+
+    const handleSequenceAdd = (opt: string) => {
+      if (isAnswered) return;
+      if (sequenceTarget && selectedSequence.length >= sequenceTarget) return;
+      syncSequenceAnswer([...selectedSequence, opt]);
+    };
+
+    const handleSequenceRemove = (idx: number) => {
+      if (isAnswered) return;
+      if (idx < 0 || idx >= selectedSequence.length) return;
+      const next = selectedSequence.slice();
+      next.splice(idx, 1);
+      syncSequenceAnswer(next);
+    };
+
+    const handleSequenceMove = (idx: number, dir: -1 | 1) => {
+      if (isAnswered) return;
+      const target = idx + dir;
+      if (target < 0 || target >= selectedSequence.length) return;
+      const next = selectedSequence.slice();
+      const temp = next[idx];
+      next[idx] = next[target];
+      next[target] = temp;
+      syncSequenceAnswer(next);
+    };
+
     const handleSubmitMulti = () => {
       if (isAnswered) return;
       setAnsweredFlags((prev) => {
@@ -862,14 +978,17 @@ export const QuizViewer = ({
         n[current] = true;
         return n;
       });
-      const isRight = isOrderedMulti
-        ? selectedOrdered.length === correctLabels.length &&
-        selectedOrdered.every((v, idx) => v === correctLabels[idx])
-        : selectedMulti.size === correctLabels.length &&
-        (() => {
-          for (const v of selectedMulti) if (!correctSet.has(v)) return false;
-          return true;
-        })();
+      const isRight = isSequence
+        ? selectedSequence.length === correctLabels.length &&
+        selectedSequence.every((v, idx) => v === correctLabels[idx])
+        : isOrderedMulti
+          ? selectedOrdered.length === correctLabels.length &&
+          selectedOrdered.every((v, idx) => v === correctLabels[idx])
+          : selectedMulti.size === correctLabels.length &&
+          (() => {
+            for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+            return true;
+          })();
       if (isRight) setScore((s) => s + 1);
       onRevealChange?.(revealAfterForQuestion(currentQ));
     };
@@ -912,18 +1031,27 @@ export const QuizViewer = ({
       } else {
         const nextIdx = current + 1;
         setCurrent(nextIdx);
+        const nextQ = questions[nextIdx];
         const ans = answers[nextIdx];
         if (Array.isArray(ans)) {
           setSelected(undefined);
-          setSelectedMulti(new Set(ans));
-          setSelectedOrdered(ans);
+          setSelectedMulti(new Set());
+          setSelectedOrdered([]);
+          setSelectedSequence([]);
+          if (nextQ?.questionType === "sequence") {
+            setSelectedSequence(ans);
+          } else if (nextQ?.questionType === "orderedMulti") {
+            setSelectedOrdered(ans);
+          } else {
+            setSelectedMulti(new Set(ans));
+          }
         } else {
           setSelected(ans as string | undefined);
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
+          setSelectedSequence([]);
         }
         // Update reveal window for the next question if available
-        const nextQ = questions[nextIdx];
         const curAfter = revealAfterForQuestion(currentQ);
         const nextBefore = revealBeforeForQuestion(nextQ);
         const nextReveal =
@@ -938,17 +1066,26 @@ export const QuizViewer = ({
       if (current > 0) {
         const idx = current - 1;
         setCurrent(idx);
+        const q = questions[idx];
         const ans = answers[idx];
         if (Array.isArray(ans)) {
           setSelected(undefined);
-          setSelectedMulti(new Set(ans));
-          setSelectedOrdered(ans);
+          setSelectedMulti(new Set());
+          setSelectedOrdered([]);
+          setSelectedSequence([]);
+          if (q?.questionType === "sequence") {
+            setSelectedSequence(ans);
+          } else if (q?.questionType === "orderedMulti") {
+            setSelectedOrdered(ans);
+          } else {
+            setSelectedMulti(new Set(ans));
+          }
         } else {
           setSelected(ans as string | undefined);
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
+          setSelectedSequence([]);
         }
-        const q = questions[idx];
         onRevealChange?.(revealBeforeForQuestion(q));
       }
     };
@@ -960,17 +1097,26 @@ export const QuizViewer = ({
         Math.max(0, total - 1)
       );
       setCurrent(clamped);
+      const q = questions[clamped];
       const ans = answers[clamped];
       if (Array.isArray(ans)) {
         setSelected(undefined);
-        setSelectedMulti(new Set(ans));
-        setSelectedOrdered(ans);
+        setSelectedMulti(new Set());
+        setSelectedOrdered([]);
+        setSelectedSequence([]);
+        if (q?.questionType === "sequence") {
+          setSelectedSequence(ans);
+        } else if (q?.questionType === "orderedMulti") {
+          setSelectedOrdered(ans);
+        } else {
+          setSelectedMulti(new Set(ans));
+        }
       } else {
         setSelected(ans as string | undefined);
         setSelectedMulti(new Set());
         setSelectedOrdered([]);
+        setSelectedSequence([]);
       }
-      const q = questions[clamped];
       onRevealChange?.(revealBeforeForQuestion(q));
     };
 
@@ -1090,79 +1236,158 @@ export const QuizViewer = ({
           <div className="space-y-3">
             <h2 className="text-lg font-semibold text-slate-900">{currentQ.stem}</h2>
             <p className="text-sm text-slate-600">
-              {isMulti
-                ? isOrderedMulti
-                  ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
-                  : "Select all that apply."
-                : "Choose the next part of the code."}
+              {isSequence
+                ? `Build the sequence${sequenceTarget ? ` (${sequenceTarget})` : ""}.`
+                : isMulti
+                  ? isOrderedMulti
+                    ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
+                    : "Select all that apply."
+                  : "Choose the next part of the code."}
             </p>
           </div>
 
           {/* Answer Options */}
-          <div className="space-y-2">
-            {currentQ.options.map((opt, i) => {
-              const isCorrect = isMulti
-                ? correctSet.has(opt)
-                : opt === currentQ.answerLabel;
-              const isSelected = isMulti
-                ? isOrderedMulti
-                  ? selectedOrdered.includes(opt)
-                  : selectedMulti.has(opt)
-                : selected === opt;
-              const orderIndex = isOrderedMulti ? selectedOrdered.indexOf(opt) : -1;
-
-              const optionId = `${current}-${i}`;
-              const isExpanded = !!expandedOptions[optionId];
-              const isLong = opt.length > 100;
-
-              return (
-                <button
-                  key={optionId}
-                  type="button"
-                  onClick={() => handleSelect(opt)}
-                  disabled={isAnswered}
-                  className={`w-full p-3 rounded-lg text-left text-sm font-mono transition-all ${!isAnswered
-                    ? isSelected
-                      ? "bg-cyan-100 border-2 border-cyan-600 text-cyan-900 shadow-md"
-                      : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
-                    : isSelected
-                      ? isCorrect
-                        ? "bg-green-50 border-2 border-green-500 text-green-700"
-                        : "bg-rose-50 border-2 border-rose-500 text-rose-700"
-                      : isCorrect
-                        ? "bg-green-50 border border-green-200 text-green-700"
-                        : "bg-white border border-slate-200 text-slate-500"
-                    }`}
-                >
-                  {isOrderedMulti && orderIndex >= 0 && (
-                    <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-cyan-200 text-[11px] font-semibold text-cyan-900">
-                      {orderIndex + 1}
-                    </span>
-                  )}
-                  <span
-                    className={`whitespace-pre-wrap break-all ${isLong && !isExpanded ? "line-clamp-2" : ""}`}
-                    style={{ overflowWrap: "anywhere" }}
-                  >
-                    {opt}
-                  </span>
-                  {isLong && (
-                    <span
-                      className="ml-2 text-xs font-semibold text-cyan-600 hover:underline"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setExpandedOptions((prev) => ({
-                          ...prev,
-                          [optionId]: !prev[optionId],
-                        }));
-                      }}
+          {isSequence ? (
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Palette
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {currentQ.options.map((opt, i) => (
+                    <button
+                      key={`palette-${current}-${i}`}
+                      type="button"
+                      onClick={() => handleSequenceAdd(opt)}
+                      disabled={
+                        isAnswered ||
+                        (sequenceTarget > 0 && selectedSequence.length >= sequenceTarget)
+                      }
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-mono text-slate-700 hover:border-slate-300 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
                     >
-                      {isExpanded ? "Show Less" : "Show More"}
+                      {opt}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-2">
+                <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
+                  Your Sequence
+                </div>
+                {selectedSequence.length === 0 ? (
+                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-400">
+                    Add items from the palette.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {selectedSequence.map((item, idx) => (
+                      <div
+                        key={`seq-${current}-${idx}`}
+                        className="flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                      >
+                        <span className="text-xs font-semibold text-slate-400">{idx + 1}.</span>
+                        <span className="text-sm font-mono text-slate-800">{item}</span>
+                        <div className="ml-auto flex items-center gap-1">
+                          <button
+                            type="button"
+                            onClick={() => handleSequenceMove(idx, -1)}
+                            disabled={isAnswered || idx === 0}
+                            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Move left"
+                          >
+                            {"<"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSequenceMove(idx, 1)}
+                            disabled={isAnswered || idx === selectedSequence.length - 1}
+                            className="rounded border border-slate-200 px-2 py-1 text-xs text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Move right"
+                          >
+                            {">"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSequenceRemove(idx)}
+                            disabled={isAnswered}
+                            className="rounded border border-rose-200 px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 disabled:opacity-50 disabled:cursor-not-allowed"
+                            aria-label="Remove item"
+                          >
+                            x
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {currentQ.options.map((opt, i) => {
+                const isCorrect = isMulti
+                  ? correctSet.has(opt)
+                  : opt === currentQ.answerLabel;
+                const isSelected = isMulti
+                  ? isOrderedMulti
+                    ? selectedOrdered.includes(opt)
+                    : selectedMulti.has(opt)
+                  : selected === opt;
+                const orderIndex = isOrderedMulti ? selectedOrdered.indexOf(opt) : -1;
+
+                const optionId = `${current}-${i}`;
+                const isExpanded = !!expandedOptions[optionId];
+                const isLong = opt.length > 100;
+
+                return (
+                  <button
+                    key={optionId}
+                    type="button"
+                    onClick={() => handleSelect(opt)}
+                    disabled={isAnswered}
+                    className={`w-full p-3 rounded-lg text-left text-sm font-mono transition-all ${!isAnswered
+                      ? isSelected
+                        ? "bg-cyan-100 border-2 border-cyan-600 text-cyan-900 shadow-md"
+                        : "bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300"
+                      : isSelected
+                        ? isCorrect
+                          ? "bg-green-50 border-2 border-green-500 text-green-700"
+                          : "bg-rose-50 border-2 border-rose-500 text-rose-700"
+                        : isCorrect
+                          ? "bg-green-50 border border-green-200 text-green-700"
+                          : "bg-white border border-slate-200 text-slate-500"
+                      }`}
+                  >
+                    {isOrderedMulti && orderIndex >= 0 && (
+                      <span className="mr-2 inline-flex h-5 w-5 items-center justify-center rounded-full bg-cyan-200 text-[11px] font-semibold text-cyan-900">
+                        {orderIndex + 1}
+                      </span>
+                    )}
+                    <span
+                      className={`whitespace-pre-wrap break-all ${isLong && !isExpanded ? "line-clamp-2" : ""}`}
+                      style={{ overflowWrap: "anywhere" }}
+                    >
+                      {opt}
                     </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
+                    {isLong && (
+                      <span
+                        className="ml-2 text-xs font-semibold text-cyan-600 hover:underline"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedOptions((prev) => ({
+                            ...prev,
+                            [optionId]: !prev[optionId],
+                          }));
+                        }}
+                      >
+                        {isExpanded ? "Show Less" : "Show More"}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
 
           {isAnswered && (
             <div
@@ -1173,14 +1398,16 @@ export const QuizViewer = ({
             >
               {correct
                 ? "Correct!"
-                : isMulti
-                  ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(", ")}`
-                  : `Incorrect — answer: ${currentQ.answerLabel}`}
+                : isSequence
+                  ? `Incorrect — sequence: ${(currentQ.answerLabels || []).join(" -> ")}`
+                  : isMulti
+                    ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(", ")}`
+                    : `Incorrect — answer: ${currentQ.answerLabel}`}
             </div>
           )}
 
-          {/* Multi-select submit */}
-          {isMulti && !isAnswered && (
+          {/* Multi-select / sequence submit */}
+          {(isMulti || isSequence) && !isAnswered && (
             <button
               type="button"
               className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white shadow hover:bg-cyan-700"
