@@ -1841,19 +1841,53 @@ const ruleFieldDefinition: Rule = ({ node, code, sourceRef, profile }) => {
   return qs;
 };
 
-const ruleIfStatement: Rule = ({ node, code, sourceRef, profile }) => {
-  if (profile !== "deep") return [];
+const ruleIfStatement: Rule = ({ root, node, code, sourceRef }) => {
   const condition = getSectionFirstItem(node, "condition");
   if (!condition) return [];
-  const text = textForRange(condition.startIndex, condition.endIndex, code) || condition.type;
-  return [
+  const qs: Q11[] = [];
+  const keyword = parentOf(root, node)?.type === "else_clause" ? "else if" : "if";
+  const keywordSpan = { start: node.startIndex, end: condition.startIndex };
+  const keywordRef =
+    keywordSpan.end > keywordSpan.start
+      ? sourceRefForSpan(root, node, keywordSpan, code)
+      : sourceRef;
+  qs.push(
     singleQuestion(
-      "What is the if condition?",
-      text,
-      [sourceRef],
-      "if.condition"
-    ),
-  ];
+      "What comes next?",
+      keyword,
+      [keywordRef],
+      "if.keyword"
+    )
+  );
+
+  const parts = splitLogicalConditionAtoms(condition, code);
+  if (parts.length <= 1) {
+    const text = textForRange(condition.startIndex, condition.endIndex, code) || condition.type;
+    const conditionRef = sourceRefForNode(root, condition, code);
+    qs.push(
+      singleQuestion(
+        "What is the if condition?",
+        text,
+        [conditionRef],
+        "if.condition"
+      )
+    );
+    return qs;
+  }
+
+  parts.forEach((part, index) => {
+    const text = textForRange(part.startIndex, part.endIndex, code) || part.type;
+    const partRef = sourceRefForNode(root, part, code);
+    qs.push(
+      singleQuestion(
+        `Step ${index + 1}: What is the next condition part?`,
+        text,
+        [partRef],
+        "if.condition.part"
+      )
+    );
+  });
+  return qs;
 };
 
 const ruleForStatement: Rule = ({ node, code, sourceRef, profile }) => {
@@ -2347,19 +2381,40 @@ const binaryOperatorText = (
   expr: TreeSitterAstNode,
   code: string | undefined
 ): string | undefined => {
-  if (expr.type !== "binary_expression") return undefined;
+  if (expr.type !== "binary_expression" && expr.type !== "logical_expression") {
+    return undefined;
+  }
   if (!code) return undefined;
   const left = childByField(expr, "left") || (expr.namedChildren || [])[0];
   const right = childByField(expr, "right") || (expr.namedChildren || [])[1];
-  const opRe = /(&&|\\|\\||\\?\\?)/;
+  const opRe = /&&|\|\||\?\?/;
   if (left && right) {
     const between = code.slice(left.endIndex, right.startIndex);
     const m = between.match(opRe);
-    if (m) return m[1];
+    return m ? m[0] : undefined;
   }
   const snippet = textForRange(expr.startIndex, expr.endIndex, code) || "";
   const m = snippet.match(opRe);
-  return m ? m[1] : undefined;
+  return m ? m[0] : undefined;
+};
+
+const splitLogicalConditionAtoms = (
+  node: TreeSitterAstNode,
+  code: string | undefined
+): TreeSitterAstNode[] => {
+  const expr = unwrapParenExpression(node) || node;
+  if (expr.type !== "binary_expression" && expr.type !== "logical_expression") {
+    return [node];
+  }
+  const op = binaryOperatorText(expr, code);
+  if (op !== "&&" && op !== "||") return [node];
+  const left = childByField(expr, "left") || (expr.namedChildren || [])[0];
+  const right = childByField(expr, "right") || (expr.namedChildren || [])[1];
+  if (!left || !right || !code) return [node];
+  return [
+    ...splitLogicalConditionAtoms(left, code),
+    ...splitLogicalConditionAtoms(right, code),
+  ];
 };
 
 const isListyExpression = (
@@ -3201,7 +3256,7 @@ const rules: Record<string, Rule[]> = {
   field_definition: [ruleFieldDefinition],
   public_field_definition: [ruleFieldDefinition],
   class_static_block: [headerRule],
-  if_statement: [headerRule, ruleIfStatement],
+  if_statement: [ruleIfStatement],
   else_clause: [headerRule],
   for_statement: [headerRule, ruleForStatement],
   for_in_statement: [headerRule, ruleForInStatement],

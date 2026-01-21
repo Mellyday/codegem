@@ -477,6 +477,90 @@ describe("multiselect question splitting", () => {
     });
 });
 
+describe("if statement quiz generation", () => {
+    it("splits keyword and condition into separate questions", async () => {
+        const code = [
+            "if (ready) {",
+            "  doThing();",
+            "}",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "js");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const keywordQuestion = questions.find((q) => q.generatorRule === "if.keyword");
+        expect(keywordQuestion).toBeDefined();
+        expect(keywordQuestion.answerLabel).toBe("if");
+
+        const conditionQuestion = questions.find((q) => q.generatorRule === "if.condition");
+        expect(conditionQuestion).toBeDefined();
+        expect(conditionQuestion.answerLabel).toBe("ready");
+    });
+
+    it("splits complex conditions left to right", async () => {
+        const code = [
+            "if (a && b || c) {",
+            "  doThing();",
+            "}",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "js");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const partQuestions = questions.filter((q) => q.generatorRule === "if.condition.part");
+        expect(partQuestions.length).toBe(3);
+        expect(partQuestions.map((q) => q.answerLabel)).toEqual(["a", "b", "c"]);
+    });
+
+    it("splits logical condition parts without breaking comparisons", async () => {
+        const code = [
+            "if (lastHistoricalCandle && lastHistoricalCandle[0] === liveTimestamp) {",
+            "  doThing();",
+            "}",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "js");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const partQuestions = questions.filter((q) => q.generatorRule === "if.condition.part");
+        expect(partQuestions.length).toBe(2);
+        expect(partQuestions.map((q) => q.answerLabel)).toEqual([
+            "lastHistoricalCandle",
+            "lastHistoricalCandle[0] === liveTimestamp",
+        ]);
+    });
+});
+
 describe("progressive reveal for split multiselect questions", () => {
     it("first split question reveals less than last split question", async () => {
         // CandlestickChart-style component with 9 parameters - will be split into 2 questions
