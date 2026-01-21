@@ -504,7 +504,7 @@ describe("if statement quiz generation", () => {
 
         const conditionQuestion = questions.find((q) => q.generatorRule === "if.condition");
         expect(conditionQuestion).toBeDefined();
-        expect(conditionQuestion.answerLabel).toBe("ready");
+        expect(conditionQuestion.answerLabel).toBe("(ready)");
     });
 
     it("splits complex conditions left to right", async () => {
@@ -557,6 +557,34 @@ describe("if statement quiz generation", () => {
         expect(partQuestions.map((q) => q.answerLabel)).toEqual([
             "lastHistoricalCandle",
             "lastHistoricalCandle[0] === liveTimestamp",
+        ]);
+    });
+
+    it("splits OR condition with comparison on the right side", async () => {
+        const code = [
+            "if (dataChanged || mode === 'historical') {",
+            "  chartRef.current?.timeScale().fitContent();",
+            "}",
+        ].join("\n");
+
+        const { ast } = await parseWithTreeSitter(code, "js");
+        const steps = generateEngineSteps(ast, ast, code, {
+            profile: "deep",
+            generateQuiz: true,
+        });
+
+        const questions: any[] = [];
+        const collect = (step: any) => {
+            if (step.quiz?.questions?.length) questions.push(...step.quiz.questions);
+            for (const child of step.lesson?.childSteps || []) collect(child);
+        };
+        steps.forEach(collect);
+
+        const partQuestions = questions.filter((q) => q.generatorRule === "if.condition.part");
+        expect(partQuestions.length).toBe(2);
+        expect(partQuestions.map((q) => q.answerLabel)).toEqual([
+            "dataChanged",
+            "mode === 'historical'",
         ]);
     });
 });
