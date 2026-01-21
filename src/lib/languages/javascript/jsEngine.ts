@@ -120,6 +120,10 @@ const displaySpanForNode = (node: TreeSitterAstNode) => {
 };
 
 const pathCache = new WeakMap<TreeSitterAstNode, WeakMap<TreeSitterAstNode, number[]>>();
+const parentCache = new WeakMap<
+  TreeSitterAstNode,
+  WeakMap<TreeSitterAstNode, TreeSitterAstNode>
+>();
 
 export const computeAstPath = (
   root: TreeSitterAstNode,
@@ -153,6 +157,47 @@ export const computeAstPath = (
 
   rootCache.set(target, path);
   return path;
+};
+
+const buildParentMap = (root: TreeSitterAstNode) => {
+  const map = new WeakMap<TreeSitterAstNode, TreeSitterAstNode>();
+  const stack: TreeSitterAstNode[] = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    const children = cur.namedChildren || [];
+    for (const child of children) {
+      map.set(child, cur);
+      stack.push(child);
+    }
+  }
+  return map;
+};
+
+const parentOf = (root: TreeSitterAstNode, node: TreeSitterAstNode) => {
+  let map = parentCache.get(root);
+  if (!map) {
+    map = buildParentMap(root);
+    parentCache.set(root, map);
+  }
+  return map.get(node);
+};
+
+const canonicalSpan = (
+  node: TreeSitterAstNode,
+  root: TreeSitterAstNode
+): { start: number; end: number } => {
+  const parent = parentOf(root, node);
+  if (parent?.type === "jsx_expression") {
+    return { start: parent.startIndex, end: parent.endIndex };
+  }
+  if (parent?.type === "object") {
+    const grandParent = parentOf(root, parent);
+    if (grandParent?.type === "jsx_expression") {
+      return { start: grandParent.startIndex, end: grandParent.endIndex };
+    }
+  }
+  return { start: node.startIndex, end: node.endIndex };
 };
 
 const shuffle = <T>(arr: T[]): T[] => {
@@ -2074,7 +2119,8 @@ const jsxElementNameSpan = (
 
 const jsxAttributeValueText = (
   node: TreeSitterAstNode,
-  code: string | undefined
+  code: string | undefined,
+  root?: TreeSitterAstNode
 ): string => {
   if (node.type === "string") {
     return stripQuotes(textForRange(node.startIndex, node.endIndex, code) || "");
@@ -2084,7 +2130,8 @@ const jsxAttributeValueText = (
       childByField(node, "expression") ||
       (node.namedChildren || [])[0];
     if (expr) {
-      return textForRange(expr.startIndex, expr.endIndex, code) || expr.type;
+      const span = root ? canonicalSpan(expr, root) : { start: expr.startIndex, end: expr.endIndex };
+      return textForRange(span.start, span.end, code) || expr.type;
     }
   }
   return textForRange(node.startIndex, node.endIndex, code) || node.type;
@@ -2425,7 +2472,7 @@ const buildJsxQuestions = (
         continue;
       }
     }
-    const valueText = jsxAttributeValueText(valueNode, code);
+    const valueText = jsxAttributeValueText(valueNode, code, root);
     const stem =
       nameText === "className"
         ? "What is the className value?"
