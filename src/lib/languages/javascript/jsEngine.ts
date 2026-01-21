@@ -679,6 +679,7 @@ type ImportSpecAlias = { exported: string; local: string };
 type ImportRunData = {
   modules: Set<string>;
   bindingsByModule: Map<string, Set<string>>;
+  firstStmtByModule: Map<string, TreeSitterAstNode>;
   aliases: ImportSpecAlias[];
   span: { start: number; end: number };
 };
@@ -724,6 +725,7 @@ const extractImportRunData = (
 ): ImportRunData => {
   const modules = new Set<string>();
   const bindingsByModule = new Map<string, Set<string>>();
+  const firstStmtByModule = new Map<string, TreeSitterAstNode>();
   const aliases: ImportSpecAlias[] = [];
   const first = run[0];
   const last = run[run.length - 1];
@@ -733,6 +735,7 @@ const extractImportRunData = (
     const info = importStatementData(stmt, code);
     if (!info.module) continue;
     modules.add(info.module);
+    if (!firstStmtByModule.has(info.module)) firstStmtByModule.set(info.module, stmt);
     if (info.bindings.length > 0) {
       const set = bindingsByModule.get(info.module) || new Set<string>();
       info.bindings.forEach((b) => set.add(b));
@@ -741,7 +744,7 @@ const extractImportRunData = (
     aliases.push(...info.aliases.map((a) => ({ ...a })));
   }
 
-  return { modules, bindingsByModule, aliases, span };
+  return { modules, bindingsByModule, firstStmtByModule, aliases, span };
 };
 
 function generateImportRunQuestions(
@@ -751,7 +754,8 @@ function generateImportRunQuestions(
   profile: DecompositionLevel
 ): QuizQuestion[] {
   if (!run.length) return [];
-  const { modules, bindingsByModule, aliases, span } = extractImportRunData(run, code);
+  const { modules, bindingsByModule, firstStmtByModule, aliases, span } =
+    extractImportRunData(run, code);
   if (modules.size === 0) return [];
 
   const baseSourceRef: SourceRef = {
@@ -777,8 +781,9 @@ function generateImportRunQuestions(
       multiSelectHint: card.length,
       sourceRefs: [baseSourceRef],
       generatorRule: "import_run.modules",
+      revealStart: span.start,
       revealEndBeforeChild: span.start,
-      revealEndAfterChild: span.end,
+      revealEndAfterChild: span.start,
       distractorPoolSize: 10,
     });
   }
@@ -787,6 +792,13 @@ function generateImportRunQuestions(
     const bindingList = Array.from(bindings);
     if (bindingList.length === 0) continue;
     const bindingCards = splitCorrectIntoCards(bindingList);
+    const importStmt = firstStmtByModule.get(moduleName);
+    const stmtSpan = importStmt
+      ? { start: importStmt.startIndex, end: importStmt.endIndex }
+      : span;
+    const stmtSourceRef = importStmt
+      ? sourceRefForSpan(root, importStmt, stmtSpan, code)
+      : baseSourceRef;
     for (const card of bindingCards) {
       const optionPool = buildIdentifierOptionPool(card, code, span);
       qs.push({
@@ -797,10 +809,10 @@ function generateImportRunQuestions(
         questionType: "multi",
         multiCorrect: card,
         multiSelectHint: card.length,
-        sourceRefs: [baseSourceRef],
+        sourceRefs: [stmtSourceRef],
         generatorRule: "import_run.bindings",
-        revealEndBeforeChild: span.start,
-        revealEndAfterChild: span.end,
+        revealStart: stmtSpan.start,
+        revealEndAfterChild: stmtSpan.end,
       });
     }
   }
@@ -1992,6 +2004,21 @@ const jsxElementName = (
   return textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
 };
 
+const jsxElementNameSpan = (
+  node: TreeSitterAstNode
+): { start: number; end: number } | undefined => {
+  if (node.type === "jsx_fragment") {
+    const openFrag = firstChildOfType(node, "jsx_opening_fragment");
+    if (openFrag) {
+      return { start: openFrag.startIndex, end: openFrag.endIndex };
+    }
+    return undefined;
+  }
+  const nameNode = getSectionFirstItem(node, "name");
+  if (!nameNode) return undefined;
+  return { start: nameNode.startIndex, end: nameNode.endIndex };
+};
+
 const jsxAttributeValueText = (
   node: TreeSitterAstNode,
   code: string | undefined
@@ -2187,12 +2214,29 @@ const buildJsxQuestions = (
   const childSpan = getSectionSpan(node, "children");
 
   if (includeName && node.type === "jsx_fragment") {
+    const nameSpan = jsxElementNameSpan(node);
+    const fragRef = nameSpan
+      ? sourceRefForSpan(
+          root,
+          node,
+          { start: node.startIndex, end: nameSpan.end },
+          code
+        )
+      : sourceRef;
+    const revealOpts = nameSpan
+      ? {
+          revealStart: node.startIndex,
+          revealEndBeforeChild: nameSpan.start,
+          revealEndAfterChild: nameSpan.end,
+        }
+      : {};
     qs.push(
       singleQuestion(
         `${prefix}What is the JSX wrapper?`,
         "Fragment",
-        [sourceRef],
-        "jsx.fragment"
+        [fragRef],
+        "jsx.fragment",
+        revealOpts
       )
     );
   }
@@ -2200,12 +2244,29 @@ const buildJsxQuestions = (
   if (includeName && node.type !== "jsx_fragment") {
     const nameText = jsxElementName(node, code);
     if (nameText) {
+      const nameSpan = jsxElementNameSpan(node);
+      const nameRef = nameSpan
+        ? sourceRefForSpan(
+            root,
+            node,
+            { start: node.startIndex, end: nameSpan.end },
+            code
+          )
+        : sourceRef;
+      const revealOpts = nameSpan
+        ? {
+            revealStart: node.startIndex,
+            revealEndBeforeChild: nameSpan.start,
+            revealEndAfterChild: nameSpan.end,
+          }
+        : {};
       qs.push(
         singleQuestion(
           `${prefix}What is the component/tag name?`,
           nameText,
-          [sourceRef],
-          "jsx.name"
+          [nameRef],
+          "jsx.name",
+          revealOpts
         )
       );
     }
@@ -2361,19 +2422,26 @@ const buildJsxQuestions = (
     .filter((name): name is string => Boolean(name));
   if (childNames.length > 0) {
     const containerLabel = node.type === "jsx_fragment" ? "JSX fragment" : "JSX element";
-    const childRef =
-      childSpan ? sourceRefForSpan(root, node, childSpan, code) : sourceRef;
-    qs.push(
-      multiQuestion(
-        `${prefix}Which child elements are directly nested in this ${containerLabel}?`,
-        Array.from(new Set(childNames)),
-        childRef,
-        "jsx.children",
-        code,
-        node.startIndex,
-        node.endIndex
-      )
+    const openTagSpan = childSpan
+      ? { start: node.startIndex, end: childSpan.start }
+      : { start: node.startIndex, end: Math.min(node.endIndex, node.startIndex + 80) };
+    const childRef = sourceRefForSpan(root, node, openTagSpan, code);
+    const childQuestion = multiQuestion(
+      `${prefix}Which child elements are directly nested in this ${containerLabel}?`,
+      Array.from(new Set(childNames)),
+      childRef,
+      "jsx.children",
+      code,
+      node.startIndex,
+      node.endIndex
     );
+    const noRevealAt = childSpan?.start ?? node.startIndex;
+    qs.push({
+      ...childQuestion,
+      revealStart: noRevealAt,
+      revealEndBeforeChild: noRevealAt,
+      revealEndAfterChild: noRevealAt,
+    });
   }
 
   if (depth < maxDepth) {
@@ -3570,6 +3638,7 @@ export function buildCustomQuizPayload(params: {
           : fallback?.end;
 
     if (typeof start === "number" && typeof end === "number" && end >= start) {
+      if (end === start) return undefined;
       return { start, end };
     }
     return undefined;
@@ -3587,13 +3656,16 @@ export function buildCustomQuizPayload(params: {
       (Array.isArray(q.multiCorrect) && q.multiCorrect.length > 0);
     const isOrderedMulti = q.questionType === "orderedMulti";
     const resolvedQuestionType = isOrderedMulti ? "orderedMulti" : "multi";
-    const span = step.displaySpan ?? {
-      start: step.node.startIndex,
-      end: step.node.endIndex,
-    };
-    const snippet = code.slice(span.start, span.end).trimEnd();
     const baseRef = bestSourceRef(q);
     const revealSpan = revealSpanForCard(q, baseRef);
+    const spanForSnippet =
+      q.generatorRule?.startsWith("import_run.") && revealSpan
+        ? revealSpan
+        : step.displaySpan ?? {
+            start: step.node.startIndex,
+            end: step.node.endIndex,
+          };
+    const snippet = code.slice(spanForSnippet.start, spanForSnippet.end).trimEnd();
     const cardRef =
       baseRef && revealSpan
         ? {
