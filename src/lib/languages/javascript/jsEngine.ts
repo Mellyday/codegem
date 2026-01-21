@@ -183,6 +183,25 @@ const parentOf = (root: TreeSitterAstNode, node: TreeSitterAstNode) => {
   return map.get(node);
 };
 
+const isWithinJsxAttributeExpression = (
+  node: TreeSitterAstNode,
+  root: TreeSitterAstNode
+): boolean => {
+  let cur: TreeSitterAstNode | undefined = node;
+  while (cur) {
+    const parent = parentOf(root, cur);
+    if (!parent) return false;
+    if (parent.type === "jsx_expression") {
+      const container = parentOf(root, parent);
+      if (container?.type === "jsx_attribute" || container?.type === "jsx_spread_attribute") {
+        return true;
+      }
+    }
+    cur = parent;
+  }
+  return false;
+};
+
 const canonicalSpan = (
   node: TreeSitterAstNode,
   root: TreeSitterAstNode
@@ -1191,7 +1210,9 @@ const deepExprBreakdownQuestions = (params: {
     descendIntoBodies: shouldDescendIntoBodiesForObjectScan(expr),
   });
   for (const obj of objects) {
-    out.push(...generateQuestionsV11(root, obj, profile, code));
+    if (!isWithinJsxAttributeExpression(obj, root)) {
+      out.push(...generateQuestionsV11(root, obj, profile, code));
+    }
   }
   return out;
 };
@@ -1859,7 +1880,9 @@ const ruleReturnStatement: Rule = ({ root, node, code, sourceRef, profile }) => 
     descendIntoBodies: shouldDescendIntoBodiesForObjectScan(value),
   });
   for (const obj of objects) {
-    qs.push(...generateQuestionsV11(root, obj, profile, code));
+    if (!isWithinJsxAttributeExpression(obj, root)) {
+      qs.push(...generateQuestionsV11(root, obj, profile, code));
+    }
   }
   return qs;
 };
@@ -2488,7 +2511,7 @@ const buildJsxQuestions = (
     );
     if (valueNode.type === "jsx_expression") {
       const expr = exprFromJsxExpression(valueNode);
-      if (expr) {
+      if (expr && expr.type !== "object") {
         qs.push(
           ...addExprQuestions(
             root,
