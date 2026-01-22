@@ -44,11 +44,16 @@ type Question = {
   // Options to display
   options: string[];
   // Multi-select support
-  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
   // For multi-select questions, the set of correct labels
   answerLabels?: string[];
   // For multi-select questions, how many to select
   numToSelect?: number;
+  // Mapping questions
+  pairs?: Array<{ key: string; value: string }>;
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   // Optional snippet text to show (used by custom quizzes)
   snippetText?: string;
   // Optional v1.1 metadata
@@ -68,7 +73,7 @@ type PersistedQuizProgressV1 = {
   activeQuizMeta?: { quizId?: string; sectionIndex?: number };
   questions: Question[];
   current: number;
-  answers: Array<string | string[] | null>;
+  answers: Array<string | string[] | Record<string, string> | null>;
   answeredFlags: boolean[];
   score: number;
   updatedAt: number;
@@ -187,6 +192,110 @@ const buildSequenceOptions = (
   return shuffleArray([...uniqueCorrect, ...distractors]).slice(0, MULTI_OPTION_TARGET);
 };
 
+const hashString = (input: string) => {
+  let hash = 2166136261;
+  for (let i = 0; i < input.length; i++) {
+    hash ^= input.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+};
+
+const seededShuffle = <T,>(items: T[], seed: number): T[] => {
+  const arr = items.slice();
+  let s = seed || 1;
+  const rand = () => {
+    s = (s * 1664525 + 1013904223) >>> 0;
+    return s / 0x100000000;
+  };
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+};
+
+const MAPPING_EMBEDDED_VALUE = "__embedded__";
+const MAPPING_NOT_PRESENT_VALUE = "__not_present__";
+
+const mappingValueLabel = (value: string) => {
+  if (value === MAPPING_EMBEDDED_VALUE) return "Embedded (no match)";
+  if (value === MAPPING_NOT_PRESENT_VALUE) return "Not present";
+  return value;
+};
+
+const isMappingAnswer = (
+  value: unknown
+): value is Record<string, string> =>
+  !!value && typeof value === "object" && !Array.isArray(value);
+
+const sanitizeMappingAnswer = (
+  value: unknown
+): Record<string, string> => {
+  if (!isMappingAnswer(value)) return {};
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(value)) {
+    if (typeof v === "string") out[String(k)] = v;
+  }
+  return out;
+};
+
+const buildMappingOptions = (q: Question) => {
+  const pairs = Array.isArray(q.pairs) ? q.pairs : [];
+  const matchlessKeys = Array.isArray(q.matchlessKeys) ? q.matchlessKeys : [];
+  const keyDistractors = Array.isArray(q.keyDistractors) ? q.keyDistractors : [];
+  const valueDistractors = Array.isArray(q.valueDistractors) ? q.valueDistractors : [];
+
+  const keys: string[] = [];
+  const seenKeys = new Set<string>();
+  const pushKey = (key: string) => {
+    const v = String(key ?? "").trim();
+    if (!v || seenKeys.has(v)) return;
+    seenKeys.add(v);
+    keys.push(v);
+  };
+  pairs.forEach((p) => pushKey(p.key));
+  matchlessKeys.forEach(pushKey);
+  keyDistractors.forEach(pushKey);
+
+  const values: string[] = [];
+  const seenValues = new Set<string>();
+  const pushValue = (value: string) => {
+    const v = String(value ?? "").trim();
+    if (!v || seenValues.has(v)) return;
+    seenValues.add(v);
+    values.push(v);
+  };
+  pairs.forEach((p) => pushValue(p.value));
+  valueDistractors.forEach(pushValue);
+
+  const seed = hashString(
+    JSON.stringify({
+      keys,
+      values,
+      matchlessKeys,
+      keyDistractors,
+      valueDistractors,
+    })
+  );
+  const valueOptions = seededShuffle(
+    [
+      ...(matchlessKeys.length > 0 ? [MAPPING_EMBEDDED_VALUE] : []),
+      ...(keyDistractors.length > 0 ? [MAPPING_NOT_PRESENT_VALUE] : []),
+      ...values,
+    ],
+    seed
+  );
+  const keyOptions = seededShuffle(keys, seed + 1);
+
+  return {
+    keys: keyOptions,
+    valueOptions,
+    hasMatchless: matchlessKeys.length > 0,
+    hasKeyDistractors: keyDistractors.length > 0,
+  };
+};
+
 // v1.1: stable reference to an AST node or slice
 type SourceRef = {
   nodeType: string;
@@ -211,10 +320,15 @@ type SavedCustomQuizCardV11 = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   // multi-select (optional)
-  questionType?: "single" | "multi" | "orderedMulti" | "sequence";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
+  // mapping (optional)
+  pairs?: Array<{ key: string; value: string }>;
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   // optional LLM distractors pool (future enrichment)
   llmDistractors?: string[];
   // optional progressive reveal anchors
@@ -259,6 +373,34 @@ const generateQuestionsFromCustom = (
   const qs: Question[] = [];
 
   for (const c of cards) {
+    const isMapping = c.questionType === "mapping" && Array.isArray(c.pairs);
+    if (isMapping) {
+      qs.push({
+        stem: c.question || "Match each key to its value.",
+        answerLabel: "",
+        options: [],
+        questionType: "mapping",
+        pairs: c.pairs,
+        matchlessKeys: Array.isArray(c.matchlessKeys) ? c.matchlessKeys : undefined,
+        keyDistractors: Array.isArray(c.keyDistractors) ? c.keyDistractors : undefined,
+        valueDistractors: Array.isArray(c.valueDistractors) ? c.valueDistractors : undefined,
+        kind: c.type,
+        generatorRule: c.generatorRule,
+        difficulty: c.difficulty,
+        sourceRefs: c.sourceRef ? [c.sourceRef] : undefined,
+        snippetText: c.text,
+        revealStart: typeof c.revealStart === "number" ? c.revealStart : undefined,
+        revealEndBeforeChild:
+          typeof c.revealEndBeforeChild === "number"
+            ? c.revealEndBeforeChild
+            : undefined,
+        revealEndAfterChild:
+          typeof c.revealEndAfterChild === "number"
+            ? c.revealEndAfterChild
+            : undefined,
+      });
+      continue;
+    }
     const multiCorrect = Array.isArray(c.multiCorrect) ? c.multiCorrect : undefined;
     const hasMultiCorrect = !!multiCorrect;
     const isSequence = c.questionType === "sequence" && hasMultiCorrect;
@@ -416,9 +558,12 @@ export const QuizViewer = ({
   const [selectedMulti, setSelectedMulti] = useState<Set<string>>(new Set());
   const [selectedOrdered, setSelectedOrdered] = useState<string[]>([]);
   const [selectedSequence, setSelectedSequence] = useState<string[]>([]);
+  const [selectedMapping, setSelectedMapping] = useState<Record<string, string>>({});
   const [score, setScore] = useState(0);
   // Persist answers per question index so navigation retains choices
-  const [answers, setAnswers] = useState<Array<string | string[] | undefined>>(
+  const [answers, setAnswers] = useState<
+    Array<string | string[] | Record<string, string> | undefined>
+  >(
     []
   );
   const [answeredFlags, setAnsweredFlags] = useState<boolean[]>([]);
@@ -490,9 +635,10 @@ export const QuizViewer = ({
       Math.max(0, total - 1)
     );
     const answersRestored = (data.answers ?? []).slice(0, total).map((a) => {
-      if (a === null) return undefined;
+      if (a === null || typeof a === "undefined") return undefined;
+      if (isMappingAnswer(a)) return sanitizeMappingAnswer(a);
       return a;
-    }) as Array<string | string[] | undefined>;
+    }) as Array<string | string[] | Record<string, string> | undefined>;
     const answeredFlagsRestored = (data.answeredFlags ?? [])
       .slice(0, total)
       .map((v) => !!v);
@@ -512,6 +658,7 @@ export const QuizViewer = ({
       setSelectedMulti(new Set());
       setSelectedOrdered([]);
       setSelectedSequence([]);
+      setSelectedMapping({});
       if (curQ?.questionType === "sequence") {
         setSelectedSequence(curAns);
       } else if (curQ?.questionType === "orderedMulti") {
@@ -519,11 +666,18 @@ export const QuizViewer = ({
       } else {
         setSelectedMulti(new Set(curAns));
       }
+    } else if (isMappingAnswer(curAns)) {
+      setSelected(undefined);
+      setSelectedMulti(new Set());
+      setSelectedOrdered([]);
+      setSelectedSequence([]);
+      setSelectedMapping(sanitizeMappingAnswer(curAns));
     } else {
       setSelected(curAns as string | undefined);
       setSelectedMulti(new Set());
       setSelectedOrdered([]);
       setSelectedSequence([]);
+      setSelectedMapping({});
     }
 
     const meta = data.activeQuizMeta;
@@ -566,6 +720,10 @@ export const QuizViewer = ({
         multiCorrect: c.multiCorrect,
         multiSelectHint: c.multiSelectHint,
         optionPool: c.optionPool,
+        pairs: c.pairs,
+        matchlessKeys: c.matchlessKeys,
+        keyDistractors: c.keyDistractors,
+        valueDistractors: c.valueDistractors,
         llmDistractors: c.llmDistractors,
         // persist reveal anchors when present on generated cards
         revealStart: c.revealStart,
@@ -658,6 +816,7 @@ export const QuizViewer = ({
       setSelectedMulti(new Set());
       setSelectedOrdered([]);
       setSelectedSequence([]);
+      setSelectedMapping({});
       setScore(0);
       setAnswers(new Array(qs.length).fill(undefined));
       setAnsweredFlags(new Array(qs.length).fill(false));
@@ -847,12 +1006,29 @@ export const QuizViewer = ({
     const isSequence =
       currentQ.questionType === "sequence" &&
       Array.isArray(currentQ.answerLabels);
+    const isMapping =
+      currentQ.questionType === "mapping" && Array.isArray(currentQ.pairs);
     const isOrderedMulti =
       currentQ.questionType === "orderedMulti" &&
       Array.isArray(currentQ.answerLabels);
     const isMulti =
       (currentQ.questionType === "multi" || isOrderedMulti) &&
       Array.isArray(currentQ.answerLabels);
+    const mappingOptions = isMapping ? buildMappingOptions(currentQ) : undefined;
+    const mappingKeys = mappingOptions?.keys ?? [];
+    const mappingValueOptions = mappingOptions?.valueOptions ?? [];
+    const mappingCorrectMap = new Map<string, string>();
+    if (isMapping) {
+      for (const pair of currentQ.pairs || []) {
+        if (pair?.key) mappingCorrectMap.set(pair.key, pair.value);
+      }
+      for (const key of currentQ.matchlessKeys || []) {
+        if (key) mappingCorrectMap.set(key, MAPPING_EMBEDDED_VALUE);
+      }
+      for (const key of currentQ.keyDistractors || []) {
+        if (key) mappingCorrectMap.set(key, MAPPING_NOT_PRESENT_VALUE);
+      }
+    }
     const correctLabels = (isMulti || isSequence)
       ? (currentQ.answerLabels as string[])
       : [];
@@ -878,9 +1054,15 @@ export const QuizViewer = ({
       isAnswered &&
       selectedSequence.length === correctLabels.length &&
       selectedSequence.every((v, idx) => v === correctLabels[idx]);
+    const mappingCorrect =
+      isAnswered &&
+      mappingKeys.length > 0 &&
+      mappingKeys.every((key) => selectedMapping[key] === mappingCorrectMap.get(key));
     const correct = isSequence
       ? sequenceCorrect
-      : isMulti
+      : isMapping
+        ? mappingCorrect
+        : isMulti
         ? isOrderedMulti
           ? orderedCorrect
           : unorderedCorrect
@@ -889,6 +1071,7 @@ export const QuizViewer = ({
     const handleSelect = (opt: string) => {
       if (isAnswered) return;
       if (isSequence) return;
+      if (isMapping) return;
       if (isMulti) {
         if (isOrderedMulti) {
           setSelectedOrdered((prev) => {
@@ -937,6 +1120,19 @@ export const QuizViewer = ({
       }
     };
 
+    const handleMappingSelect = (key: string, value: string) => {
+      if (isAnswered) return;
+      setSelectedMapping((prev) => {
+        const next = { ...prev, [key]: value };
+        setAnswers((prevAns) => {
+          const n = prevAns.slice();
+          n[current] = next;
+          return n;
+        });
+        return next;
+      });
+    };
+
     const syncSequenceAnswer = (next: string[]) => {
       setSelectedSequence(next);
       setAnswers((prev) => {
@@ -981,14 +1177,17 @@ export const QuizViewer = ({
       const isRight = isSequence
         ? selectedSequence.length === correctLabels.length &&
         selectedSequence.every((v, idx) => v === correctLabels[idx])
-        : isOrderedMulti
-          ? selectedOrdered.length === correctLabels.length &&
-          selectedOrdered.every((v, idx) => v === correctLabels[idx])
-          : selectedMulti.size === correctLabels.length &&
-          (() => {
-            for (const v of selectedMulti) if (!correctSet.has(v)) return false;
-            return true;
-          })();
+        : isMapping
+          ? mappingKeys.length > 0 &&
+          mappingKeys.every((key) => selectedMapping[key] === mappingCorrectMap.get(key))
+          : isOrderedMulti
+            ? selectedOrdered.length === correctLabels.length &&
+            selectedOrdered.every((v, idx) => v === correctLabels[idx])
+            : selectedMulti.size === correctLabels.length &&
+            (() => {
+              for (const v of selectedMulti) if (!correctSet.has(v)) return false;
+              return true;
+            })();
       if (isRight) setScore((s) => s + 1);
       onRevealChange?.(revealAfterForQuestion(currentQ));
     };
@@ -1038,6 +1237,7 @@ export const QuizViewer = ({
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
           setSelectedSequence([]);
+          setSelectedMapping({});
           if (nextQ?.questionType === "sequence") {
             setSelectedSequence(ans);
           } else if (nextQ?.questionType === "orderedMulti") {
@@ -1045,11 +1245,18 @@ export const QuizViewer = ({
           } else {
             setSelectedMulti(new Set(ans));
           }
+        } else if (isMappingAnswer(ans)) {
+          setSelected(undefined);
+          setSelectedMulti(new Set());
+          setSelectedOrdered([]);
+          setSelectedSequence([]);
+          setSelectedMapping(sanitizeMappingAnswer(ans));
         } else {
           setSelected(ans as string | undefined);
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
           setSelectedSequence([]);
+          setSelectedMapping({});
         }
         // Update reveal window for the next question if available
         const curAfter = revealAfterForQuestion(currentQ);
@@ -1073,6 +1280,7 @@ export const QuizViewer = ({
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
           setSelectedSequence([]);
+          setSelectedMapping({});
           if (q?.questionType === "sequence") {
             setSelectedSequence(ans);
           } else if (q?.questionType === "orderedMulti") {
@@ -1080,11 +1288,18 @@ export const QuizViewer = ({
           } else {
             setSelectedMulti(new Set(ans));
           }
+        } else if (isMappingAnswer(ans)) {
+          setSelected(undefined);
+          setSelectedMulti(new Set());
+          setSelectedOrdered([]);
+          setSelectedSequence([]);
+          setSelectedMapping(sanitizeMappingAnswer(ans));
         } else {
           setSelected(ans as string | undefined);
           setSelectedMulti(new Set());
           setSelectedOrdered([]);
           setSelectedSequence([]);
+          setSelectedMapping({});
         }
         onRevealChange?.(revealBeforeForQuestion(q));
       }
@@ -1104,6 +1319,7 @@ export const QuizViewer = ({
         setSelectedMulti(new Set());
         setSelectedOrdered([]);
         setSelectedSequence([]);
+        setSelectedMapping({});
         if (q?.questionType === "sequence") {
           setSelectedSequence(ans);
         } else if (q?.questionType === "orderedMulti") {
@@ -1111,11 +1327,18 @@ export const QuizViewer = ({
         } else {
           setSelectedMulti(new Set(ans));
         }
+      } else if (isMappingAnswer(ans)) {
+        setSelected(undefined);
+        setSelectedMulti(new Set());
+        setSelectedOrdered([]);
+        setSelectedSequence([]);
+        setSelectedMapping(sanitizeMappingAnswer(ans));
       } else {
         setSelected(ans as string | undefined);
         setSelectedMulti(new Set());
         setSelectedOrdered([]);
         setSelectedSequence([]);
+        setSelectedMapping({});
       }
       onRevealChange?.(revealBeforeForQuestion(q));
     };
@@ -1238,6 +1461,8 @@ export const QuizViewer = ({
             <p className="text-sm text-slate-600">
               {isSequence
                 ? `Build the sequence${sequenceTarget ? ` (${sequenceTarget})` : ""}.`
+                : isMapping
+                  ? "Match each key to its value."
                 : isMulti
                   ? isOrderedMulti
                     ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
@@ -1247,7 +1472,63 @@ export const QuizViewer = ({
           </div>
 
           {/* Answer Options */}
-          {isSequence ? (
+          {isMapping ? (
+            <div className="space-y-3">
+              {(mappingOptions?.hasMatchless || mappingOptions?.hasKeyDistractors) && (
+                <div className="text-xs text-slate-500">
+                  {mappingOptions?.hasMatchless && "Embedded = no match."}{" "}
+                  {mappingOptions?.hasKeyDistractors && "Not present = distractor."}
+                </div>
+              )}
+              <div className="space-y-2">
+                {mappingKeys.map((key, i) => {
+                  const selectedValue = selectedMapping[key] ?? "";
+                  const correctValue = mappingCorrectMap.get(key);
+                  const rowCorrect = isAnswered && selectedValue === correctValue;
+                  const rowIncorrect =
+                    isAnswered && (!selectedValue || selectedValue !== correctValue);
+                  const rowClass = !isAnswered
+                    ? "border-slate-200 bg-white"
+                    : rowCorrect
+                      ? "border-green-300 bg-green-50"
+                      : rowIncorrect
+                        ? "border-rose-300 bg-rose-50"
+                        : "border-slate-200 bg-white";
+
+                  return (
+                    <div
+                      key={`map-${current}-${i}`}
+                      className={`flex flex-col gap-2 rounded-lg border p-3 sm:flex-row sm:items-center ${rowClass}`}
+                    >
+                      <div className="flex-1 font-mono text-sm text-slate-800 break-all">
+                        {key}
+                      </div>
+                      <select
+                        className="w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700 sm:w-64"
+                        value={selectedValue}
+                        disabled={isAnswered}
+                        onChange={(e) => handleMappingSelect(key, e.target.value)}
+                      >
+                        <option value="">Select...</option>
+                        {mappingValueOptions.map((value) => (
+                          <option key={`${key}-${value}`} value={value}>
+                            {mappingValueLabel(value)}
+                          </option>
+                        ))}
+                      </select>
+                      {isAnswered && (
+                        <span
+                          className={`text-xs font-semibold ${rowCorrect ? "text-green-600" : "text-rose-600"}`}
+                        >
+                          {rowCorrect ? "Correct" : "Incorrect"}
+                        </span>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : isSequence ? (
             <div className="space-y-4">
               <div className="space-y-2">
                 <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -1400,6 +1681,8 @@ export const QuizViewer = ({
                 ? "Correct!"
                 : isSequence
                   ? `Incorrect — sequence: ${(currentQ.answerLabels || []).join(" -> ")}`
+                  : isMapping
+                    ? "Incorrect - check the highlighted rows."
                   : isMulti
                     ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(", ")}`
                     : `Incorrect — answer: ${currentQ.answerLabel}`}
@@ -1407,7 +1690,7 @@ export const QuizViewer = ({
           )}
 
           {/* Multi-select / sequence submit */}
-          {(isMulti || isSequence) && !isAnswered && (
+          {(isMulti || isSequence || isMapping) && !isAnswered && (
             <button
               type="button"
               className="w-full rounded-lg bg-cyan-600 px-4 py-2.5 text-sm font-medium text-white shadow hover:bg-cyan-700"

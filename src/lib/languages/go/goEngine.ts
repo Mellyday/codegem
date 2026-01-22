@@ -30,6 +30,11 @@ export type SourceRef = {
   preview?: string;
 };
 
+export type MappingPair = {
+  key: string;
+  value: string;
+};
+
 export type QuizQuestion = {
   kind: string;
   stem: string;
@@ -38,10 +43,14 @@ export type QuizQuestion = {
   sourceRefs: SourceRef[];
   generatorRule: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
   multiCorrect?: string[];
   optionPool?: string[];
   multiSelectHint?: number;
+  pairs?: MappingPair[];
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   revealStart?: number;
   revealEndBeforeChild?: number;
   revealEndAfterChild?: number;
@@ -211,6 +220,23 @@ const MODULE_DISTRACTORS = [
   "testing",
 ];
 
+const TYPE_DISTRACTORS = [
+  "string",
+  "int",
+  "int64",
+  "uint",
+  "bool",
+  "error",
+  "[]byte",
+  "[]string",
+  "map[string]string",
+  "time.Time",
+  "time.Duration",
+  "context.Context",
+  "io.Reader",
+  "io.Writer",
+];
+
 const NAME_DISTRACTORS = [
   "err",
   "ctx",
@@ -345,6 +371,29 @@ const buildKeyGroupOptionPool = (
     ...correct,
     ...extras.slice(0, Math.max(0, 10 - correct.length)),
   ]).slice(0, 10);
+};
+
+const buildMappingKeyDistractors = (
+  correctKeys: string[],
+  code: string | undefined,
+  spanStart: number,
+  spanEnd: number
+): string[] => {
+  if (correctKeys.length === 0) return [];
+  const pool = buildMultiSelectOptionPool(correctKeys, code, spanStart, spanEnd);
+  const extras = pool.filter((p) => !correctKeys.includes(p));
+  const pad = NAME_DISTRACTORS.filter(
+    (d) => !correctKeys.includes(d) && !extras.includes(d)
+  );
+  const combined = shuffle([...extras, ...pad]);
+  return combined.slice(0, Math.min(6, combined.length));
+};
+
+const buildMappingValueDistractors = (correctValues: string[]): string[] => {
+  if (correctValues.length === 0) return [];
+  const correctSet = new Set(correctValues);
+  const pool = TYPE_DISTRACTORS.filter((d) => !correctSet.has(d));
+  return shuffle(pool).slice(0, Math.min(6, pool.length));
 };
 
 const buildImportOptionPool = (
@@ -1033,6 +1082,95 @@ const ruleMethodDecl: Rule = ({ root, node, code, sourceRef, profile }) => {
   return qs;
 };
 
+type MappingEntry = {
+  key: string;
+  value?: string;
+  keyNode: TreeSitterAstNode;
+};
+
+const buildMappingQuestions = (params: {
+  root: TreeSitterAstNode;
+  sourceRef: SourceRef;
+  baseNode: TreeSitterAstNode;
+  code: string | undefined;
+  kind: string;
+  stem: string;
+  generatorRule: string;
+  pairs: MappingEntry[];
+  matchlessKeys: MappingEntry[];
+}): Q11[] => {
+  const { root, sourceRef, baseNode, code, kind, stem, generatorRule, pairs, matchlessKeys } = params;
+  const allKeys = [
+    ...pairs.map((p) => p.key),
+    ...matchlessKeys.map((m) => m.key),
+  ].filter(Boolean);
+  if (allKeys.length === 0) return [];
+
+  const keyGroups = splitCorrectIntoCards(allKeys);
+  const uniqueValues = Array.from(
+    new Set(pairs.map((p) => p.value || "").filter(Boolean))
+  );
+  const keyDistractors = buildMappingKeyDistractors(
+    allKeys,
+    code,
+    baseNode.startIndex,
+    baseNode.endIndex
+  );
+  const valueDistractors = buildMappingValueDistractors(uniqueValues);
+
+  const keyNodeByText = new Map<string, TreeSitterAstNode>();
+  for (const entry of pairs) keyNodeByText.set(entry.key, entry.keyNode);
+  for (const entry of matchlessKeys) {
+    if (!keyNodeByText.has(entry.key)) keyNodeByText.set(entry.key, entry.keyNode);
+  }
+
+  const qs: Q11[] = [];
+  for (const group of keyGroups) {
+    if (!group.length) continue;
+    const groupSet = new Set(group);
+    const groupPairs = pairs
+      .filter((p) => groupSet.has(p.key))
+      .map((p) => ({ key: p.key, value: p.value || "" }))
+      .filter((p) => p.key && p.value);
+    const groupMatchless = matchlessKeys
+      .filter((m) => groupSet.has(m.key))
+      .map((m) => m.key);
+
+    if (groupPairs.length === 0 && groupMatchless.length === 0) continue;
+
+    const keyNode =
+      keyNodeByText.get(groupPairs[0]?.key || groupMatchless[0] || "");
+    const keyRef = keyNode
+      ? {
+        nodeType: keyNode.type,
+        start: keyNode.startIndex,
+        end: keyNode.endIndex,
+        path: computeAstPath(root, keyNode),
+      }
+      : undefined;
+    const answerLabel = [
+      ...groupPairs.map((p) => `${p.key}:${p.value}`),
+      ...groupMatchless,
+    ].join("|");
+
+    qs.push({
+      kind,
+      stem,
+      answerLabel,
+      options: [],
+      questionType: "mapping",
+      pairs: groupPairs,
+      matchlessKeys: groupMatchless.length > 0 ? groupMatchless : undefined,
+      keyDistractors: keyDistractors.length > 0 ? keyDistractors : undefined,
+      valueDistractors: valueDistractors.length > 0 ? valueDistractors : undefined,
+      sourceRefs: keyRef ? [keyRef, sourceRef] : [sourceRef],
+      generatorRule,
+    });
+  }
+
+  return qs;
+};
+
 const ruleTypeDeclaration: Rule = ({ root, node, code, sourceRef, profile }) => {
   const specs = getSectionItems(node, "specs");
   if (specs.length === 0) return;
@@ -1097,105 +1235,99 @@ const ruleTypeDeclaration: Rule = ({ root, node, code, sourceRef, profile }) => 
 
       if (valueNode?.type === "struct_type") {
         const fields = getSectionItems(valueNode, "fields");
-        const fieldNames: string[] = [];
+        const pairs: MappingEntry[] = [];
+        const matchlessKeys: MappingEntry[] = [];
+
         for (const field of fields) {
-          const namesNodes = childrenByField(field, "name");
-          if (namesNodes.length > 0) {
-            for (const n of namesNodes) {
-              const text = textForRange(n.startIndex, n.endIndex, code) || n.type;
-              fieldNames.push(text);
+          const nameNodes = childrenByField(field, "name");
+          const typeNode = childByField(field, "type");
+          const tagNode = childByField(field, "tag");
+          const typeText = typeNode
+            ? textForRange(typeNode.startIndex, typeNode.endIndex, code) || typeNode.type
+            : "";
+          const tagText = tagNode
+            ? textForRange(tagNode.startIndex, tagNode.endIndex, code) || tagNode.type
+            : "";
+          const valueText = [typeText, tagText].filter(Boolean).join(" ").trim();
+
+          if (nameNodes.length > 0) {
+            for (const nameNode of nameNodes) {
+              const keyText =
+                textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+                nameNode.type;
+              if (!keyText) continue;
+              pairs.push({ key: keyText, value: valueText, keyNode: nameNode });
             }
-          } else {
-            const typeNode = childByField(field, "type");
-            if (typeNode) {
-              const text = textForRange(typeNode.startIndex, typeNode.endIndex, code) || typeNode.type;
-              fieldNames.push(text);
-            }
+          } else if (typeNode) {
+            const keyText = typeText || typeNode.type;
+            if (!keyText) continue;
+            matchlessKeys.push({ key: keyText, keyNode: typeNode });
           }
-        }
-        if (fieldNames.length > 0) {
-          const optionPool = buildMultiSelectOptionPool(
-            fieldNames,
-            code,
-            valueNode.startIndex,
-            valueNode.endIndex
-          );
-          qs.push({
-            kind: "struct.fields",
-            stem: "Which fields are declared on this struct?",
-            answerLabel: "",
-            options: optionPool,
-            questionType: "multi",
-            multiCorrect: fieldNames,
-            multiSelectHint: fieldNames.length,
-            sourceRefs: [sourceRef],
-            generatorRule: "struct.fields",
-          });
         }
 
-        if (profile === "deep") {
-          for (const field of fields) {
-            const tagNode = childByField(field, "tag");
-            if (!tagNode) continue;
-            const tagText = textForRange(tagNode.startIndex, tagNode.endIndex, code) || tagNode.type;
-            const nameNode = childrenByField(field, "name")[0] || childByField(field, "type");
-            const fieldText = nameNode
-              ? textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type
-              : "field";
-            qs.push({
-              kind: "struct.field_tag",
-              stem: `What is the tag for field ${fieldText}?`,
-              answerLabel: tagText,
-              options: buildDistractors(tagText),
-              sourceRefs: [
-                sourceRef,
-                {
-                  nodeType: tagNode.type,
-                  start: tagNode.startIndex,
-                  end: tagNode.endIndex,
-                  path: computeAstPath(root, tagNode),
-                },
-              ],
-              generatorRule: "struct.field_tag",
-            });
-          }
-        }
+        qs.push(
+          ...buildMappingQuestions({
+            root,
+            sourceRef,
+            baseNode: valueNode,
+            code,
+            kind: "struct.mapping",
+            stem: "Match each field to its type",
+            generatorRule: "struct.mapping",
+            pairs,
+            matchlessKeys,
+          })
+        );
       }
 
       if (valueNode?.type === "interface_type") {
         const methods = getSectionItems(valueNode, "methods");
-        const methodNames: string[] = [];
+        const pairs: MappingEntry[] = [];
+        const matchlessKeys: MappingEntry[] = [];
+
         for (const method of methods) {
           if (method.type === "method_elem") {
             const nameNode = childByField(method, "name");
-            if (nameNode) {
-              const text = textForRange(nameNode.startIndex, nameNode.endIndex, code) || nameNode.type;
-              methodNames.push(text);
-            }
+            if (!nameNode) continue;
+            const keyText =
+              textForRange(nameNode.startIndex, nameNode.endIndex, code) ||
+              nameNode.type;
+            if (!keyText) continue;
+            const paramsNode = getSectionFirstItem(method, "params");
+            const resultsNode = getSectionFirstItem(method, "results");
+            const paramsText =
+              (paramsNode &&
+                (textForRange(paramsNode.startIndex, paramsNode.endIndex, code) ||
+                  paramsNode.type)) ||
+              "()";
+            const resultsText = resultsNode
+              ? textForRange(resultsNode.startIndex, resultsNode.endIndex, code) ||
+              resultsNode.type
+              : "";
+            const signature = `${paramsText}${resultsText ? ` ${resultsText}` : ""}`.trim();
+            pairs.push({ key: keyText, value: signature, keyNode: nameNode });
           } else {
-            const text = textForRange(method.startIndex, method.endIndex, code) || method.type;
-            methodNames.push(text);
+            const keyText =
+              textForRange(method.startIndex, method.endIndex, code) ||
+              method.type;
+            if (!keyText) continue;
+            matchlessKeys.push({ key: keyText, keyNode: method });
           }
         }
-        if (methodNames.length > 0) {
-          const optionPool = buildMultiSelectOptionPool(
-            methodNames,
+
+        qs.push(
+          ...buildMappingQuestions({
+            root,
+            sourceRef,
+            baseNode: valueNode,
             code,
-            valueNode.startIndex,
-            valueNode.endIndex
-          );
-          qs.push({
-            kind: "interface.methods",
-            stem: "Which methods are declared on this interface?",
-            answerLabel: "",
-            options: optionPool,
-            questionType: "multi",
-            multiCorrect: methodNames,
-            multiSelectHint: methodNames.length,
-            sourceRefs: [sourceRef],
-            generatorRule: "interface.methods",
-          });
-        }
+            kind: "interface.mapping",
+            stem: "Match each method to its signature",
+            generatorRule: "interface.mapping",
+            pairs,
+            matchlessKeys,
+          })
+        );
       }
     }
   }
@@ -2885,10 +3017,14 @@ type CustomQuizCard = {
   semanticRole?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
+  pairs?: MappingPair[];
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   sourceRef?: SourceRef;
   revealStart?: number;
   revealEndBeforeChild?: number;
@@ -2941,6 +3077,7 @@ export function buildCustomQuizPayload(params: {
     order: number,
     action: "next" | "dig"
   ): CustomQuizCard => {
+    const isMapping = q.questionType === "mapping";
     const isOrderedMulti = q.questionType === "orderedMulti";
     const isMulti =
       isOrderedMulti ||
@@ -2966,16 +3103,20 @@ export function buildCustomQuizPayload(params: {
     return {
       order,
       type: q.kind,
-      text: isMulti ? snippet : q.answerLabel,
+      text: isMulti || isMapping ? snippet : q.answerLabel,
       action,
       question: q.stem,
       semanticRole: step.lesson?.semanticRole,
       generatorRule: q.generatorRule,
       difficulty: q.difficulty,
-      questionType: isMulti ? resolvedQuestionType : undefined,
+      questionType: isMapping ? "mapping" : isMulti ? resolvedQuestionType : undefined,
       multiCorrect: q.multiCorrect,
       multiSelectHint: q.multiSelectHint,
       optionPool: q.optionPool ?? q.options,
+      pairs: q.pairs,
+      matchlessKeys: q.matchlessKeys,
+      keyDistractors: q.keyDistractors,
+      valueDistractors: q.valueDistractors,
       sourceRef: cardRef,
       revealStart: q.revealStart,
       revealEndBeforeChild: q.revealEndBeforeChild,

@@ -25,10 +25,14 @@ type QuizCard = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   sourceRef?: SourceRef;
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
+  pairs?: Array<{ key: string; value: string }>;
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   llmDistractors?: string[];
   distractorPoolSize?: number;
 };
@@ -147,6 +151,11 @@ export async function POST(
 
   for (let i = 0; i < (quiz.cards || []).length; i++) {
     const card = quiz.cards[i] as QuizCard;
+    const isMapping = card.questionType === "mapping";
+    if (isMapping) {
+      skippedCount++;
+      continue;
+    }
     const isMulti =
       card.questionType === "multi" || card.questionType === "orderedMulti";
     const correctAnswers =

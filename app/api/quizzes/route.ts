@@ -26,10 +26,15 @@ type QuizCard = {
   difficulty?: "easy" | "medium" | "hard";
   sourceRef?: SourceRef;
   // multi-select (optional)
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
+  // mapping (optional)
+  pairs?: Array<{ key: string; value: string }>;
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   // future: LLM distractor pool
   llmDistractors?: string[];
 };
@@ -163,6 +168,10 @@ export async function POST(request: Request) {
       ...(Array.isArray(c.multiCorrect) ? { multiCorrect: c.multiCorrect } : {}),
       ...(typeof c.multiSelectHint === "number" ? { multiSelectHint: c.multiSelectHint } : {}),
       ...(Array.isArray(c.optionPool) ? { optionPool: c.optionPool } : {}),
+      ...(Array.isArray(c.pairs) ? { pairs: c.pairs } : {}),
+      ...(Array.isArray(c.matchlessKeys) ? { matchlessKeys: c.matchlessKeys } : {}),
+      ...(Array.isArray(c.keyDistractors) ? { keyDistractors: c.keyDistractors } : {}),
+      ...(Array.isArray(c.valueDistractors) ? { valueDistractors: c.valueDistractors } : {}),
       ...(Array.isArray(c.llmDistractors) ? { llmDistractors: c.llmDistractors } : {}),
     })) ?? [];
 

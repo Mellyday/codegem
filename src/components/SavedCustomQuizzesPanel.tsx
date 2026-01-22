@@ -23,10 +23,15 @@ export type SavedCustomQuizCardV11 = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   // multi-select (optional)
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
+  // mapping (optional)
+  pairs?: Array<{ key: string; value: string }>;
+  matchlessKeys?: string[];
+  keyDistractors?: string[];
+  valueDistractors?: string[];
   // optional LLM distractors pool
   llmDistractors?: string[];
   // optional progressive reveal anchors
@@ -106,6 +111,10 @@ async function fetchSavedCustomQuizzes(fileKey?: {
         multiSelectHint:
           typeof c.multiSelectHint === "number" ? c.multiSelectHint : undefined,
         optionPool: Array.isArray(c.optionPool) ? c.optionPool : undefined,
+        pairs: Array.isArray(c.pairs) ? c.pairs : undefined,
+        matchlessKeys: Array.isArray(c.matchlessKeys) ? c.matchlessKeys : undefined,
+        keyDistractors: Array.isArray(c.keyDistractors) ? c.keyDistractors : undefined,
+        valueDistractors: Array.isArray(c.valueDistractors) ? c.valueDistractors : undefined,
         // optional LLM distractors
         llmDistractors: Array.isArray(c.llmDistractors)
           ? c.llmDistractors
@@ -272,18 +281,30 @@ export function SavedCustomQuizzesPanel({
       cards: quiz.cards.map((c) => {
         const isMulti =
           c.questionType === "multi" || c.questionType === "orderedMulti";
-        const question =
-          c.question || (isMulti ? "Select all that apply." : "What comes next?");
-        const answer = isMulti
-          ? Array.isArray(c.multiCorrect)
-            ? c.multiCorrect
-            : []
-          : c.text;
+        const isMapping = c.questionType === "mapping";
+        const question = c.question
+          || (isMapping
+            ? "Match each key to its value."
+            : isMulti
+              ? "Select all that apply."
+              : "What comes next?");
+        const answer = isMapping
+          ? {
+            pairs: Array.isArray(c.pairs) ? c.pairs : [],
+            matchlessKeys: Array.isArray(c.matchlessKeys) ? c.matchlessKeys : [],
+            keyDistractors: Array.isArray(c.keyDistractors) ? c.keyDistractors : [],
+            valueDistractors: Array.isArray(c.valueDistractors) ? c.valueDistractors : [],
+          }
+          : isMulti
+            ? Array.isArray(c.multiCorrect)
+              ? c.multiCorrect
+              : []
+            : c.text;
         return {
           order: c.order,
           type: c.type,
           question,
-          questionType: isMulti ? "multi" : "single",
+          questionType: isMapping ? "mapping" : isMulti ? "multi" : "single",
           answer,
         };
       }),
@@ -1094,8 +1115,16 @@ export function SavedCustomQuizzesPanel({
             // Count cards with/without sufficient distractors
             const distractorStats = q.cards.reduce(
               (acc, c) => {
+                const isMapping = c.questionType === "mapping";
                 const isMulti =
                   c.questionType === "multi" || c.questionType === "orderedMulti";
+                if (isMapping) {
+                  return {
+                    total: acc.total + 1,
+                    complete: acc.complete + 1,
+                    missing: acc.missing,
+                  };
+                }
                 const required =
                   typeof c.distractorPoolSize === "number" && c.distractorPoolSize > 0
                     ? c.distractorPoolSize
@@ -1566,17 +1595,22 @@ export function SavedCustomQuizzesPanel({
                         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
-                                <div className="text-xs font-medium text-slate-500">
-                                  Card {index + 1} · {card.type}
+                                <div className="flex items-center gap-2">
+                                  <div className="text-xs font-medium text-slate-500">
+                                    Card {index + 1} · {card.type}
+                                  </div>
+                                  {(card.questionType === "multi" ||
+                                    card.questionType === "orderedMulti") && (
+                                    <span className="flex-shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
+                                      Multi
+                                    </span>
+                                  )}
+                                  {card.questionType === "mapping" && (
+                                    <span className="flex-shrink-0 rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">
+                                      Mapping
+                                    </span>
+                                  )}
                                 </div>
-                                {(card.questionType === "multi" ||
-                                  card.questionType === "orderedMulti") && (
-                                  <span className="flex-shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
-                                    Multi
-                                  </span>
-                                )}
-                              </div>
                               <div className="mt-1 font-mono text-sm text-slate-900 break-all line-clamp-2">
                                 {card.text || "No answer"}
                               </div>
