@@ -1044,10 +1044,10 @@ const buildMultiSelectQuestions = (params: {
       multiSelectHint: card.length,
       ...(suppressReveal
         ? {
-            revealStart: undefined,
-            revealEndBeforeChild: undefined,
-            revealEndAfterChild: undefined,
-          }
+          revealStart: undefined,
+          revealEndBeforeChild: undefined,
+          revealEndAfterChild: undefined,
+        }
         : {}),
     };
   });
@@ -3207,6 +3207,19 @@ const ruleObjectLiteral: Rule = ({ root, node, code, sourceRef, profile }) => {
   return qs;
 };
 
+const ruleIdentifier: Rule = ({ node, code, sourceRef }) => {
+  const identText = textForRange(node.startIndex, node.endIndex, code) || "";
+  if (!identText) return [];
+  return [
+    singleQuestion(
+      "What identifier is this?",
+      identText,
+      [sourceRef],
+      "identifier.name"
+    ),
+  ];
+};
+
 const ruleCallExpression: Rule = ({ root, node, code, profile }) => {
   const qs = buildCallQuestions(root, node, code, profile);
   const objects = findObjectLiteralNodes(node);
@@ -3286,6 +3299,7 @@ const rules: Record<string, Rule[]> = {
   expression_statement: [ruleExpressionStatement],
   object: [ruleObjectLiteral],
   call_expression: [ruleCallExpression],
+  identifier: [ruleIdentifier],
 };
 
 export function generateQuestionsV11(
@@ -4260,10 +4274,10 @@ export function buildCustomQuizPayload(params: {
         : baseRef;
     const revealProps = revealSpan
       ? {
-          revealStart: q.revealStart,
-          revealEndBeforeChild: q.revealEndBeforeChild,
-          revealEndAfterChild: q.revealEndAfterChild,
-        }
+        revealStart: q.revealStart,
+        revealEndBeforeChild: q.revealEndBeforeChild,
+        revealEndAfterChild: q.revealEndAfterChild,
+      }
       : {};
     return {
       order,
