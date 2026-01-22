@@ -20,7 +20,7 @@ type QuizCard = {
     generatorRule?: string;
     difficulty?: "easy" | "medium" | "hard";
     sourceRef?: any;
-    questionType?: "single" | "multi" | "orderedMulti" | "mapping";
+    questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
     multiCorrect?: string[];
     multiSelectHint?: number;
     optionPool?: string[];
@@ -341,9 +341,12 @@ export async function GET(request: Request) {
 
         for (const card of cards) {
             if (card.action === "dig") continue;
+            if (card.questionType === "mapping") continue;
             total++;
             const isMulti =
-                card.questionType === "multi" || card.questionType === "orderedMulti";
+                card.questionType === "multi" ||
+                card.questionType === "orderedMulti" ||
+                card.questionType === "sequence";
             const targetCount = isMulti ? 10 : 6;
             if (
                 Array.isArray(card.llmDistractors) &&

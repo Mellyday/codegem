@@ -279,12 +279,25 @@ const buildBaseMessages = (
 };
 
 const isMultiQuestion = (questionType?: DistractorRequest["questionType"]) =>
-  questionType === "multi" || questionType === "orderedMulti";
+  questionType === "multi" ||
+  questionType === "orderedMulti" ||
+  questionType === "sequence";
+
+const describeQuestionType = (questionType?: DistractorRequest["questionType"]) => {
+  if (questionType === "sequence") {
+    return "sequence ordering (select items in order)";
+  }
+  if (questionType === "orderedMulti") {
+    return "multi-select (select in order)";
+  }
+  if (questionType === "multi") {
+    return "multi-select (select several answers)";
+  }
+  return "single-answer multiple choice";
+};
 
 const buildCardPrompt = (req: DistractorRequest, target: number) => {
-  const questionType = isMultiQuestion(req.questionType)
-    ? "multi-select (select several answers)"
-    : "single-answer multiple choice";
+  const questionType = describeQuestionType(req.questionType);
   const payload = {
     question: req.question,
     correctAnswers: req.correctAnswers,
@@ -327,7 +340,7 @@ const buildBatchPrompt = (
     const targetCount = isMulti ? multiTarget : mcqTarget;
     return {
       index: i,
-      questionType: isMulti ? "multi-select (select N answers)" : "single-answer MCQ",
+      questionType: describeQuestionType(req.questionType),
       distractorCount: targetCount,
       question: req.question,
       correctAnswers: req.correctAnswers,
@@ -341,7 +354,7 @@ const buildBatchPrompt = (
     `Generate incorrect distractor options for ${cards.length} quiz questions.`,
     "",
     "For each question:",
-    "- multi-select questions need 10 distractors (used in 'select N out of 10' format)",
+    "- multi-select and sequence questions need 10 distractors (used in 'select N out of 10' format)",
     "- single-answer MCQ questions need 6 distractors",
     "- Do NOT repeat the correct answers",
     "- If existingDistractors are provided, do NOT repeat them",

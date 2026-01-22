@@ -23,7 +23,7 @@ export type SavedCustomQuizCardV11 = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   // multi-select (optional)
-  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -279,13 +279,16 @@ export function SavedCustomQuizzesPanel({
       profile: quiz.profile,
       root: quiz.root,
       cards: quiz.cards.map((c) => {
-        const isMulti =
-          c.questionType === "multi" || c.questionType === "orderedMulti";
+        const isOrderedMulti = c.questionType === "orderedMulti";
+        const isMulti = c.questionType === "multi" || isOrderedMulti;
+        const isSequence = c.questionType === "sequence";
         const isMapping = c.questionType === "mapping";
         const question = c.question
           || (isMapping
             ? "Match each key to its value."
-            : isMulti
+            : isSequence
+              ? "Build the sequence in order."
+              : isMulti
               ? "Select all that apply."
               : "What comes next?");
         const answer = isMapping
@@ -295,7 +298,7 @@ export function SavedCustomQuizzesPanel({
             keyDistractors: Array.isArray(c.keyDistractors) ? c.keyDistractors : [],
             valueDistractors: Array.isArray(c.valueDistractors) ? c.valueDistractors : [],
           }
-          : isMulti
+          : isSequence || isMulti
             ? Array.isArray(c.multiCorrect)
               ? c.multiCorrect
               : []
@@ -304,7 +307,7 @@ export function SavedCustomQuizzesPanel({
           order: c.order,
           type: c.type,
           question,
-          questionType: isMapping ? "mapping" : isMulti ? "multi" : "single",
+          questionType: isMapping ? "mapping" : isSequence ? "sequence" : isMulti ? "multi" : "single",
           answer,
         };
       }),
@@ -1117,7 +1120,9 @@ export function SavedCustomQuizzesPanel({
               (acc, c) => {
                 const isMapping = c.questionType === "mapping";
                 const isMulti =
-                  c.questionType === "multi" || c.questionType === "orderedMulti";
+                  c.questionType === "multi" ||
+                  c.questionType === "orderedMulti" ||
+                  c.questionType === "sequence";
                 if (isMapping) {
                   return {
                     total: acc.total + 1,
@@ -1600,7 +1605,8 @@ export function SavedCustomQuizzesPanel({
                                     Card {index + 1} · {card.type}
                                   </div>
                                   {(card.questionType === "multi" ||
-                                    card.questionType === "orderedMulti") && (
+                                    card.questionType === "orderedMulti" ||
+                                    card.questionType === "sequence") && (
                                     <span className="flex-shrink-0 rounded-full bg-blue-100 px-2 py-0.5 text-xs font-medium text-blue-700">
                                       Multi
                                     </span>
@@ -1615,7 +1621,8 @@ export function SavedCustomQuizzesPanel({
                                 {card.text || "No answer"}
                               </div>
                               {(card.questionType === "multi" ||
-                                card.questionType === "orderedMulti") &&
+                                card.questionType === "orderedMulti" ||
+                                card.questionType === "sequence") &&
                                 card.multiCorrect &&
                                 card.multiCorrect.length > 1 && (
                                 <div className="mt-1 text-xs text-slate-500">

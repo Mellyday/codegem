@@ -42,7 +42,7 @@ export type QuizQuestion = {
   sourceRefs: SourceRef[];
   generatorRule: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
   multiCorrect?: string[];
   optionPool?: string[];
   multiSelectHint?: number;

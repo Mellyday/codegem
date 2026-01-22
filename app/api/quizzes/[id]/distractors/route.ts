@@ -21,7 +21,7 @@ type QuizCard = {
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
   sourceRef?: SourceRef;
-  questionType?: "single" | "multi" | "orderedMulti" | "mapping";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
@@ -113,7 +113,9 @@ export async function POST(
       continue;
     }
     const isMulti =
-      card.questionType === "multi" || card.questionType === "orderedMulti";
+      card.questionType === "multi" ||
+      card.questionType === "orderedMulti" ||
+      card.questionType === "sequence";
     const correctAnswers =
       isMulti
         ? (Array.isArray(card.multiCorrect)
