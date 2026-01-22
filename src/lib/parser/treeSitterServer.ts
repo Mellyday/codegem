@@ -113,23 +113,36 @@ const loadLanguage = async (config: LanguageConfig) => {
   return config.language;
 };
 
+const EXTRA_TOKEN_TYPES = new Set(["&&", "||", "??"]);
+
 const serialiseNode = (
   node: ParserType.SyntaxNode,
   parent?: ParserType.SyntaxNode
 ): TreeSitterAstNode => {
-  const toSerializableNamedChildren = (items: (ParserType.SyntaxNode | null)[]) =>
-    items
-      .filter((item): item is ParserType.SyntaxNode => item !== null)
-      .map((child) => {
-        // In native tree-sitter, fieldNameForChild expects the index within all children.
-        const all = node.children;
-        const childIdx = all.findIndex((c) => c.id === child.id);
-        const fieldName = childIdx >= 0 ? node.fieldNameForChild(childIdx) ?? undefined : undefined;
-        const serialised = serialiseNode(child, node);
-        return fieldName ? { ...serialised, fieldName } : serialised;
-      });
+  const children: TreeSitterAstNode[] = [];
+  const childMap = new Map<number, TreeSitterAstNode>();
+  const fieldNamesById = new Map<number, string | undefined>();
 
-  const namedChildren = toSerializableNamedChildren(node.namedChildren);
+  node.children.forEach((child, index) => {
+    if (!child) return;
+    if (!child.isNamed && !EXTRA_TOKEN_TYPES.has(child.type)) return;
+    const fieldName = node.fieldNameForChild(index) ?? undefined;
+    const serialised = serialiseNode(child, node);
+    const withField = fieldName ? { ...serialised, fieldName } : serialised;
+    children.push(withField);
+    childMap.set(child.id, withField);
+    fieldNamesById.set(child.id, fieldName);
+  });
+
+  const namedChildren = node.namedChildren
+    .filter((item): item is ParserType.SyntaxNode => item !== null)
+    .map((child) => {
+      const existing = childMap.get(child.id);
+      if (existing) return existing;
+      const serialised = serialiseNode(child, node);
+      const fieldName = fieldNamesById.get(child.id);
+      return fieldName ? { ...serialised, fieldName } : serialised;
+    });
   const leafText = node.childCount === 0 ? node.text : undefined;
 
   return {
@@ -140,7 +153,7 @@ const serialiseNode = (
     startIndex: node.startIndex,
     endIndex: node.endIndex,
     text: leafText?.length ? leafText : undefined,
-    children: [],
+    children,
     namedChildren,
   };
 };

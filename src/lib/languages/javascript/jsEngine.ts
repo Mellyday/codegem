@@ -2377,6 +2377,28 @@ const isEmptyRenderExpression = (
   return false;
 };
 
+const OP_TOKENS = new Set(["&&", "||", "??"]);
+
+const operatorNodeForBinaryOrLogical = (
+  expr: TreeSitterAstNode
+): TreeSitterAstNode | undefined => {
+  const byField = childByField(expr, "operator");
+  if (byField) return byField;
+  const kids = expr.children || [];
+  return kids.find((c) => OP_TOKENS.has(c.type));
+};
+
+const operatorTextForBinaryOrLogical = (
+  expr: TreeSitterAstNode,
+  code: string | undefined
+): string | undefined => {
+  if (!code) return undefined;
+  const opNode = operatorNodeForBinaryOrLogical(expr);
+  if (!opNode) return undefined;
+  const text = textForRange(opNode.startIndex, opNode.endIndex, code) || opNode.type;
+  return OP_TOKENS.has(text) ? text : undefined;
+};
+
 const binaryOperatorText = (
   expr: TreeSitterAstNode,
   code: string | undefined
@@ -2384,18 +2406,7 @@ const binaryOperatorText = (
   if (expr.type !== "binary_expression" && expr.type !== "logical_expression") {
     return undefined;
   }
-  if (!code) return undefined;
-  const left = childByField(expr, "left") || (expr.namedChildren || [])[0];
-  const right = childByField(expr, "right") || (expr.namedChildren || [])[1];
-  const opRe = /&&|\|\||\?\?/;
-  if (left && right) {
-    const between = code.slice(left.endIndex, right.startIndex);
-    const m = between.match(opRe);
-    return m ? m[0] : undefined;
-  }
-  const snippet = textForRange(expr.startIndex, expr.endIndex, code) || "";
-  const m = snippet.match(opRe);
-  return m ? m[0] : undefined;
+  return operatorTextForBinaryOrLogical(expr, code);
 };
 
 const splitLogicalConditionAtoms = (
@@ -2456,7 +2467,7 @@ const describeJsxExpressionLabel = (
     return "EXPR(unknown)";
   }
 
-  if (expr.type === "binary_expression") {
+  if (expr.type === "binary_expression" || expr.type === "logical_expression") {
     const op = binaryOperatorText(expr, code);
     if (op === "&&") {
       const right = childByField(expr, "right") || (expr.namedChildren || [])[1];

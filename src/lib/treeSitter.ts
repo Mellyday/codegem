@@ -231,26 +231,38 @@ const loadLanguage = async (config: LanguageConfig) => {
   return promise;
 };
 
+const EXTRA_TOKEN_TYPES = new Set(["&&", "||", "??"]);
+
 const serialiseNode = (
   node: TreeSitterNode,
   parent?: TreeSitterNode
 ): TreeSitterAstNode => {
-  // Only serialise named children to avoid duplicating the tree structure
-  // (namedChildren is a subset of children). Rendering both massively inflates
-  // the AST and can freeze the UI.
-  const toSerializableNamedChildren = (items: (TreeSitterNode | null)[]) =>
-    items
-      .filter((item): item is TreeSitterNode => item !== null)
-      .map((child, index) => {
-        // Attempt to retrieve the field name for each named child relative to this node
-        // Using fieldNameForNamedChild is O(1) and aligns with namedChildren iteration
-        const fieldName = node.fieldNameForNamedChild(index) ?? undefined;
-        const serialised = serialiseNode(child, node);
-        // Attach field name if available
-        return fieldName ? { ...serialised, fieldName } : serialised;
-      });
+  // Include named children plus a small set of operator tokens to keep
+  // the AST lean while still enabling token-level checks.
+  const children: TreeSitterAstNode[] = [];
+  const childMap = new Map<number, TreeSitterAstNode>();
+  const fieldNamesById = new Map<number, string | undefined>();
 
-  const namedChildren = toSerializableNamedChildren(node.namedChildren);
+  node.children.forEach((child, index) => {
+    if (!child) return;
+    if (!child.isNamed && !EXTRA_TOKEN_TYPES.has(child.type)) return;
+    const fieldName = node.fieldNameForChild(index) ?? undefined;
+    const serialised = serialiseNode(child, node);
+    const withField = fieldName ? { ...serialised, fieldName } : serialised;
+    children.push(withField);
+    childMap.set(child.id, withField);
+    fieldNamesById.set(child.id, fieldName);
+  });
+
+  const namedChildren = node.namedChildren
+    .filter((item): item is TreeSitterNode => item !== null)
+    .map((child) => {
+      const existing = childMap.get(child.id);
+      if (existing) return existing;
+      const serialised = serialiseNode(child, node);
+      const fieldName = fieldNamesById.get(child.id);
+      return fieldName ? { ...serialised, fieldName } : serialised;
+    });
 
   const leafText = node.childCount === 0 ? node.text : undefined;
 
@@ -262,8 +274,7 @@ const serialiseNode = (
     startIndex: node.startIndex,
     endIndex: node.endIndex,
     text: leafText?.length ? leafText : undefined,
-    // Expose only named children; keep `children` empty to maintain shape
-    children: [],
+    children,
     namedChildren,
   };
 };
