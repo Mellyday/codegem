@@ -4087,7 +4087,7 @@ type CustomQuizCard = {
   semanticRole?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti";
+  questionType?: "single" | "multi" | "orderedMulti" | "sequence" | "mapping";
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];
