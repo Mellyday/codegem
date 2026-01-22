@@ -1,4 +1,13 @@
 import type { TreeSitterAstNode } from "../../treeSitter";
+import type {
+  EngineOptions,
+  EngineStep,
+  LessonHistoryItem,
+  MappingPair,
+  QuestionType,
+  QuizQuestion,
+  SourceRef,
+} from "../engineTypes";
 import {
   childrenByField,
   firstChildOfType,
@@ -14,63 +23,14 @@ import { randomString } from "../../utils";
 // Types
 // ============================================================================
 
-export type EngineOptions = {
-  profile: "shallow" | "deep";
-  includeNames?: boolean;
-  generateQuiz?: boolean;
-};
-
-export type SourceRef = {
-  nodeType: string;
-  start: number;
-  end: number;
-  path: number[];
-  fieldName?: string;
-  textHash?: string;
-  preview?: string;
-};
-
-export type MappingPair = {
-  key: string;
-  value: string;
-};
-
-export type QuizQuestion = {
-  kind: string;
-  stem: string;
-  answerLabel: string;
-  options: string[];
-  sourceRefs: SourceRef[];
-  generatorRule: string;
-  difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti" | "mapping" | "sequence";
-  multiCorrect?: string[];
-  optionPool?: string[];
-  multiSelectHint?: number;
-  pairs?: MappingPair[];
-  matchlessKeys?: string[];
-  keyDistractors?: string[];
-  valueDistractors?: string[];
-  revealStart?: number;
-  revealEndBeforeChild?: number;
-  revealEndAfterChild?: number;
-  distractorPoolSize?: number;
-};
-
-export type EngineStep = {
-  id: string;
-  node: TreeSitterAstNode & { isVirtual?: boolean };
-  displaySpan?: { start: number; end: number };
-  lesson?: {
-    prompt: string;
-    semanticRole: string;
-    isDigable: boolean;
-    childSteps?: EngineStep[];
-  };
-  quiz?: {
-    questions: QuizQuestion[];
-  };
-};
+export type {
+  EngineOptions,
+  EngineStep,
+  LessonHistoryItem,
+  MappingPair,
+  QuizQuestion,
+  SourceRef,
+} from "../engineTypes";
 
 // ============================================================================
 // Helpers
@@ -3006,8 +2966,6 @@ export function maskAndAnswerForStep(
   return { masks: [], answerText: textForNode(step.node, code) };
 }
 
-export type LessonHistoryItem = EngineStep & { action?: "next" | "dig" };
-
 type CustomQuizCard = {
   order: number;
   type: string;
@@ -3017,7 +2975,7 @@ type CustomQuizCard = {
   semanticRole?: string;
   generatorRule?: string;
   difficulty?: "easy" | "medium" | "hard";
-  questionType?: "single" | "multi" | "orderedMulti" | "mapping" | "sequence";
+  questionType?: QuestionType;
   multiCorrect?: string[];
   multiSelectHint?: number;
   optionPool?: string[];

@@ -1,4 +1,9 @@
 import type { TreeSitterAstNode } from "../treeSitter";
+import type {
+  EngineOptions,
+  EngineStep,
+  LessonHistoryItem,
+} from "./engineTypes";
 import * as pyEngine from "./python/pyEngine";
 import * as pyCuration from "./python/pyCuration";
 import * as rubyEngine from "./ruby/rubyEngine";
@@ -12,9 +17,7 @@ import * as javaCuration from "./java/javaCuration";
 import * as jsEngine from "./javascript/jsEngine";
 import * as jsCuration from "./javascript/jsCuration";
 
-export type EngineStep = pyEngine.EngineStep;
-export type LessonHistoryItem = pyEngine.LessonHistoryItem;
-export type EngineOptions = pyEngine.EngineOptions;
+export type { EngineOptions, EngineStep, LessonHistoryItem } from "./engineTypes";
 
 export type LanguageEngine = {
   generateEngineSteps: (
