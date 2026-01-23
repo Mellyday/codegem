@@ -94,6 +94,16 @@ export async function parseAndPersistRepo(
     const now = toDbDate(new Date());
 
     try {
+      try {
+        const stats = await fs.stat(absPath);
+        if (isFileTooLarge(stats.size)) {
+          progress.skippedFiles += 1;
+          continue;
+        }
+      } catch {
+        // If stat fails, try to continue with read
+      }
+
       const sourceCode = await fs.readFile(absPath, "utf8");
       const languageId = getLanguageIdForExtension(ext) ?? "unknown";
 
