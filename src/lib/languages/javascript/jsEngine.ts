@@ -339,9 +339,14 @@ const buildMultiSelectOptionPool = (
   try {
     const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
     const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+    const text = code ?? "";
     const safeStart = Math.max(0, spanStart);
-    const safeEnd = Math.min(spanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS);
-    const snippet = (code || "").slice(safeStart, safeEnd);
+    const safeSpanEnd = Math.max(safeStart, spanEnd);
+    const safeEnd = Math.min(
+      text.length,
+      Math.min(safeSpanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS)
+    );
+    const snippet = text.slice(safeStart, safeEnd);
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) idPool.push(m[0]);
     while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
@@ -393,9 +398,14 @@ const buildKeyGroupOptionPool = (
   try {
     const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
     const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
+    const text = code ?? "";
     const safeStart = Math.max(0, spanStart);
-    const safeEnd = Math.min(spanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS);
-    const snippet = (code || "").slice(safeStart, safeEnd);
+    const safeSpanEnd = Math.max(safeStart, spanEnd);
+    const safeEnd = Math.min(
+      text.length,
+      Math.min(safeSpanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS)
+    );
+    const snippet = text.slice(safeStart, safeEnd);
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) pushCandidate(m[0]);
     while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
@@ -546,7 +556,7 @@ const findObjectLiteralNodes = (
   const cached = objectLiteralCache.get(node);
   const cacheKey = descendIntoBodies ? "deep" : "shallow";
   const cachedValue = cached?.[cacheKey];
-  if (cachedValue) return cachedValue;
+  if (cachedValue) return cachedValue.slice();
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
@@ -664,7 +674,7 @@ const callExpressionCache = new WeakMap<TreeSitterAstNode, TreeSitterAstNode[]>(
 
 const findCallExpressionNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
   const cached = callExpressionCache.get(node);
-  if (cached) return cached;
+  if (cached) return cached.slice();
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
@@ -689,7 +699,7 @@ const outerJsxCache = new WeakMap<TreeSitterAstNode, TreeSitterAstNode[]>();
 
 const findOuterJsxNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
   const cached = outerJsxCache.get(node);
-  if (cached) return cached;
+  if (cached) return cached.slice();
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
