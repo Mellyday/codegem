@@ -8,6 +8,11 @@ const GitHubFetcher = dynamic(
     { ssr: false }
 );
 
+const BackgroundImporter = dynamic(
+    () => import("@/src/components/BackgroundImporter"),
+    { ssr: false }
+);
+
 const FetchLogsPanel = dynamic(
     () => import("@/src/components/FetchLogsPanel"),
     { ssr: false }
@@ -17,6 +22,7 @@ export default function GitHubImportSection() {
     return (
         <div className="space-y-6">
             <GitHubFetcher />
+            <BackgroundImporter />
             <FetchLogsPanel />
         </div>
     );

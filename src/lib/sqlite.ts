@@ -160,6 +160,32 @@ function initSchema(database: Database.Database): void {
     );
 
     CREATE INDEX IF NOT EXISTS idx_runs_user_quiz ON distractor_runs(user_id, quiz_id);
+
+    -- import_jobs: Background import job queue for large repositories
+    CREATE TABLE IF NOT EXISTS import_jobs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      url TEXT NOT NULL,
+      owner TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'pending' 
+        CHECK (status IN ('pending', 'cloning', 'processing', 'complete', 'failed', 'cancelled')),
+      clone_dir TEXT,                          -- temp directory path for cleanup
+      repo_id TEXT,                            -- created repo ID once processing starts
+      total_files INTEGER DEFAULT 0,
+      parsed_files INTEGER DEFAULT 0,
+      failed_files INTEGER DEFAULT 0,
+      skipped_files INTEGER DEFAULT 0,
+      current_file TEXT,                       -- file currently being processed
+      current_index INTEGER DEFAULT 0,
+      error TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      started_at TEXT,
+      completed_at TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_import_jobs_user_status ON import_jobs(user_id, status, updated_at);
   `);
 }
 

@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { getDb, generateId, toDbDate, toJson } from "../sqlite";
 import { parseWithTreeSitter, canParseWithTreeSitter, type TreeSitterAstNode } from "../parser/treeSitterServer";
-import { IMPORT_LIMITS, isTooManyFiles, isFileTooLarge, formatBytes } from "./importLimits";
+import { STREAMING_LIMITS, isTooManyFiles, isFileTooLarge, formatBytes } from "./importLimits";
 import type Database from "better-sqlite3";
 
 /**
@@ -193,7 +193,7 @@ export async function parseAndPersistRepoWithProgress(
 
   // Check file count limit
   if (isTooManyFiles(parsableFiles.length)) {
-    const message = `Too many files: ${parsableFiles.length} exceeds ${IMPORT_LIMITS.MAX_FILES} limit. Consider importing a smaller subset.`;
+    const message = `Too many files: ${parsableFiles.length} exceeds ${STREAMING_LIMITS.MAX_FILES} limit. Consider importing a smaller subset.`;
     onProgress({ type: 'limit_exceeded', limitType: 'files', message });
     throw new Error(message);
   }
@@ -230,8 +230,8 @@ export async function parseAndPersistRepoWithProgress(
     }
 
     // Yield between batches to prevent blocking
-    if (i > 0 && i % IMPORT_LIMITS.BATCH_SIZE === 0) {
-      await new Promise(resolve => setTimeout(resolve, IMPORT_LIMITS.BATCH_DELAY_MS));
+    if (i > 0 && i % STREAMING_LIMITS.BATCH_SIZE === 0) {
+      await new Promise(resolve => setTimeout(resolve, STREAMING_LIMITS.BATCH_DELAY_MS));
     }
 
     const relPath = parsableFiles[i];
@@ -246,7 +246,7 @@ export async function parseAndPersistRepoWithProgress(
         onProgress({
           type: 'skipped',
           file: relPath,
-          reason: `File too large: ${formatBytes(stats.size)} exceeds ${formatBytes(IMPORT_LIMITS.MAX_FILE_SIZE_KB * 1024)} limit`,
+          reason: `File too large: ${formatBytes(stats.size)} exceeds ${formatBytes(STREAMING_LIMITS.MAX_FILE_SIZE_KB * 1024)} limit`,
         });
         progress.skippedFiles += 1;
         continue;

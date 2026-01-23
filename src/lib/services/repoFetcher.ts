@@ -2,7 +2,7 @@ import os from "node:os";
 import path from "node:path";
 import fs from "node:fs/promises";
 import simpleGit from "simple-git";
-import { IMPORT_LIMITS, isRepoTooLarge, formatBytes } from "./importLimits";
+import { STREAMING_LIMITS, isRepoTooLarge, formatBytes } from "./importLimits";
 
 export type ParsedGithub = {
   owner: string;
@@ -88,7 +88,7 @@ export async function cloneGithubRepo(url: string): Promise<CloneResult> {
 
   if (!isPrivate && sizeKB > 0 && isRepoTooLarge(sizeKB)) {
     const actualSize = formatBytes(sizeKB * 1024);
-    const maxSize = formatBytes(IMPORT_LIMITS.MAX_REPO_SIZE_MB * 1024 * 1024);
+    const maxSize = formatBytes(STREAMING_LIMITS.MAX_REPO_SIZE_MB * 1024 * 1024);
     throw new Error(
       `Repository too large: ${actualSize} exceeds ${maxSize} limit. ` +
       `Consider importing a smaller subset or fork.`
