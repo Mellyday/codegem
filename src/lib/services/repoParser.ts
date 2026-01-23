@@ -2,12 +2,24 @@ import path from "node:path";
 import fs from "node:fs/promises";
 import { getDb, generateId, toDbDate, toJson } from "../sqlite";
 import { parseWithTreeSitter, canParseWithTreeSitter, type TreeSitterAstNode } from "../parser/treeSitterServer";
+import { IMPORT_LIMITS, isTooManyFiles, isFileTooLarge, formatBytes } from "./importLimits";
 import type Database from "better-sqlite3";
 
+/**
+ * Progress tracking for repository parsing.
+ * 
+ * Invariant: totalFiles === parsedFiles + failedFiles + skippedFiles
+ * (when processing completes without abort)
+ */
 export type RepoProgress = {
+  /** Number of parsable files discovered */
   totalFiles: number;
+  /** Successfully parsed and stored */
   parsedFiles: number;
+  /** Failed to parse (errors) */
   failedFiles: number;
+  /** Intentionally skipped (e.g., too large) */
+  skippedFiles: number;
 };
 
 const isHidden = (p: string) => /(^|\/)\./.test(p);
@@ -47,7 +59,7 @@ export async function parseAndPersistRepo(
   }
 ): Promise<RepoProgress> {
   const { userId, repoId, url, owner, name, rootDir } = params;
-  const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0 };
+  const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0, skippedFiles: 0 };
 
   // First pass: count parseable files
   const allPaths: string[] = [];
@@ -134,7 +146,10 @@ export type ProgressEvent =
   | { type: 'discovered'; files: string[]; ignoredFiles: string[] }
   | { type: 'processing'; file: string; index: number; total: number }
   | { type: 'ignored'; file: string; reason: string }
-  | { type: 'parsed'; file: string; success: boolean; error?: string };
+  | { type: 'parsed'; file: string; success: boolean; error?: string }
+  | { type: 'limit_exceeded'; limitType: 'files' | 'file_size'; message: string }
+  | { type: 'skipped'; file: string; reason: string }
+  | { type: 'aborted' };
 
 type WithProgressParams = {
   userId: string;
@@ -144,14 +159,15 @@ type WithProgressParams = {
   name: string;
   rootDir: string;
   onProgress: (event: ProgressEvent) => void;
+  abortSignal?: { aborted: boolean };
 };
 
 export async function parseAndPersistRepoWithProgress(
   db: Database.Database,
   params: WithProgressParams
 ): Promise<RepoProgress> {
-  const { userId, repoId, url, owner, name, rootDir, onProgress } = params;
-  const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0 };
+  const { userId, repoId, url, owner, name, rootDir, onProgress, abortSignal } = params;
+  const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0, skippedFiles: 0 };
 
   // Collect all files and categorize them
   onProgress({ type: 'scanning' });
@@ -174,6 +190,13 @@ export async function parseAndPersistRepoWithProgress(
     files: parsableFiles,
     ignoredFiles: ignoredFiles,
   });
+
+  // Check file count limit
+  if (isTooManyFiles(parsableFiles.length)) {
+    const message = `Too many files: ${parsableFiles.length} exceeds ${IMPORT_LIMITS.MAX_FILES} limit. Consider importing a smaller subset.`;
+    onProgress({ type: 'limit_exceeded', limitType: 'files', message });
+    throw new Error(message);
+  }
 
   // Emit ignored files
   for (const ignoredPath of ignoredFiles) {
@@ -198,12 +221,39 @@ export async function parseAndPersistRepoWithProgress(
     )
   `);
 
-  // Process parsable files
+  // Process parsable files with batch yielding
   for (let i = 0; i < parsableFiles.length; i++) {
+    // Check for abort at batch boundaries
+    if (abortSignal?.aborted) {
+      onProgress({ type: 'aborted' });
+      break;
+    }
+
+    // Yield between batches to prevent blocking
+    if (i > 0 && i % IMPORT_LIMITS.BATCH_SIZE === 0) {
+      await new Promise(resolve => setTimeout(resolve, IMPORT_LIMITS.BATCH_DELAY_MS));
+    }
+
     const relPath = parsableFiles[i];
     const absPath = path.join(rootDir, relPath);
     const ext = fileExtension(absPath);
     const now = toDbDate(new Date());
+
+    // Check file size before reading
+    try {
+      const stats = await fs.stat(absPath);
+      if (isFileTooLarge(stats.size)) {
+        onProgress({
+          type: 'skipped',
+          file: relPath,
+          reason: `File too large: ${formatBytes(stats.size)} exceeds ${formatBytes(IMPORT_LIMITS.MAX_FILE_SIZE_KB * 1024)} limit`,
+        });
+        progress.skippedFiles += 1;
+        continue;
+      }
+    } catch {
+      // If stat fails, try to continue with read
+    }
 
     onProgress({
       type: 'processing',
