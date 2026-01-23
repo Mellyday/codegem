@@ -30,7 +30,8 @@ type WorkerResponse =
   | { type: "result"; progress: RepoProgress }
   | { type: "error"; error: string };
 
-if (!parentPort) {
+const port = parentPort;
+if (!port) {
   throw new Error("repoImportWorker must be run in a worker thread");
 }
 
@@ -49,24 +50,24 @@ const runImport = async (message: StartMessage) => {
       const progress = await parseAndPersistRepoWithProgress(db, {
         ...message.params,
         onProgress: (event) =>
-          parentPort?.postMessage({ type: "progress", event } satisfies WorkerResponse),
+          port.postMessage({ type: "progress", event } satisfies WorkerResponse),
         abortSignal,
       });
-      parentPort.postMessage({ type: "result", progress } satisfies WorkerResponse);
+      port.postMessage({ type: "result", progress } satisfies WorkerResponse);
       return;
     }
 
     const progress = await parseAndPersistRepo(db, message.params);
-    parentPort.postMessage({ type: "result", progress } satisfies WorkerResponse);
+    port.postMessage({ type: "result", progress } satisfies WorkerResponse);
   } catch (err) {
-    parentPort.postMessage({
+    port.postMessage({
       type: "error",
       error: String(err),
     } satisfies WorkerResponse);
   }
 };
 
-parentPort.on("message", (message: WorkerMessage) => {
+port.on("message", (message: WorkerMessage) => {
   if (message.type === "cancel") {
     if (abortSignal) abortSignal.aborted = true;
     return;
@@ -74,7 +75,7 @@ parentPort.on("message", (message: WorkerMessage) => {
 
   if (message.type === "start") {
     runImport(message).catch((err) => {
-      parentPort?.postMessage({
+      port.postMessage({
         type: "error",
         error: String(err),
       } satisfies WorkerResponse);
