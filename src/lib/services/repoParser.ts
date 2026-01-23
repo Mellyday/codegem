@@ -88,77 +88,79 @@ export async function parseAndPersistRepo(
   const rows: any[] = [];
   const batchSize = STREAMING_LIMITS.BATCH_SIZE;
 
-  for (const absPath of allPaths) {
-    const ext = fileExtension(absPath);
-    const relPath = relativePath(rootDir, absPath);
-    const now = toDbDate(new Date());
+  try {
+    for (const absPath of allPaths) {
+      const ext = fileExtension(absPath);
+      const relPath = relativePath(rootDir, absPath);
+      const now = toDbDate(new Date());
 
-    try {
       try {
-        const stats = await fs.stat(absPath);
-        if (isFileTooLarge(stats.size)) {
-          progress.skippedFiles += 1;
-          continue;
+        try {
+          const stats = await fs.stat(absPath);
+          if (isFileTooLarge(stats.size)) {
+            progress.skippedFiles += 1;
+            continue;
+          }
+        } catch {
+          // If stat fails, try to continue with read
         }
-      } catch {
-        // If stat fails, try to continue with read
+
+        const sourceCode = await fs.readFile(absPath, "utf8");
+        const languageId = getLanguageIdForExtension(ext) ?? "unknown";
+
+        rows.push([
+          generateId(),
+          userId,
+          repoId,
+          null, // projectId
+          url,
+          owner,
+          name,
+          relPath,
+          languageId,
+          ext,
+          sourceCode,
+          null, // ast
+          "success",
+          null,
+          Buffer.byteLength(sourceCode, "utf8"),
+          now,
+          now,
+        ]);
+        progress.parsedFiles += 1;
+      } catch (err) {
+        progress.failedFiles += 1;
+        const sourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
+
+        rows.push([
+          generateId(),
+          userId,
+          repoId,
+          null, // projectId
+          url,
+          owner,
+          name,
+          relPath,
+          "unknown",
+          ext,
+          sourceCode,
+          null,
+          "failed",
+          String(err),
+          Buffer.byteLength(sourceCode, "utf8"),
+          now,
+          now,
+        ]);
       }
 
-      const sourceCode = await fs.readFile(absPath, "utf8");
-      const languageId = getLanguageIdForExtension(ext) ?? "unknown";
-
-      rows.push([
-        generateId(),
-        userId,
-        repoId,
-        null, // projectId
-        url,
-        owner,
-        name,
-        relPath,
-        languageId,
-        ext,
-        sourceCode,
-        null, // ast
-        "success",
-        null,
-        Buffer.byteLength(sourceCode, "utf8"),
-        now,
-        now,
-      ]);
-      progress.parsedFiles += 1;
-    } catch (err) {
-      progress.failedFiles += 1;
-      const sourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
-
-      rows.push([
-        generateId(),
-        userId,
-        repoId,
-        null, // projectId
-        url,
-        owner,
-        name,
-        relPath,
-        "unknown",
-        ext,
-        sourceCode,
-        null,
-        "failed",
-        String(err),
-        Buffer.byteLength(sourceCode, "utf8"),
-        now,
-        now,
-      ]);
+      if (rows.length >= batchSize) {
+        insertMany(rows);
+        rows.length = 0;
+      }
     }
-
-    if (rows.length >= batchSize) {
-      insertMany(rows);
-      rows.length = 0;
-    }
+  } finally {
+    if (rows.length) insertMany(rows);
   }
-
-  if (rows.length) insertMany(rows);
 
   return progress;
 }

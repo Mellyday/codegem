@@ -116,6 +116,32 @@ const getParentInfo = (root: TreeSitterAstNode, node: TreeSitterAstNode) => {
   return map.get(node);
 };
 
+const findPathBySpan = (
+  root: TreeSitterAstNode,
+  target: TreeSitterAstNode
+): number[] => {
+  const stack: Array<{ node: TreeSitterAstNode; path: number[] }> = [
+    { node: root, path: [] },
+  ];
+  while (stack.length) {
+    const current = stack.pop();
+    if (!current) continue;
+    const { node, path } = current;
+    if (
+      node.startIndex === target.startIndex &&
+      node.endIndex === target.endIndex &&
+      node.type === target.type
+    ) {
+      return path;
+    }
+    const children = node.namedChildren || [];
+    for (let i = children.length - 1; i >= 0; i--) {
+      stack.push({ node: children[i], path: path.concat(i) });
+    }
+  }
+  return [];
+};
+
 export const computeAstPath = (
   root: TreeSitterAstNode,
   target: TreeSitterAstNode
@@ -138,9 +164,15 @@ export const computeAstPath = (
     cur = info.parent;
   }
 
-  const finalPath = cur === root ? path.reverse() : [];
-  rootCache.set(target, finalPath);
-  return finalPath;
+  if (cur === root) {
+    const finalPath = path.reverse();
+    rootCache.set(target, finalPath);
+    return finalPath;
+  }
+
+  const fallbackPath = findPathBySpan(root, target);
+  rootCache.set(target, fallbackPath);
+  return fallbackPath;
 };
 
 const parentOf = (root: TreeSitterAstNode, node: TreeSitterAstNode) =>

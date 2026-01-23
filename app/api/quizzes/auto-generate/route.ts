@@ -2,11 +2,10 @@ export const runtime = "nodejs";
 import { NextResponse } from "next/server";
 import { getDb, generateId, toDbDate, toJson, fromJson } from "../../../../src/lib/sqlite";
 import { auth } from "@clerk/nextjs/server";
-import { getFileAtPath } from "../../../../src/server/browse";
 import {
-    parseWithTreeSitter,
     canParseWithTreeSitter,
 } from "../../../../src/lib/parser/treeSitterServer";
+import { getAstForFileId } from "../../../../src/lib/services/astResolver";
 import { getLanguageToolsForFileName } from "../../../../src/lib/languages/registry";
 
 const DEV_USER_ID = "dev-push-project";
@@ -135,25 +134,25 @@ export async function POST(request: Request) {
             });
         }
 
-        // Fetch file content
-        const file = await getFileAtPath({ kind, id, path });
-        if (!file) {
+        const astResult = await getAstForFileId({
+            kind,
+            fileId,
+            persist: false,
+        });
+        if (!astResult) {
             return NextResponse.json(
                 { error: "Could not fetch file content" },
                 { status: 404 }
             );
         }
-
-        // Parse AST
-        const parseResult = await parseWithTreeSitter(file.sourceCode, ext);
-        const root = parseResult.ast;
+        const { ast: root, sourceCode } = astResult;
 
         // Get language tools and generate quiz payload
         const languageTools = getLanguageToolsForFileName(path);
         const { engine } = languageTools;
 
         // Generate shallow quiz steps
-        const steps = engine.generateEngineSteps(root, root, file.sourceCode, {
+        const steps = engine.generateEngineSteps(root, root, sourceCode, {
             profile: "shallow",
             includeNames: false,
             generateQuiz: true,
@@ -163,7 +162,7 @@ export async function POST(request: Request) {
         const quizPayload = engine.buildCustomQuizPayload({
             fileKey: { kind, id, path },
             root,
-            code: file.sourceCode,
+            code: sourceCode,
             history: [],
             lessonQueue: steps,
             currentStep: 0,
@@ -171,7 +170,7 @@ export async function POST(request: Request) {
 
         // Prepare document for insertion
         const now = toDbDate(new Date());
-        const rootText = file.sourceCode.substring(root.startIndex, root.endIndex);
+        const rootText = sourceCode.substring(root.startIndex, root.endIndex);
         const quizId = generateId();
 
         const cards = quizPayload?.cards?.map((c: QuizCard, idx: number) => ({
