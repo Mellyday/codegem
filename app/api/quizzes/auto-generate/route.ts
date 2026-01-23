@@ -143,7 +143,10 @@ export async function POST(request: Request) {
             });
         } catch (err) {
             if (err instanceof AstResolverError) {
-                return NextResponse.json({ error: err.message }, { status: 400 });
+                return NextResponse.json(
+                    { error: err.message, code: err.code },
+                    { status: 400 }
+                );
             }
             throw err;
         }

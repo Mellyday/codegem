@@ -18,6 +18,10 @@ export class AstResolverError extends Error {
     super(message);
     this.code = code;
     this.name = "AstResolverError";
+    Object.setPrototypeOf(this, AstResolverError.prototype);
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, AstResolverError);
+    }
   }
 }
 

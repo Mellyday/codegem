@@ -346,7 +346,7 @@ const buildMultiSelectOptionPool = (
       text.length,
       Math.min(safeSpanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS)
     );
-    const snippet = text.slice(safeStart, safeEnd);
+    const snippet = safeEnd > safeStart ? text.slice(safeStart, safeEnd) : "";
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) idPool.push(m[0]);
     while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
@@ -405,7 +405,7 @@ const buildKeyGroupOptionPool = (
       text.length,
       Math.min(safeSpanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS)
     );
-    const snippet = text.slice(safeStart, safeEnd);
+    const snippet = safeEnd > safeStart ? text.slice(safeStart, safeEnd) : "";
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) pushCandidate(m[0]);
     while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
@@ -579,7 +579,7 @@ const findObjectLiteralNodes = (
   const nextCache = cached ?? {};
   nextCache[cacheKey] = out;
   objectLiteralCache.set(node, nextCache);
-  return out;
+  return out.slice();
 };
 
 const prefixText = (node: TreeSitterAstNode, code?: string): string => {
@@ -692,7 +692,7 @@ const findCallExpressionNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] =
   }
   out.sort((a, b) => a.startIndex - b.startIndex);
   callExpressionCache.set(node, out);
-  return out;
+  return out.slice();
 };
 
 const outerJsxCache = new WeakMap<TreeSitterAstNode, TreeSitterAstNode[]>();
@@ -718,7 +718,7 @@ const findOuterJsxNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
   }
   out.sort((a, b) => a.startIndex - b.startIndex);
   outerJsxCache.set(node, out);
-  return out;
+  return out.slice();
 };
 
 const collectCallbackBodiesFromExpression = (
