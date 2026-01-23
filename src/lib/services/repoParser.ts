@@ -1,7 +1,7 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { getDb, generateId, toDbDate, toJson } from "../sqlite";
-import { parseWithTreeSitter, canParseWithTreeSitter, type TreeSitterAstNode } from "../parser/treeSitterServer";
+import { generateId, toDbDate } from "../sqlite";
+import { canParseWithTreeSitter, getLanguageIdForExtension } from "../astSupport";
 import { STREAMING_LIMITS, isTooManyFiles, isFileTooLarge, formatBytes } from "./importLimits";
 import type Database from "better-sqlite3";
 
@@ -81,6 +81,13 @@ export async function parseAndPersistRepo(
     )
   `);
 
+  const insertMany = db.transaction((rows: any[]) => {
+    for (const row of rows) insertStmt.run(...row);
+  });
+
+  const rows: any[] = [];
+  const batchSize = STREAMING_LIMITS.BATCH_SIZE;
+
   for (const absPath of allPaths) {
     const ext = fileExtension(absPath);
     const relPath = relativePath(rootDir, absPath);
@@ -88,9 +95,9 @@ export async function parseAndPersistRepo(
 
     try {
       const sourceCode = await fs.readFile(absPath, "utf8");
-      const parsed = await parseWithTreeSitter(sourceCode, ext);
+      const languageId = getLanguageIdForExtension(ext) ?? "unknown";
 
-      insertStmt.run(
+      rows.push([
         generateId(),
         userId,
         repoId,
@@ -99,22 +106,22 @@ export async function parseAndPersistRepo(
         owner,
         name,
         relPath,
-        parsed.languageId,
+        languageId,
         ext,
         sourceCode,
-        toJson(parsed.ast as TreeSitterAstNode),
+        null, // ast
         "success",
         null,
         Buffer.byteLength(sourceCode, "utf8"),
         now,
-        now
-      );
+        now,
+      ]);
       progress.parsedFiles += 1;
     } catch (err) {
       progress.failedFiles += 1;
       const sourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
 
-      insertStmt.run(
+      rows.push([
         generateId(),
         userId,
         repoId,
@@ -131,10 +138,17 @@ export async function parseAndPersistRepo(
         String(err),
         Buffer.byteLength(sourceCode, "utf8"),
         now,
-        now
-      );
+        now,
+      ]);
+    }
+
+    if (rows.length >= batchSize) {
+      insertMany(rows);
+      rows.length = 0;
     }
   }
+
+  if (rows.length) insertMany(rows);
 
   return progress;
 }
@@ -143,7 +157,8 @@ export async function parseAndPersistRepo(
 export type ProgressEvent =
   | { type: 'cloned'; fileCount: number }
   | { type: 'scanning' }
-  | { type: 'discovered'; files: string[]; ignoredFiles: string[] }
+  | { type: 'discovered_summary'; parsableCount: number; ignoredCount: number }
+  | { type: 'discovered_chunk'; files: string[] }
   | { type: 'processing'; file: string; index: number; total: number }
   | { type: 'ignored'; file: string; reason: string }
   | { type: 'parsed'; file: string; success: boolean; error?: string }
@@ -186,10 +201,18 @@ export async function parseAndPersistRepoWithProgress(
   }
 
   onProgress({
-    type: 'discovered',
-    files: parsableFiles,
-    ignoredFiles: ignoredFiles,
+    type: 'discovered_summary',
+    parsableCount: parsableFiles.length,
+    ignoredCount: ignoredFiles.length,
   });
+
+  const discoveryChunkSize = 200;
+  for (let i = 0; i < parsableFiles.length; i += discoveryChunkSize) {
+    onProgress({
+      type: 'discovered_chunk',
+      files: parsableFiles.slice(i, i + discoveryChunkSize),
+    });
+  }
 
   // Check file count limit
   if (isTooManyFiles(parsableFiles.length)) {
@@ -221,10 +244,19 @@ export async function parseAndPersistRepoWithProgress(
     )
   `);
 
+  const insertMany = db.transaction((rows: any[]) => {
+    for (const row of rows) insertStmt.run(...row);
+  });
+  let rows: any[] = [];
+
   // Process parsable files with batch yielding
   for (let i = 0; i < parsableFiles.length; i++) {
     // Check for abort at batch boundaries
     if (abortSignal?.aborted) {
+      if (rows.length) {
+        insertMany(rows);
+        rows = [];
+      }
       onProgress({ type: 'aborted' });
       break;
     }
@@ -264,9 +296,9 @@ export async function parseAndPersistRepoWithProgress(
 
     try {
       const sourceCode = await fs.readFile(absPath, "utf8");
-      const parsed = await parseWithTreeSitter(sourceCode, ext);
+      const languageId = getLanguageIdForExtension(ext) ?? "unknown";
 
-      insertStmt.run(
+      rows.push([
         generateId(),
         userId,
         repoId,
@@ -275,23 +307,23 @@ export async function parseAndPersistRepoWithProgress(
         owner,
         name,
         relPath,
-        parsed.languageId,
+        languageId,
         ext,
         sourceCode,
-        toJson(parsed.ast as TreeSitterAstNode),
+        null, // ast
         "success",
         null,
         Buffer.byteLength(sourceCode, "utf8"),
         now,
-        now
-      );
+        now,
+      ]);
       progress.parsedFiles += 1;
       onProgress({ type: 'parsed', file: relPath, success: true });
     } catch (err) {
       progress.failedFiles += 1;
       const failedSourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
 
-      insertStmt.run(
+      rows.push([
         generateId(),
         userId,
         repoId,
@@ -308,11 +340,18 @@ export async function parseAndPersistRepoWithProgress(
         String(err),
         Buffer.byteLength(failedSourceCode, "utf8"),
         now,
-        now
-      );
+        now,
+      ]);
       onProgress({ type: 'parsed', file: relPath, success: false, error: String(err) });
     }
+
+    if (rows.length >= STREAMING_LIMITS.BATCH_SIZE) {
+      insertMany(rows);
+      rows = [];
+    }
   }
+
+  if (rows.length) insertMany(rows);
 
   return progress;
 }

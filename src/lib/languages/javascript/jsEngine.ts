@@ -84,10 +84,37 @@ const displaySpanForNode = (node: TreeSitterAstNode) => {
 };
 
 const pathCache = new WeakMap<TreeSitterAstNode, WeakMap<TreeSitterAstNode, number[]>>();
-const parentCache = new WeakMap<
+type ParentInfo = { parent: TreeSitterAstNode | null; index: number };
+const parentInfoCache = new WeakMap<
   TreeSitterAstNode,
-  WeakMap<TreeSitterAstNode, TreeSitterAstNode>
+  WeakMap<TreeSitterAstNode, ParentInfo>
 >();
+
+const buildParentInfoMap = (root: TreeSitterAstNode) => {
+  const map = new WeakMap<TreeSitterAstNode, ParentInfo>();
+  map.set(root, { parent: null, index: -1 });
+  const stack: TreeSitterAstNode[] = [root];
+  while (stack.length) {
+    const cur = stack.pop();
+    if (!cur) continue;
+    const children = cur.namedChildren || [];
+    for (let idx = 0; idx < children.length; idx++) {
+      const child = children[idx];
+      map.set(child, { parent: cur, index: idx });
+      stack.push(child);
+    }
+  }
+  return map;
+};
+
+const getParentInfo = (root: TreeSitterAstNode, node: TreeSitterAstNode) => {
+  let map = parentInfoCache.get(root);
+  if (!map) {
+    map = buildParentInfoMap(root);
+    parentInfoCache.set(root, map);
+  }
+  return map.get(node);
+};
 
 export const computeAstPath = (
   root: TreeSitterAstNode,
@@ -103,49 +130,21 @@ export const computeAstPath = (
   if (cached !== undefined) return cached;
 
   const path: number[] = [];
-  let found = false;
-  const dfs = (n: TreeSitterAstNode, cur: number[]) => {
-    if (found) return;
-    if (
-      n.startIndex === target.startIndex &&
-      n.endIndex === target.endIndex &&
-      n.type === target.type
-    ) {
-      path.push(...cur);
-      found = true;
-      return;
-    }
-    (n.namedChildren || []).forEach((c, idx) => dfs(c, cur.concat(idx)));
-  };
-  dfs(root, []);
-
-  rootCache.set(target, path);
-  return path;
-};
-
-const buildParentMap = (root: TreeSitterAstNode) => {
-  const map = new WeakMap<TreeSitterAstNode, TreeSitterAstNode>();
-  const stack: TreeSitterAstNode[] = [root];
-  while (stack.length) {
-    const cur = stack.pop();
-    if (!cur) continue;
-    const children = cur.namedChildren || [];
-    for (const child of children) {
-      map.set(child, cur);
-      stack.push(child);
-    }
+  let cur: TreeSitterAstNode | undefined = target;
+  while (cur && cur !== root) {
+    const info = getParentInfo(root, cur);
+    if (!info || !info.parent) break;
+    path.push(info.index);
+    cur = info.parent;
   }
-  return map;
+
+  const finalPath = cur === root ? path.reverse() : [];
+  rootCache.set(target, finalPath);
+  return finalPath;
 };
 
-const parentOf = (root: TreeSitterAstNode, node: TreeSitterAstNode) => {
-  let map = parentCache.get(root);
-  if (!map) {
-    map = buildParentMap(root);
-    parentCache.set(root, map);
-  }
-  return map.get(node);
-};
+const parentOf = (root: TreeSitterAstNode, node: TreeSitterAstNode) =>
+  getParentInfo(root, node)?.parent;
 
 const isWithinJsxAttributeExpression = (
   node: TreeSitterAstNode,

@@ -134,12 +134,14 @@ export default function GitHubFetcher() {
                                 return { ...updated, phase: "Cloning repository..." };
                             case "scanning":
                                 return { ...updated, phase: "Scanning files..." };
-                            case "discovered":
+                            case "discovered_summary":
                                 return {
                                     ...updated,
-                                    phase: `Found ${event.files.length} parsable files, ${event.ignoredFiles.length} ignored`,
-                                    total: event.files.length,
+                                    phase: `Found ${event.parsableCount} parsable files, ${event.ignoredCount} ignored`,
+                                    total: event.parsableCount,
                                 };
+                            case "discovered_chunk":
+                                return updated;
                             case "processing":
                                 return {
                                     ...updated,
@@ -322,7 +324,9 @@ export default function GitHubFetcher() {
                                     {'file' in event && event.file}
                                     {'message' in event && event.message}
                                     {event.type === 'start' && `${event.owner}/${event.name}`}
-                                    {event.type === 'discovered' && `${event.files.length} files`}
+                                    {event.type === 'discovered_summary' &&
+                                        `${event.parsableCount} files, ${event.ignoredCount} ignored`}
+                                    {event.type === 'discovered_chunk' && `${event.files.length} files`}
                                 </div>
                             ))}
                         </div>

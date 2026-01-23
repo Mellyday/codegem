@@ -30,7 +30,10 @@ function EventItem({ event }: { event: StreamEventLog }) {
             case 'start': return `Started: ${event.owner}/${event.name}`;
             case 'cloning': return 'Cloning repository...';
             case 'scanning': return 'Scanning files...';
-            case 'discovered': return `Found ${event.files.length} files, ${event.ignoredFiles.length} ignored`;
+            case 'discovered_summary':
+                return `Found ${event.parsableCount} files, ${event.ignoredCount} ignored`;
+            case 'discovered_chunk':
+                return `Discovered ${event.files.length} files`;
             case 'processing': return `Processing: ${event.file} (${event.index}/${event.total})`;
             case 'parsed': return event.success ? `✓ ${event.file}` : `✗ ${event.file}: ${event.error}`;
             case 'ignored': return `⊘ ${event.file} (${event.reason})`;

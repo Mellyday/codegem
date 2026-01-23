@@ -3,16 +3,17 @@ export const dynamic = 'force-dynamic';
 
 import fs from 'node:fs/promises';
 import { auth } from "@clerk/nextjs/server";
-import { getDb, generateId } from "@/src/lib/sqlite";
+import { generateId } from "@/src/lib/sqlite";
 import { cloneGithubRepo, parseGithubUrl } from "@/src/lib/services/repoFetcher";
-import { parseAndPersistRepoWithProgress } from "@/src/lib/services/repoParser";
+import { runRepoImportInWorker } from "@/src/lib/services/repoImportWorkerClient";
 
 export type StreamEvent =
     | { type: 'start'; owner: string; name: string; url: string }
     | { type: 'cloning' }
     | { type: 'cloned'; fileCount: number }
     | { type: 'scanning' }
-    | { type: 'discovered'; files: string[]; ignoredFiles: string[] }
+    | { type: 'discovered_summary'; parsableCount: number; ignoredCount: number }
+    | { type: 'discovered_chunk'; files: string[] }
     | { type: 'processing'; file: string; index: number; total: number }
     | { type: 'ignored'; file: string; reason: string }
     | { type: 'parsed'; file: string; success: boolean; error?: string }
@@ -83,7 +84,8 @@ export async function POST(req: Request) {
 
     const encoder = new TextEncoder();
     let clonedDir: string | null = null;
-    // Abort signal object that can be checked by the parser
+    let cancelWorker: (() => void) | null = null;
+    // Local abort flag to stop emitting events after disconnect
     const abortSignal = { aborted: false };
 
     const stream = new ReadableStream({
@@ -106,21 +108,21 @@ export async function POST(req: Request) {
                 const cloned = await cloneGithubRepo(body.url);
                 clonedDir = cloned.dir;
 
-                // Get database
-                const db = getDb();
                 const repoId = generateId();
 
-                // Parse with progress callback, passing abort signal
-                const progress = await parseAndPersistRepoWithProgress(db, {
-                    userId: effectiveUserId as string,
-                    repoId,
-                    url: body.url,
-                    owner,
-                    name,
-                    rootDir: cloned.dir,
-                    onProgress: send,
-                    abortSignal,
-                });
+                const { result, cancel } = runRepoImportInWorker(
+                    {
+                        userId: effectiveUserId as string,
+                        repoId,
+                        url: body.url,
+                        owner,
+                        name,
+                        rootDir: cloned.dir,
+                    },
+                    { onProgress: send }
+                );
+                cancelWorker = cancel;
+                const progress = await result;
 
                 send({
                     type: 'complete',
@@ -146,6 +148,7 @@ export async function POST(req: Request) {
         cancel() {
             // Client aborted the request - signal to stop work
             abortSignal.aborted = true;
+            cancelWorker?.();
             // Cleanup will happen in the finally block
         },
     });

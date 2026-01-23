@@ -8,7 +8,8 @@ export type StreamEventLog =
     | { type: 'cloning' }
     | { type: 'cloned'; fileCount: number }
     | { type: 'scanning' }
-    | { type: 'discovered'; files: string[]; ignoredFiles: string[] }
+    | { type: 'discovered_summary'; parsableCount: number; ignoredCount: number }
+    | { type: 'discovered_chunk'; files: string[] }
     | { type: 'processing'; file: string; index: number; total: number }
     | { type: 'ignored'; file: string; reason: string }
     | { type: 'parsed'; file: string; success: boolean; error?: string }
@@ -244,7 +245,7 @@ export function useGitHubFetchLogs() {
                     event.type === "start" ||
                     event.type === "complete" ||
                     event.type === "error" ||
-                    event.type === "discovered" ||
+                    event.type === "discovered_summary" ||
                     // Persist every 50 parsed events or on completion
                     (event.type === "parsed" && (newLog.events.length % 50 === 0));
 

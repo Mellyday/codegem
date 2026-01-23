@@ -1,9 +1,9 @@
 export const runtime = 'nodejs';
 import { NextResponse } from "next/server";
 import { auth } from "@clerk/nextjs/server";
-import { getDb, generateId, toDbDate } from "../../../src/lib/sqlite";
+import { getDb, generateId } from "../../../src/lib/sqlite";
 import { cloneGithubRepo, parseGithubUrl } from "../../../src/lib/services/repoFetcher";
-import { parseAndPersistRepo } from "../../../src/lib/services/repoParser";
+import { runRepoImportInWorker } from "../../../src/lib/services/repoImportWorkerClient";
 
 type PostBody = { url: string };
 
@@ -80,7 +80,6 @@ export async function POST(req: Request) {
     const body = (await req.json()) as PostBody;
     if (!body?.url) return NextResponse.json({ error: "Missing url" }, { status: 400 });
 
-    const db = getDb();
     const { owner, name } = parseGithubUrl(body.url);
 
     let clonedDir: string | undefined;
@@ -88,7 +87,7 @@ export async function POST(req: Request) {
       const cloned = await cloneGithubRepo(body.url);
       clonedDir = cloned.dir;
       const repoId = generateId();
-      const progress = await parseAndPersistRepo(db, {
+      const { result } = runRepoImportInWorker({
         userId: effectiveUserId as string,
         repoId,
         url: body.url,
@@ -96,6 +95,7 @@ export async function POST(req: Request) {
         name,
         rootDir: cloned.dir,
       });
+      const progress = await result;
       return NextResponse.json({ id: String(repoId), owner, name, url: body.url, progress });
     } catch (err) {
       return NextResponse.json({ owner, name, url: body.url, status: "failed", error: String(err) }, { status: 500 });

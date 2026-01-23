@@ -3,10 +3,10 @@
  */
 import path from "node:path";
 import fs from "node:fs/promises";
-import { getDb, generateId, toDbDate, toJson } from "../sqlite";
-import { cloneGithubRepo, parseGithubUrl } from "./repoFetcher";
-import { parseWithTreeSitter, canParseWithTreeSitter, type TreeSitterAstNode } from "../parser/treeSitterServer";
-import { BACKGROUND_LIMITS, isFileTooLarge, formatBytes } from "./importLimits";
+import { getDb, generateId, toDbDate } from "../sqlite";
+import { cloneGithubRepo } from "./repoFetcher";
+import { canParseWithTreeSitter, getLanguageIdForExtension } from "../astSupport";
+import { BACKGROUND_LIMITS, isFileTooLarge } from "./importLimits";
 import {
     type ImportJob,
     getNextPendingJob,
@@ -130,6 +130,11 @@ export async function processImportJob(job: ImportJob): Promise<void> {
       )
     `);
 
+        const insertMany = db.transaction((rows: any[]) => {
+            for (const row of rows) insertStmt.run(...row);
+        });
+        let rows: any[] = [];
+
         let parsedFiles = 0;
         let failedFiles = 0;
         let skippedFiles = 0;
@@ -140,6 +145,10 @@ export async function processImportJob(job: ImportJob): Promise<void> {
         for (let i = 0; i < parsableFiles.length; i++) {
             // Check for cancellation at batch boundaries
             if (jobState.cancelled) {
+                if (rows.length) {
+                    insertMany(rows);
+                    rows = [];
+                }
                 updateJobStatus(job.id, "cancelled", { completedAt: new Date() });
                 return;
             }
@@ -185,9 +194,9 @@ export async function processImportJob(job: ImportJob): Promise<void> {
             // Parse and insert
             try {
                 const sourceCode = await fs.readFile(absPath, "utf8");
-                const parsed = await parseWithTreeSitter(sourceCode, ext);
+                const languageId = getLanguageIdForExtension(ext) ?? "unknown";
 
-                insertStmt.run(
+                rows.push([
                     generateId(),
                     job.userId,
                     repoId,
@@ -196,22 +205,22 @@ export async function processImportJob(job: ImportJob): Promise<void> {
                     job.owner,
                     job.name,
                     relPath,
-                    parsed.languageId,
+                    languageId,
                     ext,
                     sourceCode,
-                    toJson(parsed.ast as TreeSitterAstNode),
+                    null, // ast
                     "success",
                     null,
                     Buffer.byteLength(sourceCode, "utf8"),
                     now,
-                    now
-                );
+                    now,
+                ]);
                 parsedFiles++;
             } catch (err) {
                 failedFiles++;
                 // Still insert the file with error status
                 const failedSource = await fs.readFile(absPath, "utf8").catch(() => "");
-                insertStmt.run(
+                rows.push([
                     generateId(),
                     job.userId,
                     repoId,
@@ -228,10 +237,17 @@ export async function processImportJob(job: ImportJob): Promise<void> {
                     String(err),
                     Buffer.byteLength(failedSource, "utf8"),
                     now,
-                    now
-                );
+                    now,
+                ]);
+            }
+
+            if (rows.length >= BATCH_SIZE) {
+                insertMany(rows);
+                rows = [];
             }
         }
+
+        if (rows.length) insertMany(rows);
 
         // Final progress update
         updateJobProgress(job.id, {
