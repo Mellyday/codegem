@@ -5,14 +5,14 @@
 
 export type ImportMode = "streaming" | "background";
 
-/** Streaming mode: fast imports with strict limits */
+/** Streaming mode: no limits after optimization */
 export const STREAMING_LIMITS = {
-    /** Max parsable files before rejecting */
-    MAX_FILES: 1000,
-    /** Skip files larger than this (KB) */
-    MAX_FILE_SIZE_KB: 500,
-    /** Reject repos larger than this (MB, via GitHub API) */
-    MAX_REPO_SIZE_MB: 100,
+    /** No file count limit (null = no limit) */
+    MAX_FILES: null as number | null,
+    /** No file size limit */
+    MAX_FILE_SIZE_KB: Infinity,
+    /** No repo size limit */
+    MAX_REPO_SIZE_MB: Infinity,
     /** Files per processing batch */
     BATCH_SIZE: 50,
     /** Delay between batches (ms) */
