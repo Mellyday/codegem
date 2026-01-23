@@ -5,7 +5,7 @@ import { auth } from "@clerk/nextjs/server";
 import {
     canParseWithTreeSitter,
 } from "../../../../src/lib/parser/treeSitterServer";
-import { getAstForFileId } from "../../../../src/lib/services/astResolver";
+import { AstResolverError, getAstForFileId } from "../../../../src/lib/services/astResolver";
 import { getLanguageToolsForFileName } from "../../../../src/lib/languages/registry";
 
 const DEV_USER_ID = "dev-push-project";
@@ -142,13 +142,8 @@ export async function POST(request: Request) {
                 persist: false,
             });
         } catch (err) {
-            const message =
-                err instanceof Error ? err.message : "Failed to parse file";
-            if (
-                message.includes("not supported") ||
-                message.includes("No source code")
-            ) {
-                return NextResponse.json({ error: message }, { status: 400 });
+            if (err instanceof AstResolverError) {
+                return NextResponse.json({ error: err.message }, { status: 400 });
             }
             throw err;
         }
