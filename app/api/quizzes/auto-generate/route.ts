@@ -134,11 +134,24 @@ export async function POST(request: Request) {
             });
         }
 
-        const astResult = await getAstForFileId({
-            kind,
-            fileId,
-            persist: false,
-        });
+        let astResult;
+        try {
+            astResult = await getAstForFileId({
+                kind,
+                fileId,
+                persist: false,
+            });
+        } catch (err) {
+            const message =
+                err instanceof Error ? err.message : "Failed to parse file";
+            if (
+                message.includes("not supported") ||
+                message.includes("No source code")
+            ) {
+                return NextResponse.json({ error: message }, { status: 400 });
+            }
+            throw err;
+        }
         if (!astResult) {
             return NextResponse.json(
                 { error: "Could not fetch file content" },

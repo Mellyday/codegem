@@ -1,4 +1,4 @@
-import { getDb, fromJson, toJson } from "../sqlite";
+import { getDb, fromJson, toDbDate, toJson } from "../sqlite";
 import {
   canParseWithTreeSitter,
   parseWithTreeSitter,
@@ -45,7 +45,7 @@ export async function getAstForFileId(
   const tableName = input.kind === "repo" ? "repos" : "files";
   const row = db
     .prepare(
-      `SELECT ast, source_code, extension, updated_at, is_dir FROM ${tableName} WHERE id = ?`
+      `SELECT ast, source_code, extension, updated_at FROM ${tableName} WHERE id = ?`
     )
     .get(input.fileId) as
     | {
@@ -53,11 +53,13 @@ export async function getAstForFileId(
         source_code: string | null;
         extension: string | null;
         updated_at: string | null;
-        is_dir?: number | null;
       }
     | undefined;
 
-  if (!row || row.is_dir) {
+  if (
+    !row ||
+    (row.source_code === null && row.ast === null && row.extension === null)
+  ) {
     return null;
   }
 
@@ -78,7 +80,7 @@ export async function getAstForFileId(
     }
   }
 
-  if (!sourceCode) {
+  if (row.source_code === null) {
     throw new Error("No source code stored for this file");
   }
   if (!canParseWithTreeSitter(extension)) {
@@ -89,8 +91,9 @@ export async function getAstForFileId(
   setCachedAst(cacheKey, parsed.ast);
 
   if (input.persist) {
-    db.prepare(`UPDATE ${tableName} SET ast = ? WHERE id = ?`).run(
+    db.prepare(`UPDATE ${tableName} SET ast = ?, updated_at = ? WHERE id = ?`).run(
       toJson(parsed.ast),
+      toDbDate(new Date()),
       input.fileId
     );
   }
