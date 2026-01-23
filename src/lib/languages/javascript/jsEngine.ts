@@ -326,6 +326,8 @@ const buildDistractors = (correct: string): string[] => {
   return Array.from(out);
 };
 
+const MAX_OPTION_SNIPPET_CHARS = 4000;
+
 const buildMultiSelectOptionPool = (
   correct: string[],
   code: string | undefined,
@@ -337,7 +339,9 @@ const buildMultiSelectOptionPool = (
   try {
     const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
     const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
-    const snippet = (code || "").slice(spanStart, spanEnd);
+    const safeStart = Math.max(0, spanStart);
+    const safeEnd = Math.min(spanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS);
+    const snippet = (code || "").slice(safeStart, safeEnd);
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) idPool.push(m[0]);
     while ((m = reStr.exec(snippet))) if (m[2].trim()) strPool.push(m[2]);
@@ -389,7 +393,9 @@ const buildKeyGroupOptionPool = (
   try {
     const reId = /[A-Za-z_][A-Za-z0-9_]*/g;
     const reStr = /(["'`])((?:\\.|(?!\1).)*)\1/g;
-    const snippet = (code || "").slice(spanStart, spanEnd);
+    const safeStart = Math.max(0, spanStart);
+    const safeEnd = Math.min(spanEnd, safeStart + MAX_OPTION_SNIPPET_CHARS);
+    const snippet = (code || "").slice(safeStart, safeEnd);
     let m: RegExpExecArray | null;
     while ((m = reId.exec(snippet))) pushCandidate(m[0]);
     while ((m = reStr.exec(snippet))) pushCandidate(m[0]);
@@ -527,11 +533,20 @@ const splitCorrectIntoCards = (correct: string[]): string[][] => {
 
 const BODY_NODES = new Set(["statement_block", "class_body", "switch_body"]);
 
+const objectLiteralCache = new WeakMap<
+  TreeSitterAstNode,
+  { shallow?: TreeSitterAstNode[]; deep?: TreeSitterAstNode[] }
+>();
+
 const findObjectLiteralNodes = (
   node: TreeSitterAstNode,
   opts: { descendIntoBodies?: boolean } = {}
 ): TreeSitterAstNode[] => {
   const descendIntoBodies = opts.descendIntoBodies ?? false;
+  const cached = objectLiteralCache.get(node);
+  const cacheKey = descendIntoBodies ? "deep" : "shallow";
+  const cachedValue = cached?.[cacheKey];
+  if (cachedValue) return cachedValue;
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
@@ -551,6 +566,9 @@ const findObjectLiteralNodes = (
     }
   }
   out.sort((a, b) => a.startIndex - b.startIndex);
+  const nextCache = cached ?? {};
+  nextCache[cacheKey] = out;
+  objectLiteralCache.set(node, nextCache);
   return out;
 };
 
@@ -642,7 +660,11 @@ const getFunctionLikeBodyBlock = (
   return undefined;
 };
 
+const callExpressionCache = new WeakMap<TreeSitterAstNode, TreeSitterAstNode[]>();
+
 const findCallExpressionNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const cached = callExpressionCache.get(node);
+  if (cached) return cached;
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
@@ -659,10 +681,15 @@ const findCallExpressionNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] =
     }
   }
   out.sort((a, b) => a.startIndex - b.startIndex);
+  callExpressionCache.set(node, out);
   return out;
 };
 
+const outerJsxCache = new WeakMap<TreeSitterAstNode, TreeSitterAstNode[]>();
+
 const findOuterJsxNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
+  const cached = outerJsxCache.get(node);
+  if (cached) return cached;
   const out: TreeSitterAstNode[] = [];
   const stack: TreeSitterAstNode[] = [node];
   while (stack.length > 0) {
@@ -680,6 +707,7 @@ const findOuterJsxNodes = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
     }
   }
   out.sort((a, b) => a.startIndex - b.startIndex);
+  outerJsxCache.set(node, out);
   return out;
 };
 
@@ -3382,21 +3410,32 @@ const getStatementChildren = (node: TreeSitterAstNode): TreeSitterAstNode[] => {
 
 const BODY_NODE_TYPES = new Set(["statement_block", "class_body", "switch_body"]);
 
+const statementHasAnchorCache = new WeakMap<TreeSitterAstNode, boolean>();
+const hasQuizChildrenCache = new WeakMap<TreeSitterAstNode, boolean>();
+
 const statementHasAnchor = (node: TreeSitterAstNode): boolean => {
+  const cached = statementHasAnchorCache.get(node);
+  if (cached !== undefined) return cached;
   const stack = (node.namedChildren || []).slice();
   while (stack.length) {
     const cur = stack.pop();
     if (!cur) continue;
     if (BODY_NODE_TYPES.has(cur.type)) continue;
-    if (isAnchorNode(cur)) return true;
+    if (isAnchorNode(cur)) {
+      statementHasAnchorCache.set(node, true);
+      return true;
+    }
     if (cur.namedChildren && cur.namedChildren.length) {
       stack.push(...cur.namedChildren);
     }
   }
+  statementHasAnchorCache.set(node, false);
   return false;
 };
 
 const hasQuizChildren = (node: TreeSitterAstNode): boolean => {
+  const cached = hasQuizChildrenCache.get(node);
+  if (cached !== undefined) return cached;
   const stack = (node.namedChildren || []).slice();
   while (stack.length) {
     const cur = stack.pop();
@@ -3404,7 +3443,10 @@ const hasQuizChildren = (node: TreeSitterAstNode): boolean => {
     if (BODY_NODE_TYPES.has(cur.type)) {
       const statements = getStatementChildren(cur);
       for (const stmt of statements) {
-        if (isAnchorNode(stmt) || statementHasAnchor(stmt)) return true;
+        if (isAnchorNode(stmt) || statementHasAnchor(stmt)) {
+          hasQuizChildrenCache.set(node, true);
+          return true;
+        }
       }
       continue;
     }
@@ -3412,6 +3454,7 @@ const hasQuizChildren = (node: TreeSitterAstNode): boolean => {
       stack.push(...cur.namedChildren);
     }
   }
+  hasQuizChildrenCache.set(node, false);
   return false;
 };
 
