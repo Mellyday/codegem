@@ -30,10 +30,10 @@ export function runRepoImportInWorker(
     const abortSignal = { aborted: false };
     const result = options?.onProgress
       ? parseAndPersistRepoWithProgress(db, {
-          ...params,
-          onProgress: options.onProgress,
-          abortSignal,
-        })
+        ...params,
+        onProgress: options.onProgress,
+        abortSignal,
+      })
       : parseAndPersistRepo(db, params);
     return {
       result,
@@ -44,13 +44,11 @@ export function runRepoImportInWorker(
   };
 
   let worker: Worker | null = null;
-  let cancelFn = () => {};
+  let cancelFn = () => { };
   let sawMessage = false;
 
   try {
-    worker = new Worker(new URL("./repoImportWorker.ts", import.meta.url), {
-      type: "module",
-    });
+    worker = new Worker(new URL("./repoImportWorker.ts", import.meta.url));
   } catch {
     return runInline();
   }
