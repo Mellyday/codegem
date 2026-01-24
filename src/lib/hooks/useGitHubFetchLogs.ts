@@ -12,8 +12,17 @@ export type StreamEventLog =
     | { type: 'discovered_chunk'; files: string[] }
     | { type: 'processing'; file: string; index: number; total: number }
     | { type: 'ignored'; file: string; reason: string }
+    | { type: 'ignored_chunk'; files: string[]; reason: string }
     | { type: 'parsed'; file: string; success: boolean; error?: string }
-    | { type: 'complete'; repoId: string; totalFiles: number; parsedFiles: number; failedFiles: number }
+    | { type: 'progress'; parsedFiles: number; failedFiles: number; skippedFiles: number; index: number; total: number }
+    | {
+        type: 'complete';
+        repoId: string;
+        totalFiles: number;
+        parsedFiles: number;
+        failedFiles: number;
+        skippedFiles: number;
+    }
     | { type: 'error'; message: string };
 
 /** Summary of files processed by language/extension */
@@ -246,6 +255,7 @@ export function useGitHubFetchLogs() {
                     event.type === "complete" ||
                     event.type === "error" ||
                     event.type === "discovered_summary" ||
+                    event.type === "progress" ||
                     // Persist every 50 parsed events or on completion
                     (event.type === "parsed" && (newLog.events.length % 50 === 0));
 

@@ -1,4 +1,4 @@
-import { getDb, fromJson, toJson } from "../sqlite";
+import { getDb, fromJson, toJson, toDbDate } from "../sqlite";
 import {
   canParseWithTreeSitter,
   parseWithTreeSitter,
@@ -121,13 +121,17 @@ export async function getAstForFileId(
   }
 
   const parsed = await parseWithTreeSitter(sourceCode, extension);
-  setCachedAst(cacheKey, parsed.ast);
 
   if (input.persist) {
-    db.prepare(`UPDATE ${tableName} SET ast = ? WHERE id = ?`).run(
+    const updatedAt = toDbDate(new Date());
+    db.prepare(`UPDATE ${tableName} SET ast = ?, updated_at = ? WHERE id = ?`).run(
       toJson(parsed.ast),
+      updatedAt,
       input.fileId
     );
+    setCachedAst(cacheKeyFor(input.fileId, updatedAt), parsed.ast);
+  } else {
+    setCachedAst(cacheKey, parsed.ast);
   }
 
   return { ast: parsed.ast, sourceCode, extension };

@@ -16,6 +16,7 @@ type CurrentProgress = {
     total?: number;
     parsedFiles: number;
     failedFiles: number;
+    skippedFiles: number;
     events: StreamEventLog[];
 };
 
@@ -57,6 +58,7 @@ export default function GitHubFetcher() {
             phase: "Initializing...",
             parsedFiles: 0,
             failedFiles: 0,
+            skippedFiles: 0,
             events: [],
         };
         setCurrentProgress(initialProgress);
@@ -141,6 +143,7 @@ export default function GitHubFetcher() {
                                     total: event.parsableCount,
                                 };
                             case "discovered_chunk":
+                            case "ignored_chunk":
                                 return updated;
                             case "processing":
                                 return {
@@ -151,10 +154,15 @@ export default function GitHubFetcher() {
                                     total: event.total,
                                 };
                             case "parsed":
+                                return updated;
+                            case "progress":
                                 return {
                                     ...updated,
-                                    parsedFiles: event.success ? prev.parsedFiles + 1 : prev.parsedFiles,
-                                    failedFiles: event.success ? prev.failedFiles : prev.failedFiles + 1,
+                                    parsedFiles: event.parsedFiles,
+                                    failedFiles: event.failedFiles,
+                                    skippedFiles: event.skippedFiles,
+                                    index: event.index,
+                                    total: event.total,
                                 };
                             case "complete":
                                 updateLog(logId, {
@@ -172,6 +180,7 @@ export default function GitHubFetcher() {
                                     phase: "Complete!",
                                     parsedFiles: event.parsedFiles,
                                     failedFiles: event.failedFiles,
+                                    skippedFiles: event.skippedFiles,
                                     total: event.totalFiles,
                                 };
                             case "error":
@@ -218,7 +227,7 @@ export default function GitHubFetcher() {
 
     const isValidUrl = validateUrl(url);
     const progressPercent = currentProgress?.total
-        ? Math.round(((currentProgress.parsedFiles + currentProgress.failedFiles) / currentProgress.total) * 100)
+        ? Math.round(((currentProgress.parsedFiles + currentProgress.failedFiles + currentProgress.skippedFiles) / currentProgress.total) * 100)
         : 0;
 
     return (
@@ -327,6 +336,10 @@ export default function GitHubFetcher() {
                                     {event.type === 'discovered_summary' &&
                                         `${event.parsableCount} files, ${event.ignoredCount} ignored`}
                                     {event.type === 'discovered_chunk' && `${event.files.length} files`}
+                                    {event.type === 'ignored_chunk' &&
+                                        `${event.files.length} ignored (${event.reason})`}
+                                    {event.type === 'progress' &&
+                                        `${event.parsedFiles} parsed, ${event.failedFiles} failed`}
                                 </div>
                             ))}
                         </div>

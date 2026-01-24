@@ -16,7 +16,9 @@ export type StreamEvent =
     | { type: 'discovered_chunk'; files: string[] }
     | { type: 'processing'; file: string; index: number; total: number }
     | { type: 'ignored'; file: string; reason: string }
+    | { type: 'ignored_chunk'; files: string[]; reason: string }
     | { type: 'parsed'; file: string; success: boolean; error?: string }
+    | { type: 'progress'; parsedFiles: number; failedFiles: number; skippedFiles: number; index: number; total: number }
     | { type: 'skipped'; file: string; reason: string }
     | { type: 'limit_exceeded'; limitType: 'files' | 'file_size'; message: string }
     | { type: 'aborted' }

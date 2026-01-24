@@ -22,15 +22,37 @@ export type RepoProgress = {
   skippedFiles: number;
 };
 
+type AbortSignalLike = { aborted: boolean };
+
 const isHidden = (p: string) => /(^|\/)\./.test(p);
 
-async function* walk(dir: string): AsyncGenerator<string> {
+const SKIP_DIRS = new Set([
+  ".git",
+  "node_modules",
+  ".next",
+  "dist",
+  "build",
+  "out",
+  ".venv",
+  "venv",
+  "__pycache__",
+  ".pytest_cache",
+  "vendor",
+  "target",
+]);
+
+async function* walk(
+  dir: string,
+  options?: { abortSignal?: AbortSignalLike }
+): AsyncGenerator<string> {
+  if (options?.abortSignal?.aborted) return;
   const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
+    if (options?.abortSignal?.aborted) return;
     const full = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === ".git" || isHidden(entry.name)) continue;
-      yield* walk(full);
+      if (isHidden(entry.name) || SKIP_DIRS.has(entry.name)) continue;
+      yield* walk(full, options);
     } else if (entry.isFile()) {
       if (isHidden(entry.name)) continue;
       yield full;
@@ -56,16 +78,23 @@ export async function parseAndPersistRepo(
     owner: string;
     name: string;
     rootDir: string;
+    abortSignal?: AbortSignalLike;
   }
 ): Promise<RepoProgress> {
-  const { userId, repoId, url, owner, name, rootDir } = params;
+  const { userId, repoId, url, owner, name, rootDir, abortSignal } = params;
   const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0, skippedFiles: 0 };
+  const now = toDbDate(new Date());
 
   // First pass: count parseable files
   const allPaths: string[] = [];
-  for await (const p of walk(rootDir)) {
+  for await (const p of walk(rootDir, { abortSignal })) {
+    if (abortSignal?.aborted) break;
     const ext = fileExtension(p);
     if (canParseWithTreeSitter(ext)) allPaths.push(p);
+  }
+  if (abortSignal?.aborted) {
+    progress.totalFiles = allPaths.length;
+    return progress;
   }
   progress.totalFiles = allPaths.length;
 
@@ -90,9 +119,11 @@ export async function parseAndPersistRepo(
 
   try {
     for (const absPath of allPaths) {
+      if (abortSignal?.aborted) {
+        break;
+      }
       const ext = fileExtension(absPath);
       const relPath = relativePath(rootDir, absPath);
-      const now = toDbDate(new Date());
 
       try {
         try {
@@ -173,7 +204,16 @@ export type ProgressEvent =
   | { type: 'discovered_chunk'; files: string[] }
   | { type: 'processing'; file: string; index: number; total: number }
   | { type: 'ignored'; file: string; reason: string }
+  | { type: 'ignored_chunk'; files: string[]; reason: string }
   | { type: 'parsed'; file: string; success: boolean; error?: string }
+  | {
+    type: 'progress';
+    parsedFiles: number;
+    failedFiles: number;
+    skippedFiles: number;
+    index: number;
+    total: number;
+  }
   | { type: 'limit_exceeded'; limitType: 'files' | 'file_size'; message: string }
   | { type: 'skipped'; file: string; reason: string }
   | { type: 'aborted' };
@@ -186,7 +226,7 @@ type WithProgressParams = {
   name: string;
   rootDir: string;
   onProgress: (event: ProgressEvent) => void;
-  abortSignal?: { aborted: boolean };
+  abortSignal?: AbortSignalLike;
 };
 
 export async function parseAndPersistRepoWithProgress(
@@ -195,6 +235,11 @@ export async function parseAndPersistRepoWithProgress(
 ): Promise<RepoProgress> {
   const { userId, repoId, url, owner, name, rootDir, onProgress, abortSignal } = params;
   const progress: RepoProgress = { totalFiles: 0, parsedFiles: 0, failedFiles: 0, skippedFiles: 0 };
+  const now = toDbDate(new Date());
+  const ignoredReason = "Unsupported file extension";
+  const parsedSampleRate = 10;
+  const progressSampleRate = 10;
+  const ignoredChunkSize = 200;
 
   // Collect all files and categorize them
   onProgress({ type: 'scanning' });
@@ -202,7 +247,11 @@ export async function parseAndPersistRepoWithProgress(
   const parsableFiles: string[] = [];
   const ignoredFiles: string[] = [];
 
-  for await (const p of walk(rootDir)) {
+  for await (const p of walk(rootDir, { abortSignal })) {
+    if (abortSignal?.aborted) {
+      onProgress({ type: 'aborted' });
+      return progress;
+    }
     const ext = fileExtension(p);
     const relPath = relativePath(rootDir, p);
     if (canParseWithTreeSitter(ext)) {
@@ -210,6 +259,10 @@ export async function parseAndPersistRepoWithProgress(
     } else {
       ignoredFiles.push(relPath);
     }
+  }
+  if (abortSignal?.aborted) {
+    onProgress({ type: 'aborted' });
+    return progress;
   }
 
   onProgress({
@@ -220,6 +273,10 @@ export async function parseAndPersistRepoWithProgress(
 
   const discoveryChunkSize = 200;
   for (let i = 0; i < parsableFiles.length; i += discoveryChunkSize) {
+    if (abortSignal?.aborted) {
+      onProgress({ type: 'aborted' });
+      return progress;
+    }
     onProgress({
       type: 'discovered_chunk',
       files: parsableFiles.slice(i, i + discoveryChunkSize),
@@ -233,12 +290,16 @@ export async function parseAndPersistRepoWithProgress(
     throw new Error(message);
   }
 
-  // Emit ignored files
-  for (const ignoredPath of ignoredFiles) {
+  // Emit ignored files in chunks
+  for (let i = 0; i < ignoredFiles.length; i += ignoredChunkSize) {
+    if (abortSignal?.aborted) {
+      onProgress({ type: 'aborted' });
+      return progress;
+    }
     onProgress({
-      type: 'ignored',
-      file: ignoredPath,
-      reason: 'Unsupported file extension',
+      type: 'ignored_chunk',
+      files: ignoredFiles.slice(i, i + ignoredChunkSize),
+      reason: ignoredReason,
     });
   }
 
@@ -261,6 +322,18 @@ export async function parseAndPersistRepoWithProgress(
   });
   let rows: any[] = [];
 
+  const emitProgress = (index: number) => {
+    if (index % progressSampleRate !== 0 && index !== parsableFiles.length) return;
+    onProgress({
+      type: 'progress',
+      parsedFiles: progress.parsedFiles,
+      failedFiles: progress.failedFiles,
+      skippedFiles: progress.skippedFiles,
+      index,
+      total: parsableFiles.length,
+    });
+  };
+
   // Process parsable files with batch yielding
   for (let i = 0; i < parsableFiles.length; i++) {
     // Check for abort at batch boundaries
@@ -269,6 +342,7 @@ export async function parseAndPersistRepoWithProgress(
         insertMany(rows);
         rows = [];
       }
+      emitProgress(i);
       onProgress({ type: 'aborted' });
       break;
     }
@@ -281,7 +355,6 @@ export async function parseAndPersistRepoWithProgress(
     const relPath = parsableFiles[i];
     const absPath = path.join(rootDir, relPath);
     const ext = fileExtension(absPath);
-    const now = toDbDate(new Date());
 
     // Check file size before reading
     try {
@@ -293,6 +366,7 @@ export async function parseAndPersistRepoWithProgress(
           reason: `File too large: ${formatBytes(stats.size)} exceeds ${formatBytes(STREAMING_LIMITS.MAX_FILE_SIZE_KB * 1024)} limit`,
         });
         progress.skippedFiles += 1;
+        emitProgress(i + 1);
         continue;
       }
     } catch {
@@ -330,7 +404,10 @@ export async function parseAndPersistRepoWithProgress(
         now,
       ]);
       progress.parsedFiles += 1;
-      onProgress({ type: 'parsed', file: relPath, success: true });
+      if ((i + 1) % parsedSampleRate === 0) {
+        onProgress({ type: 'parsed', file: relPath, success: true });
+      }
+      emitProgress(i + 1);
     } catch (err) {
       progress.failedFiles += 1;
       const failedSourceCode = await fs.readFile(absPath, "utf8").catch(() => "");
@@ -355,6 +432,7 @@ export async function parseAndPersistRepoWithProgress(
         now,
       ]);
       onProgress({ type: 'parsed', file: relPath, success: false, error: String(err) });
+      emitProgress(i + 1);
     }
 
     if (rows.length >= STREAMING_LIMITS.BATCH_SIZE) {

@@ -41,10 +41,12 @@ describe("shallow profile quiz generation", () => {
         const argsStart = code.indexOf("(", useEffectStart);
         expect(argsStart).toBeGreaterThan(useEffectStart);
 
+        // Match UI's revealAfterForQuestion: revealEndAfterChild → sourceRefs.end → revealEndBeforeChild → revealStart
         const revealEnd =
             useEffectQuestion.revealEndAfterChild ??
+            useEffectQuestion.sourceRefs?.[0]?.end ??
             useEffectQuestion.revealEndBeforeChild ??
-            useEffectQuestion.sourceRefs?.[0]?.end;
+            useEffectQuestion.revealStart;
 
         expect(revealEnd).toBeTypeOf("number");
         expect(revealEnd).toBeLessThanOrEqual(argsStart);
@@ -111,7 +113,8 @@ describe("jsx quiz generation", () => {
         expect(buttonGroupChildQ.questionType).toBe("sequence");
         expect(buttonGroupChildQ.multiCorrect).toEqual(["span", "EXPR(button*)"]);
 
-        const revealEnd = chartHeaderChildQ.revealEndAfterChild ?? chartHeaderChildQ.revealEndBeforeChild ?? chartHeaderChildQ.sourceRefs?.[0]?.end;
+        // Match UI's revealAfterForQuestion: revealEndAfterChild → sourceRefs.end → revealEndBeforeChild → revealStart
+        const revealEnd = chartHeaderChildQ.revealEndAfterChild ?? chartHeaderChildQ.sourceRefs?.[0]?.end ?? chartHeaderChildQ.revealEndBeforeChild ?? chartHeaderChildQ.revealStart;
         expect(revealEnd).toBeTypeOf("number");
         // Ensure the opening tag is visible: we should have revealed past the attribute text.
         expect(revealEnd).toBeGreaterThan(code.indexOf("chart-header"));

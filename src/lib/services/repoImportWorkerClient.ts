@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import { getDb } from "../sqlite";
 import {
   parseAndPersistRepo,
@@ -34,7 +34,7 @@ export function runRepoImportInWorker(
         onProgress: options.onProgress,
         abortSignal,
       })
-      : parseAndPersistRepo(db, params);
+      : parseAndPersistRepo(db, { ...params, abortSignal });
     return {
       result,
       cancel: () => {
@@ -46,20 +46,35 @@ export function runRepoImportInWorker(
   let worker: Worker | null = null;
   let cancelFn = () => { };
   let sawMessage = false;
+  let cancelled = false;
+  let terminateTimer: ReturnType<typeof setTimeout> | null = null;
 
   try {
-    worker = new Worker(new URL("./repoImportWorker.ts", import.meta.url));
+    const workerOptions: WorkerOptions & { type: "module" } = { type: "module" };
+    worker = new Worker(new URL("./repoImportWorker.ts", import.meta.url), workerOptions);
   } catch {
     return runInline();
   }
 
   cancelFn = () => {
+    cancelled = true;
     worker?.postMessage({ type: "cancel" });
+    if (terminateTimer) clearTimeout(terminateTimer);
+    const workerRef = worker;
+    if (workerRef) {
+      terminateTimer = setTimeout(() => {
+        void workerRef.terminate();
+      }, 1500);
+    }
   };
   let settled = false;
 
   const result = new Promise<RepoProgress>((resolve, reject) => {
     const cleanupWorker = () => {
+      if (terminateTimer) {
+        clearTimeout(terminateTimer);
+        terminateTimer = null;
+      }
       worker?.removeAllListeners("message");
       worker?.removeAllListeners("error");
       worker?.removeAllListeners("exit");
@@ -93,6 +108,10 @@ export function runRepoImportInWorker(
 
     worker?.on("error", (err) => {
       if (!sawMessage) {
+        if (cancelled) {
+          settle(() => reject(new Error("Import cancelled")));
+          return;
+        }
         const inline = runInline();
         cancelFn = inline.cancel;
         cleanupWorker();
@@ -105,6 +124,10 @@ export function runRepoImportInWorker(
 
     worker?.on("exit", (code) => {
       if (settled) return;
+      if (cancelled) {
+        settle(() => reject(new Error("Import cancelled")));
+        return;
+      }
       if (code !== 0) {
         if (!sawMessage) {
           const inline = runInline();

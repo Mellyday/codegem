@@ -20,7 +20,10 @@ function EventItem({ event }: { event: StreamEventLog }) {
             case 'complete': return 'text-emerald-400';
             case 'error': return 'text-red-400';
             case 'parsed': return event.success ? 'text-emerald-400' : 'text-red-400';
-            case 'ignored': return 'text-slate-500';
+            case 'ignored':
+            case 'ignored_chunk':
+                return 'text-slate-500';
+            case 'progress': return 'text-cyan-400';
             default: return 'text-slate-400';
         }
     };
@@ -37,6 +40,10 @@ function EventItem({ event }: { event: StreamEventLog }) {
             case 'processing': return `Processing: ${event.file} (${event.index}/${event.total})`;
             case 'parsed': return event.success ? `✓ ${event.file}` : `✗ ${event.file}: ${event.error}`;
             case 'ignored': return `⊘ ${event.file} (${event.reason})`;
+            case 'ignored_chunk':
+                return `⊘ ${event.files.length} files (${event.reason})`;
+            case 'progress':
+                return `Progress: ${event.parsedFiles} parsed, ${event.failedFiles} failed, ${event.skippedFiles} skipped (${event.index}/${event.total})`;
             case 'complete': return `Complete! ${event.parsedFiles} parsed, ${event.failedFiles} failed`;
             case 'error': return `Error: ${event.message}`;
             default: return JSON.stringify(event);

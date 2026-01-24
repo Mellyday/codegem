@@ -57,7 +57,7 @@ const runImport = async (message: StartMessage) => {
       return;
     }
 
-    const progress = await parseAndPersistRepo(db, message.params);
+    const progress = await parseAndPersistRepo(db, { ...message.params, abortSignal });
     port.postMessage({ type: "result", progress } satisfies WorkerResponse);
   } catch (err) {
     port.postMessage({
