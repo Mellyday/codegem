@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { parseWithTreeSitter } from "../src/lib/parser/treeSitterServer";
 import { generateEngineSteps } from "../src/lib/languages/javascript/jsEngine";
+import { revealAfterForQuestion } from "../src/components/QuizViewer";
 
 describe("shallow profile quiz generation", () => {
     it("preserves useEffect call question with header span", async () => {
@@ -41,12 +42,8 @@ describe("shallow profile quiz generation", () => {
         const argsStart = code.indexOf("(", useEffectStart);
         expect(argsStart).toBeGreaterThan(useEffectStart);
 
-        // Match UI's revealAfterForQuestion: revealEndAfterChild → sourceRefs.end → revealEndBeforeChild → revealStart
-        const revealEnd =
-            useEffectQuestion.revealEndAfterChild ??
-            useEffectQuestion.sourceRefs?.[0]?.end ??
-            useEffectQuestion.revealEndBeforeChild ??
-            useEffectQuestion.revealStart;
+        // Use the same reveal logic as the UI
+        const revealEnd = revealAfterForQuestion(useEffectQuestion);
 
         expect(revealEnd).toBeTypeOf("number");
         expect(revealEnd).toBeLessThanOrEqual(argsStart);
@@ -113,8 +110,8 @@ describe("jsx quiz generation", () => {
         expect(buttonGroupChildQ.questionType).toBe("sequence");
         expect(buttonGroupChildQ.multiCorrect).toEqual(["span", "EXPR(button*)"]);
 
-        // Match UI's revealAfterForQuestion: revealEndAfterChild → sourceRefs.end → revealEndBeforeChild → revealStart
-        const revealEnd = chartHeaderChildQ.revealEndAfterChild ?? chartHeaderChildQ.sourceRefs?.[0]?.end ?? chartHeaderChildQ.revealEndBeforeChild ?? chartHeaderChildQ.revealStart;
+        // Use the same reveal logic as the UI
+        const revealEnd = revealAfterForQuestion(chartHeaderChildQ);
         expect(revealEnd).toBeTypeOf("number");
         // Ensure the opening tag is visible: we should have revealed past the attribute text.
         expect(revealEnd).toBeGreaterThan(code.indexOf("chart-header"));
@@ -629,16 +626,7 @@ describe("progressive reveal for split multiselect questions", () => {
         // Should be at least 2 questions
         expect(paramQuestions.length).toBeGreaterThanOrEqual(2);
 
-        // Helper to compute what would actually get revealed for this question
-        // This mirrors the QuizViewer's revealAfterForQuestion logic
-        const computeRevealEnd = (q: any): number | undefined => {
-            if (typeof q.revealEndAfterChild === "number") return q.revealEndAfterChild;
-            const firstRef = Array.isArray(q.sourceRefs) ? q.sourceRefs[0] : undefined;
-            if (firstRef && typeof firstRef.end === "number") return firstRef.end;
-            if (typeof q.revealEndBeforeChild === "number") return q.revealEndBeforeChild;
-            if (typeof q.revealStart === "number") return q.revealStart;
-            return undefined;
-        };
+        // Use the same reveal logic as the UI (imported from QuizViewer)
 
         // Key positions in the code
         const firstParamStart = code.indexOf("children");  // Where parameters start
@@ -646,13 +634,13 @@ describe("progressive reveal for split multiselect questions", () => {
 
         // First split question should reveal BEFORE the parameters start
         const firstQ = paramQuestions[0];
-        const firstRevealEnd = computeRevealEnd(firstQ);
+        const firstRevealEnd = revealAfterForQuestion(firstQ);
         expect(firstRevealEnd).toBeDefined();
         expect(firstRevealEnd).toBeLessThan(firstParamStart);
 
         // Last split question should reveal the FULL header (including all parameters)
         const lastQ = paramQuestions[paramQuestions.length - 1];
-        const lastRevealEnd = computeRevealEnd(lastQ);
+        const lastRevealEnd = revealAfterForQuestion(lastQ);
         expect(lastRevealEnd).toBeDefined();
         expect(lastRevealEnd).toBeGreaterThanOrEqual(headerEnd);
 

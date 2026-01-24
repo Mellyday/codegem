@@ -504,7 +504,8 @@ const generateQuestionsFromCustom = (
 
 // Compute reveal anchors for a question, with robust fallbacks so that
 // older quizzes (that only have sourceRefs) still drive the code viewer.
-const revealBeforeForQuestion = (q: Question | undefined): number | undefined => {
+// These are exported for use in tests to ensure consistent reveal logic.
+export const revealBeforeForQuestion = (q: Question | undefined): number | undefined => {
   if (!q) return undefined;
   if (typeof q.revealEndBeforeChild === "number") return q.revealEndBeforeChild;
   if (typeof q.revealStart === "number") return q.revealStart;
@@ -513,7 +514,7 @@ const revealBeforeForQuestion = (q: Question | undefined): number | undefined =>
   return undefined;
 };
 
-const revealAfterForQuestion = (q: Question | undefined): number | undefined => {
+export const revealAfterForQuestion = (q: Question | undefined): number | undefined => {
   if (!q) return undefined;
   if (typeof q.revealEndAfterChild === "number") return q.revealEndAfterChild;
   const firstRef = Array.isArray(q.sourceRefs) ? q.sourceRefs[0] : undefined;
@@ -1063,10 +1064,10 @@ export const QuizViewer = ({
       : isMapping
         ? mappingCorrect
         : isMulti
-        ? isOrderedMulti
-          ? orderedCorrect
-          : unorderedCorrect
-        : isAnswered && selected === currentQ.answerLabel;
+          ? isOrderedMulti
+            ? orderedCorrect
+            : unorderedCorrect
+          : isAnswered && selected === currentQ.answerLabel;
 
     const handleSelect = (opt: string) => {
       if (isAnswered) return;
@@ -1463,11 +1464,11 @@ export const QuizViewer = ({
                 ? `Build the sequence${sequenceTarget ? ` (${sequenceTarget})` : ""}.`
                 : isMapping
                   ? "Match each key to its value."
-                : isMulti
-                  ? isOrderedMulti
-                    ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
-                    : "Select all that apply."
-                  : "Choose the next part of the code."}
+                  : isMulti
+                    ? isOrderedMulti
+                      ? `Select in order${selectionTarget ? ` (${selectionTarget})` : ""}.`
+                      : "Select all that apply."
+                    : "Choose the next part of the code."}
             </p>
           </div>
 
@@ -1683,9 +1684,9 @@ export const QuizViewer = ({
                   ? `Incorrect — sequence: ${(currentQ.answerLabels || []).join(" -> ")}`
                   : isMapping
                     ? "Incorrect - check the highlighted rows."
-                  : isMulti
-                    ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(", ")}`
-                    : `Incorrect — answer: ${currentQ.answerLabel}`}
+                    : isMulti
+                      ? `Incorrect — answers: ${(currentQ.answerLabels || []).join(", ")}`
+                      : `Incorrect — answer: ${currentQ.answerLabel}`}
             </div>
           )}
 
